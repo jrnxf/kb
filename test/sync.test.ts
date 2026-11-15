@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { buildContext } from "../cli/context.ts";
 import { Store } from "../cli/store.ts";
 import { syncNow } from "../cli/sync.ts";
-import { plain, putNote, sh, tempDir } from "./helpers.ts";
+import { kb, plain, putNote, sh, tempDir } from "./helpers.ts";
 
 /** Two machines: two clones of one bare remote. */
 function twoMachines(): { a: Store; b: Store } {
@@ -28,6 +28,19 @@ describe("kb sync", () => {
     const store = new Store(join(tempDir(), "store"));
     store.ensure();
     expect(syncNow(store).status).toBe("no-remote");
+  });
+
+  test("a write starts a background sync that reaches the remote with no kb sync call", async () => {
+    const { a, b } = twoMachines();
+    // The config is tracked, so both machines get the same one.
+    for (const store of [a, b]) writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ sync: true }));
+    const added = kb(a, ["add", "--json"], { stdin: JSON.stringify({ title: "Pushed in the background", kind: "gotcha", body: "x", scope: "global" }) });
+    expect(added.json.status).toBe("created");
+    const remoteLog = () => Bun.spawnSync(["git", "-C", join(a.home, "..", "remote.git"), "log", "--format=%s", "main"], { stdout: "pipe", stderr: "pipe" }).stdout.toString();
+    for (let i = 0; i < 100 && !remoteLog().includes("kb: add pushed-in-the-background"); i++) await Bun.sleep(100);
+    expect(remoteLog()).toContain("kb: add pushed-in-the-background");
+    expect(syncNow(b)).toMatchObject({ status: "ok" });
+    expect(b.find("pushed-in-the-background")).toBeDefined();
   });
 
   test("a note added on one machine arrives on the other", () => {

@@ -46,7 +46,9 @@ function touch(path: string): void {
 
 /** Commit, rebase on the remote copy, push. On a conflict, keep local state and record one line. */
 export function syncNow(store: Store): SyncResult {
-  if (!store.exists() || !store.hasRemote()) return { status: "no-remote", detail: "the store has no git remote" };
+  if (!store.hasRemote()) return { status: "no-remote", detail: "the store has no git remote" };
+  // A fresh clone of an empty remote has no layout yet. Sync is a write, so create it.
+  store.ensure();
 
   const lock = join(store.home, ".sync-lock");
   if (Date.now() - mtime(lock) > LOCK_STALE_MS) rmSync(lock, { recursive: true, force: true });
