@@ -1,0 +1,87 @@
+---
+name: checkpoint
+description: Save the durable knowledge of this session to the kb store before /clear. Run only when the user types /kb:checkpoint.
+disable-model-invocation: true
+allowed-tools: Bash(kb *)
+---
+
+# kb checkpoint
+
+The user is about to run `/clear`. Save what a future session cannot get back from the code.
+`kb` is on PATH. Run every `kb` command from the session's project directory, so scope and commit resolve.
+
+## 1. Find what is worth a note
+
+Sweep the whole session. Candidates:
+
+- **gotcha** - something that surprised you or cost time, and will again.
+- **decision** - a choice, with the reason and the alternative that lost.
+- **convention** - a rule the user corrected you on or stated.
+- **how-to** - a non-obvious procedure that worked.
+- **open-work** - unfinished work. Write enough that a fresh session can resume: current state, the next step, the files, and what done looks like.
+
+Skip a candidate when:
+
+- a reader gets it from the code, the git history, or the repo's own docs
+- it will be false next week (a temporary state, a one-time error, a version that changes soon)
+- it only restates what you did, with no lesson
+
+Never save a secret, token, password, key, or credential. Never save the content of a secret-bearing file. If a fact needs one, name where the value lives.
+
+## 2. Search before you write
+
+For each candidate, run `kb search <two or three key words>`. Also check the notes injected at session start.
+
+- A note already covers it and is still correct: skip it.
+- A note covers it but is incomplete or wrong: update that note (pass its `id`).
+- Nothing covers it: add a note.
+
+## 3. Write
+
+One idea per note. Aim for a body under 15 lines: the fact, why it matters, how to apply it.
+Write the title as a statement of the fact, not a topic ("Stripe signature check needs the raw body", not "Stripe webhooks").
+
+Pipe one JSON object to `kb add --json`. Use a quoted heredoc, so the shell changes nothing:
+
+```bash
+kb add --json <<'KB_NOTE'
+{
+  "title": "Stripe signature check needs the raw body",
+  "kind": "gotcha",
+  "scope": "repo",
+  "confidence": "high",
+  "anchors": ["src/webhooks/stripe.ts#verifySignature", "src/server.ts"],
+  "body": "express.json() runs before the webhook route and breaks the signature check.\nMount express.raw() on the webhook route before the JSON parser."
+}
+KB_NOTE
+```
+
+- `scope`: `"repo"` for a fact about this repository. `"global"` for a fact that holds in every repo (a tool, a user preference, a platform behavior).
+- `kind`: `gotcha`, `decision`, `convention`, `how-to` or `open-work`.
+- `confidence`: `high` when you verified it in this session, `medium` when it is likely, `low` when it is a guess.
+- `anchors`: repo-relative paths, or `path#symbol`, of the code the fact depends on. They let a later check find stale notes. Leave the list empty for a global note.
+- To update, add `"id": "<id>"` and only the fields that change.
+
+Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id>`, then update it or skip.
+
+## 4. Close finished work
+
+For each `open-work` note that this session finished, run `kb archive <id>`. If part of the work remains, update the note to the new state.
+
+## 5. Record what helped
+
+Run `kb use <id>...` once, with the ids of the injected or shown notes that changed what you did in this session. Do not list notes you only read. This is the only usefulness signal the store has.
+
+## 6. Report
+
+End with this, and nothing after it:
+
+```
+saved:   <id> - <title>
+updated: <id> - <title>
+closed:  <id>
+skipped: <candidate> - <reason>
+safe to clear: yes
+```
+
+Leave out an empty group. Write `safe to clear: no - <what is unsaved>` when a `kb` command failed, or when open work exists that no note describes.

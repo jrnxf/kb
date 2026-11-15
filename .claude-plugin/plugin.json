@@ -1,0 +1,5 @@
+{
+  "name": "kb",
+  "description": "A personal, repo-agnostic knowledge store for coding agents. Notes are plain markdown in ~/.kb.",
+  "author": { "name": "jrnxf" }
+}
