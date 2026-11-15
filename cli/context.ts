@@ -117,3 +117,51 @@ export function buildContext(store: Store, repoPath: string): ContextResult {
     chars: text.length,
   };
 }
+
+export interface BudgetResult {
+  scope: string | null;
+  index: { lines: number; budget: number; hidden: number };
+  context: { chars: number; budget: number; bodies: number; dropped: number };
+  over: boolean;
+  /** Every note a session of this scope can see, in rank order. */
+  notes: { id: string; kind: string; scope: string; uses: number; last_used: string | null; chars: number; shown: "body" | "index" | "hidden" }[];
+  /** Notes to take out of the index first: fewest uses, then longest unused. Empty when nothing is over budget. */
+  demote: { id: string; reason: string }[];
+}
+
+/** `kb budget`: sizes against both budgets, and which notes to demote when one is exceeded. */
+export function buildBudget(store: Store, repoPath: string): BudgetResult {
+  const context = buildContext(store, repoPath);
+  const config = store.config();
+  const usage = store.usage();
+  const byId = new Map(store.notes().map((n) => [n.id, n]));
+  const ranked = [...context.bodies, ...context.dropped].map((id) => byId.get(id)!).filter(Boolean);
+  const bodies = new Set(context.bodies);
+  const index = new Set(context.index);
+  const notes = ranked.map((n) => ({
+    id: n.id,
+    kind: n.kind,
+    scope: n.scope,
+    uses: usage.get(n.id)?.uses ?? 0,
+    last_used: usage.get(n.id)?.last_used ?? null,
+    chars: bodyBlock(n).length,
+    shown: bodies.has(n.id) ? ("body" as const) : index.has(n.id) ? ("index" as const) : ("hidden" as const),
+  }));
+  const over = context.dropped.length > 0 || context.hiddenIndexLines > 0;
+  // Open work is never a demotion candidate: it leaves the index when it is done.
+  const demote = over
+    ? notes
+        .filter((n) => n.kind !== "open-work")
+        .sort((a, b) => a.uses - b.uses || (a.last_used ?? "").localeCompare(b.last_used ?? "") || b.chars - a.chars)
+        .slice(0, Math.max(context.dropped.length, context.hiddenIndexLines))
+        .map((n) => ({ id: n.id, reason: n.uses === 0 ? "never used" : `${n.uses} ${n.uses === 1 ? "use" : "uses"}, last ${n.last_used?.slice(0, 10)}` }))
+    : [];
+  return {
+    scope: context.scope,
+    index: { lines: ranked.length, budget: config.budgets.indexLines, hidden: context.hiddenIndexLines },
+    context: { chars: context.chars, budget: Math.min(config.budgets.contextChars, HARD_CONTEXT_CAP), bodies: context.bodies.length, dropped: context.dropped.length },
+    over,
+    notes,
+    demote,
+  };
+}

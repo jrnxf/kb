@@ -60,7 +60,7 @@ KB_NOTE
 - `kind`: `gotcha`, `decision`, `convention`, `how-to` or `open-work`.
 - `confidence`: `high` when you verified it in this session, `medium` when it is likely, `low` when it is a guess.
 - `anchors`: repo-relative paths, or `path#symbol`, of the code the fact depends on. They let a later check find stale notes. Leave the list empty for a global note.
-- To update, add `"id": "<id>"` and only the fields that change.
+- To update, add `"id": "<id>"` and only the fields that change. A new title, body or anchors also records the note as verified now.
 
 Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id>`, then update it or skip.
 
@@ -72,7 +72,17 @@ For each `open-work` note that this session finished, run `kb archive <id>`. If 
 
 Run `kb use <id>...` once, with the ids of the injected or shown notes that changed what you did in this session. Do not list notes you only read. This is the only usefulness signal the store has.
 
-## 6. Report
+## 6. Record the checkpoint
+
+Run this once, after the writes above succeed:
+
+```bash
+kb checkpointed ${CLAUDE_SESSION_ID}
+```
+
+It tells the session hooks that this session saved its knowledge. Skip it when a `kb` command failed.
+
+## 7. Report
 
 End with this, and nothing after it:
 

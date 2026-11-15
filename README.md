@@ -22,6 +22,19 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
   notes helped with `kb use`.
 - **Nothing is deleted.** `kb archive` moves a note to `archive/`. If the store is a git repo,
   every write is one commit.
+- **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: an
+  anchored file changed since the note was verified, an anchor is gone, the verified commit left
+  the history, nobody verified the note for `decayDays` (180), or two titles are close.
+  `/kb:audit` reads the code for each candidate, checks both budgets, proposes verify, rewrite,
+  merge, shorten, demote or archive, and applies what you accept. A session start says so in one
+  line when more than 5 notes are candidates.
+- **Proven notes move to the repo.** `/kb:promote` proposes notes with high confidence and many
+  uses for the repo's `CLAUDE.md` or `AGENTS.md`, shows the exact text, and writes after you
+  confirm. This is the only write `kb` makes inside a repo. A promoted note is no longer injected.
+- **A missed checkpoint leaves a trace.** Nothing can run before `/clear`. So a session that ends
+  with `/clear` and no checkpoint is recorded, and the next session in that directory gets one
+  line with the path of its transcript. Before a compaction, a hook tells the summary what to
+  keep, and the next start says once that no checkpoint ran.
 - **Sync.** If the store has a git remote, each write starts a background pull and push, and
   each session start does the same at most once per 5 minutes. Usage counters live in one file
   per machine, so two machines never edit the same file.
@@ -30,7 +43,7 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 ~/.kb/
   notes/<scope>/<id>.md     archive/<scope>/<id>.md
   usage/<machine>.json      kb.config.json
-  INDEX.md  index.html  local.json     # generated or per-machine, not committed
+  INDEX.md  index.html  local.json  .state/     # generated or per-machine, not committed
 ```
 
 ## Commands
@@ -41,9 +54,13 @@ kb add [--repo .]            create or update a note from JSON on stdin
 kb show <id>                 kb search <query> [--scope s] [--archive]
 kb list [--scope s]          kb use <id>...
 kb archive <id>...           kb restore <id>...
+kb stale [--repo .]          kb verify <id>...
+kb budget [--repo .]         kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run]
 kb scope [--repo .]          kb html      (overview page, opens in the browser)
-kb sync                      kb help
+kb sync                      kb checkpointed <session-id>
 ```
+
+Skills: `/kb:checkpoint`, `/kb:audit`, `/kb:promote`. Only you can start them.
 
 Every command accepts `--json`. The CLI knows nothing about Claude Code: only `hooks/` and `skills/` do.
 

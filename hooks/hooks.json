@@ -1,5 +1,5 @@
 {
-  "description": "Inject saved kb notes at every session start, also after /clear and compaction.",
+  "description": "Inject saved kb notes at every session start, protect them through compaction, and record a /clear with no checkpoint.",
   "hooks": {
     "SessionStart": [
       {
@@ -9,6 +9,29 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/session-start.sh",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/session-end.sh",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/pre-compact.sh",
+            "timeout": 2
           }
         ]
       }

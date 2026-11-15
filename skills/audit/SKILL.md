@@ -1,0 +1,94 @@
+---
+name: audit
+description: Check the kb notes of this repo for stale, duplicate and over-budget entries, propose changes, and apply the ones the user accepts. Run only when the user types /kb:audit.
+disable-model-invocation: true
+allowed-tools: Bash(kb *)
+---
+
+# kb audit
+
+Keep the store true and small. You propose changes. The user accepts them. Then you apply them.
+`kb` is on PATH. Run every `kb` command from the session's project directory, so scope and commit resolve.
+
+## 1. Collect
+
+```bash
+kb stale --json
+kb budget --json
+```
+
+- `kb stale` lists candidates for the current repo and for `global`. Each has a `reason`:
+  - `anchor-changed` - an anchored file changed since the note was verified.
+  - `anchor-missing` - an anchored path is gone, or the symbol is no longer in the file.
+  - `commit-unknown` - the verified commit is not in the history (a rebase or a shallow clone).
+  - `decayed` - nobody verified the note within the decay window.
+  - `duplicate` - the title is close to the title of another note.
+- `kb budget` shows what a session of this repo loads. When `over` is true, `demote` lists the notes to take out of the index first, and `notes` gives the size and the use count of each note.
+
+A candidate is a reason to look, not a verdict. If both lists are empty, say so and stop.
+
+## 2. Judge each candidate
+
+Read the note with `kb show <id>`. For an anchor reason, read the anchored code as it is now. Then choose one action:
+
+| Action | When |
+|---|---|
+| verify | The note is still true as written. |
+| rewrite | The fact drifted. The note needs a new body, title or anchors. |
+| archive | The fact is obsolete, or the work is done. |
+| merge | Two or more notes cover one idea. One note keeps everything, the others are archived. |
+| shorten | The note is true but long. Cut it to the fact, the reason and how to apply it. |
+| demote | The note is true but rarely used, and the context is over budget. It stays searchable. |
+| keep | Nothing to do. Use this for a `duplicate` candidate that is in fact a different idea. |
+
+Rules:
+
+- Do not verify a note you did not check against the code or a source. For a `global` note with no anchor, verify only when you know the fact still holds. If you cannot tell, propose `keep` and say what is unknown.
+- When the budget is over, prefer merge and shorten before demote. Never demote `open-work`.
+- For a rewrite, a merge or a shorten, write the new text now, so the user sees it before they accept.
+
+## 3. Propose, then wait
+
+Show one table, and below it the new text of every rewritten, merged or shortened note:
+
+```
+| # | note | reason | action | why |
+|---|------|--------|--------|-----|
+| 1 | <id> | anchor-changed | rewrite | <one line> |
+```
+
+Then ask the user which rows to apply: all, none, or a list of row numbers. Stop and wait for the answer. Apply nothing before it.
+
+## 4. Apply the accepted rows
+
+- verify: `kb verify <id>...`
+- rewrite, shorten: `kb add --json` with `"id"` and the fields that change. This also records the note as verified.
+- merge: update the note that stays, with `"supersedes": ["<other id>", ...]`, then `kb archive <other id>...`
+- archive: `kb archive <id>...`
+- demote: `kb add --json` with `{"id": "<id>", "indexed": false}`
+
+Use a quoted heredoc for JSON, so the shell changes nothing:
+
+```bash
+kb add --json <<'KB_NOTE'
+{ "id": "<id>", "body": "<new body>" }
+KB_NOTE
+```
+
+Never save a secret, token, password, key or credential in a note.
+
+## 5. Report
+
+Run `kb budget` again, then end with this and nothing after it:
+
+```
+verified: <ids>
+rewritten: <ids>
+merged: <kept id> <- <archived ids>
+archived: <ids>
+demoted: <ids>
+declined: <row numbers>
+budget: <chars> of <budget> characters, <dropped> notes in the index only
+```
+
+Leave out an empty group.

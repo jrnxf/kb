@@ -28,8 +28,11 @@ export interface StoredNote extends Note {
   archived: boolean;
 }
 
-/** SessionStart output above 10,000 characters is replaced by a file preview, so stay well under it. */
-export const HARD_CONTEXT_CAP = 9500;
+/**
+ * SessionStart output above 10,000 characters is replaced by a file preview, so stay well under it.
+ * The hook may add a few lines of its own after the context.
+ */
+export const HARD_CONTEXT_CAP = 9000;
 
 const DEFAULT_CONFIG: Config = {
   budgets: { indexLines: 60, contextChars: 8000 },
@@ -38,7 +41,7 @@ const DEFAULT_CONFIG: Config = {
   sync: true,
 };
 
-const GITIGNORE = "INDEX.md\nindex.html\nlocal.json\n.sync-*\n*.tmp-*\n";
+const GITIGNORE = ["INDEX.md", "index.html", "local.json", ".sync-*", "*.tmp-*", ".state/"];
 
 export function kbHome(): string {
   return process.env.KB_HOME || join(homedir(), ".kb");
@@ -81,7 +84,15 @@ export class Store {
     const configPath = join(this.home, "kb.config.json");
     if (!existsSync(configPath)) writeAtomic(configPath, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`);
     const ignorePath = join(this.home, ".gitignore");
-    if (!existsSync(ignorePath)) writeAtomic(ignorePath, GITIGNORE);
+    // Add lines that a store made by an older version lacks.
+    const have = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
+    const missing = GITIGNORE.filter((line) => !have.split("\n").includes(line));
+    if (missing.length > 0) writeAtomic(ignorePath, `${have}${have && !have.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
+  }
+
+  /** Per-machine state that is never committed: session marks and the stale cache. */
+  statePath(name: string): string {
+    return join(this.home, ".state", name);
   }
 
   config(): Config {

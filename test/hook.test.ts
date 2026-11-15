@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ROOT, plain, putNote, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { ROOT, kb, plain, putNote, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const HOOK = join(ROOT, "hooks", "session-start.sh");
 
@@ -85,6 +85,8 @@ describe("plugin files", () => {
   test("hooks.json registers SessionStart for all five sources", () => {
     const hooks = JSON.parse(readFileSync(join(ROOT, "hooks", "hooks.json"), "utf8"));
     const entry = hooks.hooks.SessionStart[0];
+    expect(Object.keys(hooks.hooks).sort()).toEqual(["PreCompact", "SessionEnd", "SessionStart"]);
+    expect(hooks.hooks.SessionEnd[0].matcher).toBe("clear");
     expect(entry.matcher.split("|").sort()).toEqual(["clear", "compact", "fork", "resume", "startup"]);
     expect(entry.hooks[0].command).toBe('"${CLAUDE_PLUGIN_ROOT}"/hooks/session-start.sh');
   });
@@ -100,5 +102,101 @@ describe("plugin files", () => {
     const r = Bun.spawnSync([join(ROOT, "bin", "kb"), "scope", "--json"], { cwd: dirname(ROOT), env: { ...process.env, KB_HOME: join(tempDir(), "none") }, stdout: "pipe" });
     expect(r.exitCode).toBe(0);
     expect(JSON.parse(r.stdout.toString())).toHaveProperty("scope");
+  });
+});
+
+describe("session notices", () => {
+  const END = join(ROOT, "hooks", "session-end.sh");
+  const end = (home: string, body: object) =>
+    Bun.spawnSync([END], { cwd: plain(), env: { ...process.env, KB_HOME: home }, stdin: Buffer.from(JSON.stringify(body)), stdout: "pipe", stderr: "pipe" });
+  const endInput = (cwd: string, session: string, reason = "clear") => ({ session_id: session, transcript_path: `/home/user/${session}.jsonl`, cwd, hook_event_name: "SessionEnd", reason });
+  const startInput = (cwd: string, source: string, session = "next") => JSON.stringify({ session_id: session, transcript_path: "/home/user/next.jsonl", cwd, hook_event_name: "SessionStart", source });
+
+  test("a /clear with no checkpoint is reported once, at the next start in the same directory", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    const other = tempRepo({ remote: "git@github.com:acme/web.git" });
+    putNote(store, { id: "g" });
+    const r = end(store.home, endInput(repo, "lost"));
+    expect({ code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() }).toEqual({ code: 0, out: "", err: "" });
+
+    expect(runHook({ home: store.home, stdin: startInput(other, "clear") }).stdout).not.toContain("/home/user/lost.jsonl");
+    const first = runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout;
+    expect(first).toContain("### g [gotcha]");
+    expect(first).toContain("ended with /clear before /kb:checkpoint ran. Its transcript is /home/user/lost.jsonl.");
+    expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain("lost.jsonl");
+  });
+
+  test("no report after a checkpoint, for another end reason, or with no store", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    putNote(store, { id: "g" });
+    expect(kb(store, ["checkpointed", "saved-one", "--json"]).json).toEqual({ session: "saved-one", recorded: true });
+    end(store.home, endInput(repo, "saved-one"));
+    end(store.home, endInput(repo, "just-quit", "prompt_input_exit"));
+    expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain("ended with /clear");
+
+    const missing = join(tempDir(), "missing");
+    expect(end(missing, endInput(repo, "x")).exitCode).toBe(0);
+    expect(end(missing, {}).exitCode).toBe(0);
+    expect(existsSync(missing)).toBe(false);
+    expect(kb(missing, ["checkpointed", "x", "--json"]).json.recorded).toBe(false);
+    expect(existsSync(missing)).toBe(false);
+  });
+
+  test("a notice is shown also when no note is visible", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    end(store.home, endInput(repo, "lost"));
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toMatch(/^# kb\nAn earlier session/);
+  });
+
+  test("after a compaction it says once per start that no checkpoint ran, unless one did", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    putNote(store, { id: "g" });
+    const line = "This session was compacted and /kb:checkpoint has not run in it.";
+    expect(runHook({ home: store.home, stdin: startInput(repo, "compact", "s1") }).stdout).toContain(line);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup", "s1") }).stdout).not.toContain(line);
+    kb(store, ["checkpointed", "s1"]);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "compact", "s1") }).stdout).not.toContain(line);
+  });
+
+  test("more than 5 stale notes give one line, from the cache, and the cache fills in the background", async () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    for (let i = 0; i < 6; i++) putNote(store, { id: `old-${i}`, scope: "github.com/acme/billing", last_verified: "2020-01-01T00:00:00Z" });
+    // The first start has no cache: no line, but it starts the checks.
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain("may be stale");
+    const cache = join(store.home, ".state", "stale.json");
+    for (let i = 0; i < 100 && !existsSync(cache); i++) await Bun.sleep(50);
+    expect(JSON.parse(readFileSync(cache, "utf8"))["github.com/acme/billing"].notes).toBe(6);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain("6 kb notes for this scope may be stale. The user can run /kb:audit to check them.");
+    // 5 or fewer: no line. A write clears the cache.
+    kb(store, ["archive", "old-0"]);
+    expect(existsSync(cache)).toBe(false);
+    kb(store, ["stale"], { cwd: repo });
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain("may be stale");
+  });
+
+  test("the state directory stays out of git, also in a store made by an older version", () => {
+    const store = tempStore();
+    writeFileSync(join(store.home, ".gitignore"), "INDEX.md\nindex.html\nlocal.json\n.sync-*\n*.tmp-*\n");
+    Bun.spawnSync(["git", "-C", store.home, "init", "-q", "-b", "main"]);
+    putNote(store, { id: "g" });
+    kb(store, ["checkpointed", "s1"]);
+    kb(store, ["use", "g"]);
+    const tracked = Bun.spawnSync(["git", "-C", store.home, "ls-files"], { stdout: "pipe" }).stdout.toString();
+    expect(tracked).toContain(".gitignore");
+    expect(tracked).not.toContain(".state");
+  });
+
+  test("the PreCompact hook prints static summary instructions and needs no bun", () => {
+    const bin = tempDir("kb-nobun-");
+    for (const tool of ["sh", "cat"]) symlinkSync(Bun.which(tool)!, join(bin, tool));
+    const r = Bun.spawnSync([join(ROOT, "hooks", "pre-compact.sh")], { env: { PATH: bin }, stdin: Buffer.from("{}"), stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toContain("unfinished work");
+    expect(r.stdout.toString().length).toBeLessThan(1000);
   });
 });

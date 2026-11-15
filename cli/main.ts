@@ -1,13 +1,15 @@
 #!/usr/bin/env bun
 // kb: a personal knowledge store for coding agents. Harness-agnostic: flags and stdin only.
 
-import { readFileSync } from "node:fs";
-import { relative } from "node:path";
-import { buildContext, rank } from "./context.ts";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { buildBudget, buildContext, rank } from "./context.ts";
 import { htmlPath, writeHtml } from "./html.ts";
 import { CONFIDENCES, KINDS, KbError, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { search } from "./search.ts";
+import { markSaved } from "./session.ts";
+import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store, type StoredNote } from "./store.ts";
 import { kickSync, syncNow } from "./sync.ts";
 
@@ -20,6 +22,12 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb list [--scope s] [--archive]        every note with kind, uses and verified date
   kb use <id>...                         record that these notes changed what you did
   kb archive <id>... | kb restore <id>...
+  kb stale [--repo .]                    notes that may no longer be true, each with a reason
+  kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
+  kb budget [--repo .]                   sizes against both budgets, and what to demote
+  kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run] [--repo .]
+                                         append a note to the repo's own file
+  kb checkpointed <session-id>           record that this session saved its knowledge
   kb scope [--repo .]                    print the scope id of a directory
   kb html [--no-open]                    write the overview page and open it
   kb sync                                commit, pull and push the store
@@ -30,7 +38,8 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence
   scope: "repo" (the default inside a git repo), "global", or an explicit repo id
   kind: ${KINDS.join(" | ")}
   confidence: ${CONFIDENCES.join(" | ")} (default medium)
-  With "id", the note is updated. Without it, a note with the same title in the same scope
+  With "id", the note is updated. A new title, body or anchors also counts as a verification.
+  {"id", "indexed": false} takes a note out of the session index. Without "id", a note with the same title in the same scope
   is not overwritten: the result is {"status": "exists", "id"}.`;
 
 interface Args {
@@ -38,7 +47,7 @@ interface Args {
   flags: Map<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["repo", "scope"]);
+const VALUE_FLAGS = new Set(["repo", "scope", "to"]);
 
 function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -67,6 +76,7 @@ const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 function afterWrite(store: Store, message: string): void {
   store.writeIndex();
   writeHtml(store);
+  clearStaleCache(store);
   if (store.commit(message)) kickSync(store);
 }
 
@@ -118,8 +128,12 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
       throw new KbError("a note cannot change scope. Archive it and add a new one.");
     }
     const { path: _path, archived: _archived, ...stored } = existing;
-    const merged: Record<string, unknown> = { ...stored, ...input, scope: existing.scope, created: existing.created, last_verified: now };
-    if (repo.scope === existing.scope && repo.head) merged.verified_at_commit = repo.head;
+    const merged: Record<string, unknown> = { ...stored, ...input, scope: existing.scope, created: existing.created };
+    // Only a change of content says that somebody looked at the fact again.
+    if (["title", "body", "anchors"].some((key) => key in input)) {
+      merged.last_verified = now;
+      if (repo.scope === existing.scope && repo.head) merged.verified_at_commit = repo.head;
+    }
     const note = validateNote(merged);
     const path = store.writeNote(note);
     afterWrite(store, `kb: update ${note.id}`);
@@ -196,7 +210,9 @@ function cmdList(store: Store, args: Args): Output {
     uses: usage.get(n.id)?.uses ?? 0,
     last_used: usage.get(n.id)?.last_used ?? null,
     last_verified: n.last_verified,
+    confidence: n.confidence,
     indexed: n.indexed,
+    promoted_to: n.promoted_to ?? null,
   }));
   const width = (key: "id" | "kind" | "scope") => Math.max(key.length, ...rows.map((r) => r[key].length));
   const [wId, wKind, wScope] = [width("id"), width("kind"), width("scope")];
@@ -233,6 +249,80 @@ function cmdMove(store: Store, args: Args, toArchive: boolean): Output {
   }
   afterWrite(store, `kb: ${verb} ${moved.join(" ")}`);
   return { json: { [toArchive ? "archived" : "restored"]: moved }, text: `${toArchive ? "archived" : "restored"} ${moved.join(", ")}` };
+}
+
+function cmdStale(store: Store, args: Args): Output {
+  const result = findStale(store, String(args.flags.get("repo") ?? "."));
+  saveStaleCount(store, result);
+  const text = result.candidates.length === 0 ? "no stale candidates" : result.candidates.map((c) => `${c.id} | ${c.reason} | ${c.detail}`).join("\n");
+  return { json: result, text };
+}
+
+function cmdVerify(store: Store, args: Args): Output {
+  if (args.positional.length === 0) throw new KbError("usage: kb verify <id>... [--repo .]");
+  const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
+  const notes = args.positional.map((id) => {
+    const note = requireNote(store, id);
+    if (note.archived) throw new KbError(`${id} is archived. Restore it first.`);
+    if (note.scope !== "global" && note.scope !== repo.scope) throw new KbError(`${id} belongs to ${note.scope}. Run kb verify inside that repo, so the commit is recorded.`);
+    return note;
+  });
+  const now = nowIso();
+  for (const { path: _path, archived: _archived, ...note } of notes) {
+    note.last_verified = now;
+    if (note.scope !== "global" && repo.head) note.verified_at_commit = repo.head;
+    store.writeNote(note);
+  }
+  const ids = notes.map((n) => n.id);
+  afterWrite(store, `kb: verify ${ids.join(" ")}`);
+  return { json: { verified: ids, commit: repo.head }, text: `verified ${ids.join(", ")}` };
+}
+
+function cmdBudget(store: Store, args: Args): Output {
+  const b = buildBudget(store, String(args.flags.get("repo") ?? "."));
+  const lines = [
+    `scope    ${b.scope ?? "global only"}`,
+    `index    ${b.index.lines} of ${b.index.budget} lines${b.index.hidden > 0 ? `, ${b.index.hidden} hidden` : ""}`,
+    `context  ${b.context.chars} of ${b.context.budget} characters, ${b.context.bodies} bodies shown, ${b.context.dropped} in the index only`,
+    b.over ? `demote first: ${b.demote.map((d) => `${d.id} (${d.reason})`).join(", ") || "nothing but open work is left"}` : "within both budgets",
+  ];
+  return { json: b, text: lines.join("\n") };
+}
+
+const PROMOTE_FILES = ["CLAUDE.md", "AGENTS.md"];
+
+function cmdPromote(store: Store, args: Args): Output {
+  const id = args.positional[0];
+  const to = args.flags.get("to");
+  if (!id || typeof to !== "string" || !PROMOTE_FILES.includes(to)) throw new KbError("usage: kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run] [--repo .]");
+  const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
+  const { path: _path, archived, ...note } = requireNote(store, id);
+  if (archived) throw new KbError(`${id} is archived. Restore it first.`);
+  if (note.promoted_to) throw new KbError(`${id} is already in ${note.promoted_to}`);
+  if (!repo.root || note.scope !== repo.scope) throw new KbError(`${id} belongs to ${note.scope}. Run kb promote inside that repo.`);
+
+  const file = join(repo.root, to);
+  const marker = `<!-- kb: ${note.id} -->`;
+  const before = existsSync(file) ? readFileSync(file, "utf8") : "";
+  if (before.includes(marker)) throw new KbError(`${to} already has ${note.id}`);
+  const gap = before === "" ? "" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+  const addition = `${gap}${marker}\n## ${note.title}\n\n${note.body}\n`;
+  const dryRun = args.flags.has("dry-run");
+  if (!dryRun) {
+    // The one write kb ever makes inside a repo. The caller asks the user first.
+    appendFileSync(file, addition);
+    note.promoted_to = to;
+    store.writeNote(note);
+    afterWrite(store, `kb: promote ${note.id} to ${to}`);
+  }
+  return { json: { id: note.id, file, written: !dryRun, addition }, text: dryRun ? `would append to ${file}:\n${addition.trimEnd()}` : `promoted ${note.id} to ${file}` };
+}
+
+function cmdCheckpointed(store: Store, args: Args): Output {
+  const session = args.positional[0];
+  if (!session) throw new KbError("usage: kb checkpointed <session-id>");
+  if (store.exists()) markSaved(store, session);
+  return { json: { session, recorded: store.exists() }, text: `recorded ${session}` };
 }
 
 function cmdHtml(store: Store, args: Args): Output {
@@ -277,6 +367,11 @@ async function main(): Promise<number> {
       case "use": out = cmdUse(store, args); break;
       case "archive": out = cmdMove(store, args, true); break;
       case "restore": out = cmdMove(store, args, false); break;
+      case "stale": out = cmdStale(store, args); break;
+      case "verify": out = cmdVerify(store, args); break;
+      case "budget": out = cmdBudget(store, args); break;
+      case "promote": out = cmdPromote(store, args); break;
+      case "checkpointed": out = cmdCheckpointed(store, args); break;
       case "html": out = cmdHtml(store, args); break;
       case "sync": out = cmdSync(store); break;
       default: throw new KbError(`unknown command "${command}". Run \`kb help\`.`);

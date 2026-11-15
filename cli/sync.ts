@@ -3,6 +3,7 @@
 import { mkdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeHtml } from "./html.ts";
+import { clearStaleCache } from "./stale.ts";
 import type { Store } from "./store.ts";
 
 export interface SyncResult {
@@ -91,6 +92,7 @@ export function syncNow(store: Store): SyncResult {
     // Notes may have arrived from another machine, so rebuild the generated files.
     store.writeIndex();
     writeHtml(store);
+    clearStaleCache(store);
     return { status: "ok", detail: "the store matches the remote" };
   } finally {
     touch(join(store.home, ".sync-last"));
@@ -108,7 +110,16 @@ export function kickSync(store: Store, throttleMs = 0): boolean {
     const stamp = join(store.home, ".sync-last");
     if (throttleMs > 0 && Date.now() - mtime(stamp) < throttleMs) return false;
     touch(stamp);
-    const child = Bun.spawn([process.execPath, join(import.meta.dir, "main.ts"), "sync", "--quiet"], {
+    return detached(store, ["sync", "--quiet"]);
+  } catch {
+    return false;
+  }
+}
+
+/** Run a kb command in a detached process and return at once. */
+export function detached(store: Store, args: string[]): boolean {
+  try {
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "main.ts"), ...args], {
       stdio: ["ignore", "ignore", "ignore"],
       env: { ...process.env, KB_HOME: store.home },
       detached: true,

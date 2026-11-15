@@ -1,0 +1,166 @@
+// `kb stale`: notes that may no longer be true. Every check is deterministic. A candidate is a
+// reason to look at a note, never a verdict.
+
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { resolve, sep } from "node:path";
+import { normalizeTitle } from "./note.ts";
+import { resolveRepo } from "./scope.ts";
+import { git, type Store, type StoredNote, writeAtomic } from "./store.ts";
+
+export const STALE_REASONS = ["anchor-changed", "anchor-missing", "commit-unknown", "decayed", "duplicate"] as const;
+export type StaleReason = (typeof STALE_REASONS)[number];
+
+export interface StaleCandidate {
+  id: string;
+  title: string;
+  scope: string;
+  reason: StaleReason;
+  detail: string;
+}
+
+export interface StaleResult {
+  scope: string | null;
+  head: string | null;
+  /** Number of distinct notes with a candidate. */
+  notes: number;
+  candidates: StaleCandidate[];
+}
+
+const STOP_WORDS = new Set(["a", "an", "the", "is", "are", "be", "to", "of", "in", "on", "at", "for", "and", "or", "with", "by", "it", "its", "this", "that", "not", "no", "do", "does", "use", "uses", "when", "from", "as"]);
+const DUPLICATE_THRESHOLD = 0.6;
+
+function titleWords(title: string): Set<string> {
+  return new Set(normalizeTitle(title).split("-").filter((word) => word && !STOP_WORDS.has(word)));
+}
+
+function similarity(a: Set<string>, b: Set<string>): number {
+  let shared = 0;
+  for (const word of a) if (b.has(word)) shared++;
+  if (shared < 2) return 0;
+  return shared / (a.size + b.size - shared);
+}
+
+/** Anchor checks need the repo on disk, so they cover only notes of the repo at `repoPath`. */
+function anchorCandidates(note: StoredNote, root: string, changedSince: (commit: string) => Set<string> | null): { reason: StaleReason; detail: string }[] {
+  const found: { reason: StaleReason; detail: string }[] = [];
+  const commit = note.verified_at_commit;
+  const changed = commit ? changedSince(commit) : null;
+  if (commit && changed === null) {
+    found.push({ reason: "commit-unknown", detail: `commit ${commit} is not in the history of HEAD (a rebase, or a shallow clone)` });
+  }
+
+  const missing: string[] = [];
+  const moved: string[] = [];
+  for (const anchor of note.anchors) {
+    const hash = anchor.indexOf("#");
+    const path = hash === -1 ? anchor : anchor.slice(0, hash);
+    const symbol = hash === -1 ? "" : anchor.slice(hash + 1);
+    const full = resolve(root, path);
+    if ((full !== root && !full.startsWith(root + sep)) || !existsSync(full)) {
+      missing.push(`${path} does not exist`);
+      continue;
+    }
+    if (symbol) {
+      let text = "";
+      try {
+        text = readFileSync(full, "utf8");
+      } catch {
+        // a directory or an unreadable file: the symbol check does not apply
+        text = symbol;
+      }
+      if (!text.includes(symbol)) {
+        missing.push(`${symbol} is no longer in ${path}`);
+        continue;
+      }
+    }
+    // A path#symbol anchor counts as changed when its file changed.
+    if (changed && [...changed].some((file) => file === path || file.startsWith(`${path.replace(/\/+$/, "")}/`))) moved.push(path);
+  }
+  if (missing.length > 0) found.push({ reason: "anchor-missing", detail: missing.join("; ") });
+  if (moved.length > 0) found.push({ reason: "anchor-changed", detail: `changed since ${commit}: ${[...new Set(moved)].join(", ")}` });
+  return found;
+}
+
+export function findStale(store: Store, repoPath: string, now: Date = new Date()): StaleResult {
+  const repo = resolveRepo(repoPath, store);
+  const result: StaleResult = { scope: repo.scope, head: repo.head, notes: 0, candidates: [] };
+  if (!store.exists()) return result;
+
+  // Promoted notes live in the repo's own file now, so the repo owns them.
+  const notes = store.notes().filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === repo.scope));
+  const add = (note: StoredNote, reason: StaleReason, detail: string) => result.candidates.push({ id: note.id, title: note.title, scope: note.scope, reason, detail });
+
+  // One git call per distinct commit, not one per anchor.
+  const diffs = new Map<string, Set<string> | null>();
+  const changedSince = (commit: string): Set<string> | null => {
+    if (!diffs.has(commit)) {
+      const root = repo.root!;
+      const known = git(root, "merge-base", "--is-ancestor", commit, "HEAD").ok;
+      const diff = known ? git(root, "diff", "--name-only", commit, "HEAD") : null;
+      diffs.set(commit, diff?.ok ? new Set(diff.out.split("\n").filter(Boolean)) : null);
+    }
+    return diffs.get(commit)!;
+  };
+
+  const decayMs = store.config().decayDays * 86_400_000;
+  for (const note of notes) {
+    if (repo.root && repo.head && note.scope === repo.scope) {
+      for (const found of anchorCandidates(note, repo.root, changedSince)) add(note, found.reason, found.detail);
+    }
+    const age = now.getTime() - new Date(note.last_verified).getTime();
+    if (age > decayMs) add(note, "decayed", `last verified ${Math.floor(age / 86_400_000)} days ago`);
+  }
+
+  // Possible duplicates: titles that share most of their words. The newer note is the candidate.
+  const words = notes.map((note) => titleWords(note.title));
+  for (let i = 0; i < notes.length; i++) {
+    for (let j = i + 1; j < notes.length; j++) {
+      if (similarity(words[i]!, words[j]!) < DUPLICATE_THRESHOLD) continue;
+      const [older, newer] = notes[i]!.created <= notes[j]!.created ? [notes[i]!, notes[j]!] : [notes[j]!, notes[i]!];
+      add(newer, "duplicate", `the title is close to ${older.id}`);
+    }
+  }
+
+  result.candidates.sort((a, b) => a.id.localeCompare(b.id) || STALE_REASONS.indexOf(a.reason) - STALE_REASONS.indexOf(b.reason));
+  result.notes = new Set(result.candidates.map((c) => c.id)).size;
+  return result;
+}
+
+// ---- the count cache, so a session start never pays for the checks ----
+
+interface CacheEntry {
+  head: string | null;
+  day: string;
+  notes: number;
+}
+
+const cachePath = (store: Store) => store.statePath("stale.json");
+const today = (now: Date) => now.toISOString().slice(0, 10);
+
+function readCache(store: Store): Record<string, CacheEntry> {
+  try {
+    return JSON.parse(readFileSync(cachePath(store), "utf8")) as Record<string, CacheEntry>;
+  } catch {
+    return {};
+  }
+}
+
+export function saveStaleCount(store: Store, result: StaleResult, now: Date = new Date()): void {
+  if (!store.exists()) return;
+  store.ensure(); // keeps .state/ out of git in a store made by an older version
+  const cache = readCache(store);
+  cache[result.scope ?? "global"] = { head: result.head, day: today(now), notes: result.notes };
+  writeAtomic(cachePath(store), JSON.stringify(cache));
+}
+
+/** The cached count for a scope. `fresh` is false when HEAD or the day changed since it was computed. */
+export function cachedStaleCount(store: Store, scope: string | null, head: string | null, now: Date = new Date()): { notes: number; fresh: boolean } | null {
+  const entry = readCache(store)[scope ?? "global"];
+  if (!entry) return null;
+  return { notes: entry.notes, fresh: entry.head === head && entry.day === today(now) };
+}
+
+/** Every write to the store can change the answer. */
+export function clearStaleCache(store: Store): void {
+  rmSync(cachePath(store), { force: true });
+}
