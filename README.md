@@ -43,7 +43,7 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 ~/.kb/
   notes/<scope>/<id>.md     archive/<scope>/<id>.md
   usage/<machine>.json      kb.config.json
-  INDEX.md  index.html  local.json  .state/     # generated or per-machine, not committed
+  INDEX.md  local.json  .state/                 # generated or per-machine, not committed
 ```
 
 ## Commands
@@ -56,9 +56,14 @@ kb list [--scope s]          kb use <id>...
 kb archive <id>...           kb restore <id>...
 kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]         kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run]
-kb scope [--repo .]          kb html      (overview page, opens in the browser)
+kb scope [--repo .]          kb serve     (local page: read, edit and archive notes)
 kb sync                      kb checkpointed <session-id>
 ```
+
+`kb serve` opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
+list, and the open note. The arrow keys move through all of it. In the note, `e` edits and `a`
+archives. Each change goes through the same code as the CLI, so it is validated, committed and
+synced. The server listens on this machine only, and stops with Ctrl+C.
 
 Skills: `/kb:checkpoint`, `/kb:audit`, `/kb:promote`. Only you can start them.
 

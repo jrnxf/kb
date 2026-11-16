@@ -4,14 +4,15 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { buildBudget, buildContext, rank } from "./context.ts";
-import { htmlPath, writeHtml } from "./html.ts";
 import { CONFIDENCES, KINDS, KbError, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { search } from "./search.ts";
+import { DEFAULT_PORT, isKbServer, serve } from "./serve.ts";
 import { markSaved } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
-import { Store, type StoredNote } from "./store.ts";
-import { kickSync, syncNow } from "./sync.ts";
+import { Store } from "./store.ts";
+import { syncNow } from "./sync.ts";
+import { afterWrite, moveNotes, nowIso, requireNote, updateNote } from "./write.ts";
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
@@ -29,7 +30,7 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          append a note to the repo's own file
   kb checkpointed <session-id>           record that this session saved its knowledge
   kb scope [--repo .]                    print the scope id of a directory
-  kb html [--no-open]                    write the overview page and open it
+  kb serve [--port n] [--no-open]        the store as a local page: read, edit and archive notes
   kb sync                                commit, pull and push the store
 
 Every command accepts --json. The store is ~/.kb, or KB_HOME.
@@ -47,7 +48,7 @@ interface Args {
   flags: Map<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["repo", "scope", "to"]);
+const VALUE_FLAGS = new Set(["repo", "scope", "to", "port"]);
 
 function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -68,22 +69,6 @@ function parseArgs(argv: string[]): Args {
     }
   }
   return { positional, flags };
-}
-
-const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-
-/** Regenerate the derived files, commit, and start a background sync. */
-function afterWrite(store: Store, message: string): void {
-  store.writeIndex();
-  writeHtml(store);
-  clearStaleCache(store);
-  if (store.commit(message)) kickSync(store);
-}
-
-function requireNote(store: Store, id: string): StoredNote {
-  const note = store.find(id);
-  if (!note) throw new KbError(`no note with id "${id}"`);
-  return note;
 }
 
 function uniqueId(base: string, taken: Set<string>): string {
@@ -127,17 +112,8 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     if (input.scope !== undefined && resolveScopeInput(input.scope, repo.scope) !== existing.scope) {
       throw new KbError("a note cannot change scope. Archive it and add a new one.");
     }
-    const { path: _path, archived: _archived, ...stored } = existing;
-    const merged: Record<string, unknown> = { ...stored, ...input, scope: existing.scope, created: existing.created };
-    // Only a change of content says that somebody looked at the fact again.
-    if (["title", "body", "anchors"].some((key) => key in input)) {
-      merged.last_verified = now;
-      if (repo.scope === existing.scope && repo.head) merged.verified_at_commit = repo.head;
-    }
-    const note = validateNote(merged);
-    const path = store.writeNote(note);
-    afterWrite(store, `kb: update ${note.id}`);
-    return { json: { status: "updated", id: note.id, path }, text: `updated ${note.id}` };
+    const updated = updateNote(store, input as Record<string, unknown> & { id: string }, repo);
+    return { json: { status: "updated", ...updated }, text: `updated ${updated.id}` };
   }
 
   const scope = resolveScopeInput(input.scope, repo.scope);
@@ -240,14 +216,7 @@ function cmdUse(store: Store, args: Args): Output {
 function cmdMove(store: Store, args: Args, toArchive: boolean): Output {
   const verb = toArchive ? "archive" : "restore";
   if (args.positional.length === 0) throw new KbError(`usage: kb ${verb} <id>...`);
-  const moved: string[] = [];
-  for (const id of args.positional) {
-    const note = requireNote(store, id);
-    if (note.archived === toArchive) throw new KbError(`${id} is already ${toArchive ? "archived" : "active"}`);
-    store.move(note, toArchive);
-    moved.push(id);
-  }
-  afterWrite(store, `kb: ${verb} ${moved.join(" ")}`);
+  const moved = moveNotes(store, args.positional, toArchive);
   return { json: { [toArchive ? "archived" : "restored"]: moved }, text: `${toArchive ? "archived" : "restored"} ${moved.join(", ")}` };
 }
 
@@ -325,19 +294,38 @@ function cmdCheckpointed(store: Store, args: Args): Output {
   return { json: { session, recorded: store.exists() }, text: `recorded ${session}` };
 }
 
-function cmdHtml(store: Store, args: Args): Output {
-  if (!store.exists()) throw new KbError("the store does not exist yet. `kb add` creates it.");
-  const path = writeHtml(store);
-  const open = !args.flags.has("no-open") && !args.flags.has("json");
-  if (open) {
-    const opener = process.platform === "darwin" ? "open" : "xdg-open";
-    try {
-      Bun.spawn([opener, path], { stdio: ["ignore", "ignore", "ignore"] }).unref();
-    } catch {
-      // no opener on this machine: the path below is enough
-    }
+function openInBrowser(url: string): void {
+  const opener = process.platform === "darwin" ? "open" : "xdg-open";
+  try {
+    Bun.spawn([opener, url], { stdio: ["ignore", "ignore", "ignore"] }).unref();
+  } catch {
+    // no opener on this machine: the printed address is enough
   }
-  return { json: { path, opened: open }, text: path };
+}
+
+/** Start the page server and stay up until the process is stopped. */
+async function cmdServe(store: Store, args: Args, json: boolean): Promise<never> {
+  if (!store.exists()) throw new KbError("the store does not exist yet. `kb add` creates it.");
+  const flag = args.flags.get("port");
+  const port = flag === undefined ? DEFAULT_PORT : Number(flag);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new KbError("--port needs a number from 0 to 65535");
+  const open = !args.flags.has("no-open") && !json;
+  let url: string;
+  try {
+    url = serve(store, { port }).url;
+  } catch (error) {
+    if ((error as { code?: string })?.code !== "EADDRINUSE") throw error;
+    if (!(await isKbServer(port))) throw new KbError(`port ${port} is in use by another program. Pass --port.`);
+    // One server per port is enough: show the one that is already up.
+    url = `http://127.0.0.1:${port}/`;
+    if (open) openInBrowser(url);
+    console.log(json ? JSON.stringify({ url, started: false }, null, 2) : `kb serve is already running at ${url}`);
+    process.exit(0);
+  }
+  console.log(json ? JSON.stringify({ url, started: true }, null, 2) : `kb serve: ${url}
+Press Ctrl+C to stop.`);
+  if (open) openInBrowser(url);
+  return new Promise<never>(() => {});
 }
 
 function cmdSync(store: Store): Output {
@@ -372,7 +360,8 @@ async function main(): Promise<number> {
       case "budget": out = cmdBudget(store, args); break;
       case "promote": out = cmdPromote(store, args); break;
       case "checkpointed": out = cmdCheckpointed(store, args); break;
-      case "html": out = cmdHtml(store, args); break;
+      case "serve": out = await cmdServe(store, args, json); break;
+      case "html": throw new KbError("kb html is gone. Run `kb serve`: the same page, and it can edit and archive notes.");
       case "sync": out = cmdSync(store); break;
       default: throw new KbError(`unknown command "${command}". Run \`kb help\`.`);
     }

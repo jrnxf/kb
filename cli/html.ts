@@ -1,9 +1,8 @@
-// `kb html`: one self-contained page that shows the whole store. No server, no script dependency.
+// The page that `kb serve` shows: the whole store in one self-contained document, with no script dependency.
 
-import { join } from "node:path";
 import { rank } from "./context.ts";
 import { KINDS } from "./note.ts";
-import { type Store, type StoredNote, type Usage, writeAtomic } from "./store.ts";
+import type { Store, StoredNote, Usage } from "./store.ts";
 
 const esc = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -40,7 +39,7 @@ function day(iso: string): string {
 /** One line in the list pane. `n` ties it to its article in the reading pane. */
 function rowHtml(note: StoredNote, n: number): string {
   const haystack = esc(`${note.id} ${note.title} ${note.kind} ${note.scope} ${note.body}`.toLowerCase());
-  return `<button class="row k-${note.kind}${note.archived ? " archived" : ""}" data-n="${n}" data-scope="${esc(note.scope)}" data-kind="${note.kind}" data-search="${haystack}" tabindex="-1"><span class="dot"></span><span class="title">${esc(note.title)}</span></button>`;
+  return `<button class="row k-${note.kind}${note.archived ? " archived" : ""}" data-n="${n}" data-id="${esc(note.id)}" data-scope="${esc(note.scope)}" data-kind="${note.kind}" data-search="${haystack}" tabindex="-1"><span class="dot"></span><span class="title">${esc(note.title)}</span></button>`;
 }
 
 /** The whole note, shown in the reading pane when its row is the current one. */
@@ -56,8 +55,12 @@ function articleHtml(note: StoredNote, n: number, usage: Map<string, Usage>): st
   if (!note.indexed) meta.push("<span>not indexed</span>");
   if (note.promoted_to) meta.push(`<span>promoted to ${esc(note.promoted_to)}</span>`);
   const anchors = note.anchors.length > 0 ? `<p class="anchors">${note.anchors.map((a) => `<code>${esc(a)}</code>`).join(" ")}</p>` : "";
-  return `<article id="n-${n}" class="k-${note.kind}" hidden>
-<p class="crumb"><span class="dot"></span><span class="kind">${note.kind}</span><span class="scope">${scopeLabel(note.scope)}</span></p>
+  // An archived note is read-only until it is restored.
+  const acts = note.archived
+    ? `<button data-act="restore">Restore ${KEY("a")}</button>`
+    : `<button data-act="edit">Edit ${KEY("e")}</button><button data-act="archive">Archive ${KEY("a")}</button>`;
+  return `<article id="n-${n}" class="k-${note.kind}" data-id="${esc(note.id)}" hidden>
+<p class="crumb"><span class="dot"></span><span class="kind">${note.kind}</span><span class="scope">${scopeLabel(note.scope)}</span><span class="acts">${acts}</span></p>
 <h2>${esc(note.title)}</h2>
 <p class="meta">${meta.join("")}</p>${anchors}
 <div class="body">${renderBody(note.body)}</div>
@@ -113,7 +116,7 @@ kbd { font:11px var(--mono); border:1px solid var(--line); border-radius:4px; pa
 .row[aria-current=true] { background:var(--hover); font-weight:550; }
 .row.archived .title { color:var(--muted); }
 /* The pane that has the keys marks its current item a little more. */
-body[data-pane=list] .row[aria-current=true], body[data-pane=rail] .item.cur { background:var(--sel); box-shadow:inset 0 0 0 1px var(--ring); color:var(--fg); }
+body[data-pane=list] .row[aria-current=true], body[data-pane=rail] .item.cur, body[data-pane=read] .acts button { background:var(--sel); box-shadow:inset 0 0 0 1px var(--ring); color:var(--fg); }
 .empty { color:var(--muted); padding:8px 16px; margin:0; }
 
 .read { padding:48px 48px 80px; }
@@ -122,6 +125,21 @@ article { max-width:660px; }
 .crumb .kind { color:var(--k); font-weight:550; }
 .crumb a { color:inherit; text-decoration:none; }
 .crumb a:hover { color:var(--fg); text-decoration:underline; }
+.acts { display:flex; gap:6px; margin-left:auto; }
+.acts button, .form button { padding:3px 9px; border-radius:6px; font-size:12.5px; color:var(--muted); box-shadow:inset 0 0 0 1px var(--line); }
+.acts button:hover, .form button:hover { background:var(--hover); color:var(--fg); }
+.acts kbd, .form kbd { margin-left:4px; border:0; padding:0; color:var(--faint); }
+.form { display:grid; gap:14px; max-width:660px; }
+.form label { display:grid; gap:5px; font-size:12px; color:var(--muted); }
+.form input, .form select, .form textarea { width:100%; padding:8px 10px; font:inherit; color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:8px; outline:0; }
+.form input:focus, .form select:focus, .form textarea:focus { border-color:var(--faint); }
+.form input { font-size:17px; font-weight:600; }
+.form textarea { min-height:260px; font:13.5px/1.6 var(--mono); resize:vertical; }
+.form .pair { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.form .end { display:flex; align-items:center; gap:8px; }
+.form .error { color:var(--k-gotcha); font-size:13px; }
+.toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); display:flex; align-items:center; gap:10px; padding:8px 14px; font-size:13px; background:var(--card); border:1px solid var(--ring); border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,0.18); }
+.toast button { color:var(--muted); } .toast button:hover { color:var(--fg); }
 article h2 { font-size:24px; line-height:1.25; letter-spacing:-0.015em; margin:0 0 14px; overflow-wrap:anywhere; }
 .meta { display:flex; flex-wrap:wrap; gap:4px 14px; color:var(--muted); font-size:12.5px; margin:0 0 20px; padding-bottom:16px; border-bottom:1px solid var(--line); }
 .meta button { font:12px var(--mono); color:var(--muted); overflow-wrap:anywhere; }
@@ -153,16 +171,34 @@ const SCRIPT = String.raw`
 const q = document.getElementById("q"), read = document.getElementById("read"), where = document.getElementById("where"), none = document.getElementById("none");
 const rows = [...document.querySelectorAll(".row")], items = [...document.querySelectorAll(".item")], articles = [...document.querySelectorAll("article")];
 const kinds = items.filter((i) => i.dataset.kind).map((i) => i.dataset.kind);
+const TOKEN = document.body.dataset.token, VERSION = document.body.dataset.version;
 const state = { scope: null, kind: null, archived: false };
 // cursor: where the keys are in the sidebar. held: the scope to go back to when the cursor walks past the scopes.
-let pane = "list", current = null, shown = [], cursor = items[0], held = null;
+let pane = "list", current = null, shown = [], cursor = items[0], held = null, form = null;
 const isScope = (item) => item.dataset.scope !== undefined;
+const scopeItem = () => items.find((i) => isScope(i) && (state.scope || "*") === i.dataset.scope) || items[0];
+const article = () => (current ? document.getElementById("n-" + current.dataset.n) : null);
 
+// The address keeps the view, so a reload after a change comes back to the same place.
+function remember(noteId) {
+  const view = new URLSearchParams();
+  if (state.scope) view.set("scope", state.scope);
+  if (state.kind) view.set("kind", state.kind);
+  if (state.archived) view.set("archived", "1");
+  if (q.value) view.set("q", q.value);
+  const id = noteId !== undefined ? noteId : current && current.dataset.id;
+  if (id) view.set("note", id);
+  if (pane !== "list") view.set("pane", pane);
+  history.replaceState(null, "", "#" + view);
+}
 function paint() {
+  if (pane === "read" && !current) pane = "list";
   document.body.dataset.pane = pane;
   for (const item of items) item.classList.toggle("cur", item === cursor);
+  remember();
 }
 function show(row, scroll) {
+  if (form) closeForm();
   current = row || null;
   for (const r of rows) r.setAttribute("aria-current", r === current);
   for (const a of articles) a.hidden = !current || a.id !== "n-" + current.dataset.n;
@@ -189,8 +225,7 @@ function render() {
     item.classList.toggle("zero", count === 0);
     item.setAttribute("aria-pressed", isScope(item) ? (state.scope || "*") === item.dataset.scope : state.kind === item.dataset.kind);
   }
-  const scopeItem = items.find((i) => isScope(i) && (state.scope || "*") === i.dataset.scope);
-  where.firstChild.textContent = scopeItem.querySelector(".name").textContent + (state.kind ? " / " + state.kind : "");
+  where.firstChild.textContent = scopeItem().querySelector(".name").textContent + (state.kind ? " / " + state.kind : "");
   where.lastChild.textContent = shown.length;
   none.hidden = shown.length > 0;
   show(shown.includes(current) ? current : shown[0], true);
@@ -207,14 +242,92 @@ function activate(item) {
 }
 function step(list, from, by) { return list[Math.max(0, Math.min(list.length - 1, list.indexOf(from) + by))]; }
 
+// ---- changes: every one goes to the server, then the page loads again ----
+
+async function api(method, path, body) {
+  const response = await fetch(path, { method, headers: { "content-type": "application/json", "x-kb-token": TOKEN }, body: body ? JSON.stringify(body) : undefined });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "kb answered " + response.status);
+  return data;
+}
+function el(tag, props, ...children) {
+  const node = Object.assign(document.createElement(tag), props || {});
+  node.append(...children);
+  return node;
+}
+function toast(text, action, run) {
+  const old = document.querySelector(".toast");
+  if (old) old.remove();
+  const node = el("div", { className: "toast" }, text);
+  if (action) node.append(el("button", { type: "button", onclick: run }, action));
+  document.body.append(node);
+  setTimeout(() => node.remove(), 7000);
+}
+function closeForm() {
+  if (!form) return;
+  for (const child of form.parentElement.children) child.hidden = false;
+  form.remove();
+  form = null;
+}
+async function edit() {
+  const host = article();
+  if (!host || form || !host.querySelector("[data-act=edit]")) return;
+  let note;
+  try { note = await api("GET", "/api/notes/" + host.dataset.id); } catch (error) { return toast(error.message); }
+  const select = (name, options, value) => el("select", { name }, ...options.map((o) => el("option", { value: o, selected: o === value }, o)));
+  const error = el("span", { className: "error" });
+  form = el("form", { className: "form" },
+    el("label", null, "Title", el("input", { name: "title", value: note.title, autocomplete: "off" })),
+    el("div", { className: "pair" }, el("label", null, "Kind", select("kind", kinds, note.kind)), el("label", null, "Confidence", select("confidence", ["high", "medium", "low"], note.confidence))),
+    el("label", null, "Body, in Markdown", el("textarea", { name: "body", value: note.body, spellcheck: true })),
+    el("div", { className: "end" }, el("button", { type: "submit" }, "Save", el("kbd", null, "ctrl enter")), el("button", { type: "button", onclick: closeForm }, "Cancel", el("kbd", null, "esc")), error));
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    try {
+      await api("PUT", "/api/notes/" + note.id, data);
+      location.reload();
+    } catch (problem) { error.textContent = problem.message; }
+  };
+  for (const child of host.children) child.hidden = true;
+  host.append(form);
+  form.elements.body.focus();
+}
+/** Archive the open note, or restore it when it is archived. An archive can be undone from the next page. */
+async function archive() {
+  const host = article();
+  if (!host || form) return;
+  const restore = !!host.querySelector("[data-act=restore]");
+  try {
+    await api("POST", "/api/notes/" + host.dataset.id + (restore ? "/restore" : "/archive"));
+  } catch (error) { return toast(error.message); }
+  if (!restore) sessionStorage.setItem("kb-undo", host.dataset.id);
+  // Land on the next note in the list, or the one before when this was the last.
+  const next = shown[shown.indexOf(current) + 1] || shown[shown.indexOf(current) - 1];
+  remember(restore || state.archived ? host.dataset.id : next ? next.dataset.id : "");
+  location.reload();
+}
+async function undo() {
+  const id = sessionStorage.getItem("kb-undo");
+  if (!id) return;
+  sessionStorage.removeItem("kb-undo");
+  try { await api("POST", "/api/notes/" + id + "/restore"); } catch (error) { return toast(error.message); }
+  remember(id);
+  location.reload();
+}
+
 q.addEventListener("input", render);
 document.addEventListener("click", (event) => {
-  const copy = event.target.closest("[data-copy]"), item = event.target.closest(".item"), row = event.target.closest(".row");
+  const copy = event.target.closest("[data-copy]"), act = event.target.closest("[data-act]"), item = event.target.closest(".item"), row = event.target.closest(".row");
   if (copy) {
     if (navigator.clipboard) navigator.clipboard.writeText(copy.dataset.copy);
     const id = copy.textContent;
     copy.textContent = "copied";
     setTimeout(() => (copy.textContent = id), 900);
+  } else if (act) {
+    pane = "read";
+    paint();
+    if (act.dataset.act === "edit") edit(); else archive();
   } else if (item) {
     pane = "rail"; cursor = item;
     activate(item);
@@ -226,8 +339,13 @@ document.addEventListener("click", (event) => {
   }
 });
 document.addEventListener("keydown", (event) => {
-  if (event.metaKey || event.ctrlKey || event.altKey) return;
   const key = event.key;
+  if (form) {
+    if (key === "Escape") closeForm();
+    else if (key === "Enter" && (event.metaKey || event.ctrlKey)) form.requestSubmit();
+    return;
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (document.activeElement === q) {
     if (key === "Escape") { q.value = ""; q.blur(); render(); }
     else if (key === "ArrowDown" || key === "Enter") { event.preventDefault(); q.blur(); pane = "list"; paint(); }
@@ -236,9 +354,10 @@ document.addEventListener("keydown", (event) => {
   const by = key === "ArrowDown" || key === "j" ? 1 : key === "ArrowUp" || key === "k" ? -1 : 0;
   if (key === "/") { q.focus(); q.select(); }
   else if (key === "ArrowLeft" || key === "h") {
-    if (pane !== "rail") { cursor = items.find((i) => isScope(i) && (state.scope || "*") === i.dataset.scope); held = state.scope; }
-    pane = "rail";
-  } else if (key === "ArrowRight" || key === "l") pane = "list";
+    if (pane === "read") pane = "list";
+    else if (pane === "list") { cursor = scopeItem(); held = state.scope; pane = "rail"; }
+  } else if (key === "ArrowRight" || key === "l") pane = pane === "rail" ? "list" : "read";
+  else if (by && pane === "read") read.scrollBy({ top: by * 80 });
   else if (by && pane === "list") { if (shown.length) show(step(shown, current, by), true); }
   else if (by) {
     const was = cursor;
@@ -248,15 +367,47 @@ document.addEventListener("keydown", (event) => {
     else if (isScope(was)) { state.scope = held; render(); }
     cursor.scrollIntoView({ block: "nearest" });
   } else if ((key === "Enter" || key === " ") && pane === "rail") activate(cursor);
+  else if (key === "e" && pane === "read") edit();
+  else if (key === "a" && pane === "read") archive();
+  else if (key === "u" && sessionStorage.getItem("kb-undo")) undo();
   else if (kinds[Number(key) - 1]) { toggleKind(kinds[Number(key) - 1]); render(); }
   else return;
   event.preventDefault();
   paint();
 });
+
+// Come back to the view in the address.
+const view = new URLSearchParams(location.hash.slice(1));
+if (items.some((i) => i.dataset.scope === view.get("scope"))) state.scope = view.get("scope");
+if (kinds.includes(view.get("kind"))) state.kind = view.get("kind");
+state.archived = view.has("archived") && items.some((i) => i.dataset.archived !== undefined);
+q.value = view.get("q") || "";
+current = rows.find((r) => r.dataset.id === view.get("note")) || null;
+if (["rail", "read"].includes(view.get("pane"))) pane = view.get("pane");
+cursor = scopeItem(); held = state.scope;
 render();
+if (sessionStorage.getItem("kb-undo")) {
+  toast("Archived.", "Undo (u)", undo);
+  setTimeout(() => sessionStorage.removeItem("kb-undo"), 7000);
+}
+// A note that an agent adds or changes shows without a manual reload. An open form is never thrown away.
+setInterval(async () => {
+  if (document.hidden || form) return;
+  try {
+    const now = await (await fetch("/api/state")).json();
+    if (now.version !== VERSION) location.reload();
+  } catch {}
+}, 3000);
 `;
 
-export function renderHtml(store: Store): string {
+/** Changes whenever a note, the archive or a usage counter changes. The page reloads when it differs. */
+export function storeVersion(store: Store): string {
+  const strip = ({ path: _path, ...note }: StoredNote) => note;
+  return Bun.hash(JSON.stringify([store.notes().map(strip), store.notes({ archived: true }).map(strip), [...store.usage()]])).toString(36);
+}
+
+/** `token` goes into the page, and the page sends it back with every change. */
+export function renderHtml(store: Store, token: string): string {
   const usage = store.usage();
   const active = store.notes();
   const archived = store.notes({ archived: true });
@@ -282,14 +433,14 @@ export function renderHtml(store: Store): string {
 <title>kb</title>
 <style>${STYLE}</style>
 </head>
-<body data-pane="list">
+<body data-pane="list" data-token="${esc(token)}" data-version="${storeVersion(store)}">
 <div class="page">
 <aside class="pane rail">
 <header><h1>kb</h1><span class="sub">${active.length} ${active.length === 1 ? "note" : "notes"}${archived.length > 0 ? `, ${archived.length} archived` : ""}</span></header>
 <nav>
 ${rail}
 </nav>
-<p class="keys">${KEY("&uarr;")} ${KEY("&darr;")} move<br>${KEY("&larr;")} ${KEY("&rarr;")} sidebar or list<br>${KEY("enter")} pick in the sidebar<br>${KEY("1")} to ${KEY(String(KINDS.length))} kind on or off<br>${KEY("/")} filter</p>
+<p class="keys">${KEY("&uarr;")} ${KEY("&darr;")} move<br>${KEY("&larr;")} ${KEY("&rarr;")} change pane<br>${KEY("enter")} pick in the sidebar<br>${KEY("e")} edit, ${KEY("a")} archive, in the note<br>${KEY("1")} to ${KEY(String(KINDS.length))} kind on or off<br>${KEY("/")} filter</p>
 </aside>
 <div class="pane list">
 <div class="top"><div class="search"><input type="search" id="q" placeholder="Filter notes" autocomplete="off"><kbd>/</kbd></div><div class="where" id="where"><span></span><span class="num"></span></div></div>
@@ -306,14 +457,4 @@ ${notes.map((note, n) => articleHtml(note, n, usage)).join("\n")}
 </body>
 </html>
 `;
-}
-
-export function htmlPath(store: Store): string {
-  return join(store.home, "index.html");
-}
-
-export function writeHtml(store: Store): string {
-  const path = htmlPath(store);
-  writeAtomic(path, renderHtml(store));
-  return path;
 }

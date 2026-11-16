@@ -1,0 +1,167 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { renderHtml } from "../cli/html.ts";
+import { type Served, serve } from "../cli/serve.ts";
+import type { Store } from "../cli/store.ts";
+import { MAIN, kb, plain, putNote, sh, tempDir, tempStore } from "./helpers.ts";
+
+describe("the page", () => {
+  test("is self-contained and shows raw HTML in a note as text", () => {
+    const store = tempStore();
+    putNote(store, { id: "xss", title: "A <b>bold</b> title", body: "Use `x`.\n\n<script>alert(1)</script>" });
+    const page = renderHtml(store, "t");
+    expect(page).toContain("A &lt;b&gt;bold&lt;/b&gt; title");
+    expect(page).not.toContain("<script>alert(1)</script>");
+    expect(page).toContain("<code>x</code>");
+    // No script, style, font or picture from the network.
+    expect(page).not.toMatch(/src="http|<link|@import|url\(/);
+  });
+
+  test("a repo scope shows as owner/name and links to the repo", () => {
+    const store = tempStore();
+    putNote(store, { id: "a", scope: "github.com/acme/web" });
+    putNote(store, { id: "b", scope: "gitlab.com/acme/api" });
+    putNote(store, { id: "c", scope: "local-project" });
+    putNote(store, { id: "d" });
+    const page = renderHtml(store, "t");
+    expect(page).toContain('<span class="scope"><a href="https://github.com/acme/web" target="_blank" rel="noopener noreferrer">acme/web</a></span>');
+    expect(page).toContain('<span class="scope"><a href="https://gitlab.com/acme/api" target="_blank" rel="noopener noreferrer">gitlab.com/acme/api</a></span>');
+    expect(page).toContain('<span class="scope">local-project</span>');
+    expect(page).toContain('<span class="scope">global</span>');
+  });
+
+  test("an archived note is on the page, read-only, behind a toggle that only shows when there is one", () => {
+    const store = tempStore();
+    putNote(store, { id: "live" });
+    expect(renderHtml(store, "t")).not.toContain("data-archived");
+    putNote(store, { id: "old", title: "An old note" }, true);
+    const page = renderHtml(store, "t");
+    expect(page).toContain("data-archived");
+    expect(page).toMatch(/class="row k-\w+ archived"[^>]*>.*An old note/);
+    const article = (id: string) => page.slice(page.indexOf(`<article id="n-`, page.indexOf(`data-id="${id}" hidden`) - 60)).split("</article>")[0]!;
+    expect(article("old")).toContain('data-act="restore"');
+    expect(article("old")).not.toContain('data-act="edit"');
+    expect(article("live")).toContain('data-act="edit"');
+  });
+});
+
+describe("kb serve", () => {
+  let served: Served | undefined;
+  afterEach(() => served?.stop());
+
+  function start(store: Store): { call: (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Promise<{ status: number; json: any }> } {
+    served = serve(store, { port: 0 });
+    const { url, token } = served;
+    return {
+      async call(method, path, body, headers = { "x-kb-token": token }) {
+        const response = await fetch(new URL(path, url), { method, headers: { "content-type": "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+        return { status: response.status, json: await response.json().catch(() => undefined) };
+      },
+    };
+  }
+
+  test("serves the page with the current notes on every load", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a", title: "First note" });
+    start(store);
+    expect(await (await fetch(served!.url)).text()).toContain("First note");
+    putNote(store, { id: "b", title: "Added while the server runs" });
+    expect(await (await fetch(served!.url)).text()).toContain("Added while the server runs");
+  });
+
+  test("an edit changes the note, counts as a verification and is committed", async () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    putNote(store, { id: "a", title: "Old title", body: "old", anchors: ["src/a.ts"] });
+    const { call } = start(store);
+    const saved = await call("PUT", "/api/notes/a", { title: "New title", kind: "decision", confidence: "high", body: "new body", scope: "other", id: "evil", created: "1999-01-01T00:00:00Z" });
+    expect(saved.status).toBe(200);
+    const note = store.find("a")!;
+    expect(note).toMatchObject({ id: "a", title: "New title", kind: "decision", confidence: "high", body: "new body", scope: "global", created: "2026-01-01T00:00:00Z", anchors: ["src/a.ts"] });
+    expect(note.last_verified > "2026-01-01T00:00:00Z").toBe(true);
+    expect(store.find("evil")).toBeUndefined();
+    expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe("kb: update a");
+    expect((await call("GET", "/api/notes/a")).json).toMatchObject({ title: "New title", body: "new body" });
+  });
+
+  test("a bad edit is refused with the reason and changes nothing", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a", body: "kept" });
+    const { call } = start(store);
+    const bad = await call("PUT", "/api/notes/a", { kind: "nonsense", body: "" });
+    expect(bad.status).toBe(400);
+    expect(bad.json.error).toContain("kind");
+    expect(store.find("a")!.body).toBe("kept");
+    expect((await call("PUT", "/api/notes/ghost", { body: "x" })).status).toBe(400);
+  });
+
+  test("archive and restore move the note and never delete it", async () => {
+    const store = tempStore();
+    const note = putNote(store, { id: "a" });
+    const { call } = start(store);
+    expect((await call("POST", "/api/notes/a/archive")).status).toBe(200);
+    expect(store.notes()).toHaveLength(0);
+    expect(store.notes({ archived: true }).map((n) => n.body)).toEqual([note.body]);
+    expect((await call("POST", "/api/notes/a/archive")).status).toBe(400);
+    expect((await call("POST", "/api/notes/a/restore")).status).toBe(200);
+    expect(store.notes().map((n) => n.id)).toEqual(["a"]);
+  });
+
+  test("a change without the page's token, or under another host name, is refused", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a", body: "kept" });
+    const { call } = start(store);
+    expect((await call("POST", "/api/notes/a/archive", undefined, {})).status).toBe(403);
+    expect((await call("PUT", "/api/notes/a", { body: "x" }, { "x-kb-token": "guess" })).status).toBe(403);
+    // A site that points its own name at this machine sends its own Host header.
+    expect((await call("GET", "/", undefined, { host: "evil.example.com" })).status).toBe(403);
+    expect((await call("POST", "/api/notes/a/archive", undefined, { host: "evil.example.com", "x-kb-token": served!.token })).status).toBe(403);
+    expect(store.find("a")).toMatchObject({ archived: false, body: "kept" });
+  });
+
+  test("the version changes when a note changes, so an open page reloads", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    const { call } = start(store);
+    const before = (await call("GET", "/api/state")).json.version;
+    expect((await call("GET", "/api/state")).json.version).toBe(before);
+    putNote(store, { id: "b" });
+    expect((await call("GET", "/api/state")).json.version).not.toBe(before);
+  });
+
+  test("the command starts a server, and a second one points at the first", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a", title: "Served by the command" });
+    const first = Bun.spawn([process.execPath, MAIN, "serve", "--port", "0", "--json"], { cwd: plain(), env: { ...process.env, KB_HOME: store.home }, stdout: "pipe", stderr: "pipe" });
+    try {
+      let text = "";
+      const reader = first.stdout.getReader();
+      while (!text.includes("}")) text += new TextDecoder().decode((await reader.read()).value);
+      const { url, started } = JSON.parse(text);
+      expect(started).toBe(true);
+      expect(await (await fetch(url)).text()).toContain("Served by the command");
+      const second = kb(store, ["serve", "--port", new URL(url).port, "--json"]);
+      expect(second.code).toBe(0);
+      expect(second.json).toEqual({ url, started: false });
+    } finally {
+      first.kill();
+    }
+  });
+
+  test("kb html is gone and says what replaces it, and no page file is written", () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    const result = kb(store, ["html"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("kb serve");
+    kb(store, ["use", "a"]);
+    expect(existsSync(join(store.home, "index.html"))).toBe(false);
+  });
+
+  test("fails with a clear message when there is no store", () => {
+    const result = kb(join(tempDir(), "none"), ["serve", "--no-open"], { cwd: plain() });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("kb add");
+  });
+});
