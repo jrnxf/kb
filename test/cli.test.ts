@@ -137,19 +137,38 @@ describe("kb use, archive, show, list", () => {
 });
 
 describe("kb search", () => {
-  test("ripgrep and the built-in scan return the same hits", () => {
+  test("finds a line in the title or the body, once, and honors scope and archive", () => {
     const store = tempStore();
     putNote(store, { id: "raw-body", title: "Stripe needs the raw body", body: "Mount express.raw() first.\nThe JSON parser breaks the Signature." });
     putNote(store, { id: "other", scope: "github.com/acme/web", body: "Nothing here." });
     putNote(store, { id: "old", body: "signature rotation, archived" }, true);
 
-    for (const forceScan of [false, true]) {
-      const hits = search(store, "signature", { forceScan });
-      expect(hits).toEqual([{ id: "raw-body", title: "Stripe needs the raw body", scope: "global", archived: false, line: 13, text: "The JSON parser breaks the Signature." }]);
-      expect(search(store, "signature", { forceScan, archive: true }).map((h) => h.id)).toEqual(["old", "raw-body"]);
-      expect(search(store, "nothing", { forceScan, scope: "global" })).toEqual([]);
-      // A title match counts once. The id line does not double it.
-      expect(search(store, "raw", { forceScan }).map((h) => h.line)).toEqual([3, 12]);
-    }
+    const hits = search(store, "signature");
+    expect(hits).toEqual([{ id: "raw-body", title: "Stripe needs the raw body", scope: "global", archived: false, line: 13, text: "The JSON parser breaks the Signature." }]);
+    expect(search(store, "signature", { archive: true }).map((h) => h.id)).toEqual(["old", "raw-body"]);
+    expect(search(store, "nothing", { scope: "global" })).toEqual([]);
+    // A title match counts once. The id line does not double it.
+    expect(search(store, "raw").map((h) => h.line)).toEqual([3, 12]);
+  });
+
+  // The checkpoint skill searches with two or three key words before it writes. A phrase match
+  // answered "no match" for words that are not adjacent, and the agent then saved a duplicate.
+  test("key words match in any order and on different lines", () => {
+    const store = tempStore();
+    putNote(store, { id: "shared-db", title: "Never run the migration tool against the shared staging database", body: "Run it on a local copy only." });
+    putNote(store, { id: "deploy", title: "The deploy CLI exits 0 when the upload was rejected", body: "Check the staging log." });
+    putNote(store, { id: "unrelated", body: "Nothing about it." });
+
+    expect([...new Set(search(store, "staging migration").map((h) => h.id))]).toEqual(["shared-db"]);
+    expect([...new Set(search(store, "local MIGRATION").map((h) => h.id))]).toEqual(["shared-db"]);
+
+    const cli = (...words: string[]) => kb(store, ["search", ...words]).stdout.trim();
+    expect(cli("staging", "migration")).toStartWith("shared-db | ");
+    // No note has every word: the closest notes are better than "no match".
+    const closest = cli("staging", "migration", "rollback");
+    expect(closest.split("\n")[0]).toBe("no note has every word. Closest:");
+    expect(closest).toContain("shared-db | ");
+    expect(closest).not.toContain("deploy | ");
+    expect(cli("zebra", "quartz")).toBe("no match");
   });
 });

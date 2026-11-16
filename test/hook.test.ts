@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ROOT, kb, plain, putNote, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
@@ -124,6 +124,20 @@ describe("session notices", () => {
     const first = runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout;
     expect(first).toContain("### g [gotcha]");
     expect(first).toContain("ended with /clear before /kb:checkpoint ran. Its transcript is /home/user/lost.jsonl.");
+    expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain("lost.jsonl");
+  });
+
+  // The agent can change directory inside the project, so the two hooks do not always get the same cwd.
+  test("a /clear with no checkpoint in a subdirectory is reported at the next start in the repo root", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    const other = tempRepo({ remote: "git@github.com:acme/web.git" });
+    putNote(store, { id: "g" });
+    mkdirSync(join(repo, "src"));
+    end(store.home, endInput(join(repo, "src"), "lost"));
+
+    expect(runHook({ home: store.home, stdin: startInput(other, "clear") }).stdout).not.toContain("lost.jsonl");
+    expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).toContain("Its transcript is /home/user/lost.jsonl.");
     expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain("lost.jsonl");
   });
 

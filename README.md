@@ -37,7 +37,7 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
   confirm. This is the only write `kb` makes inside a repo. A promoted note is no longer injected.
 - **A missed checkpoint leaves a trace.** Nothing can run before `/clear`. So a session that ends
   with `/clear` and no checkpoint is recorded, and the next session in that directory gets one
-  line with the path of its transcript. Before a compaction, a hook tells the summary what to
+  line with the path of its transcript, also when one of the two was in a subdirectory of the checkout. Before a compaction, a hook tells the summary what to
   keep, and the next start says once that no checkpoint ran.
 - **Sync.** If the store has a git remote, each write starts a background pull and push, and
   each session start does the same at most once per 5 minutes. Usage counters live in one file
@@ -55,7 +55,7 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 ```
 kb context [--repo .]        what a session gets at start
 kb add [--repo .]            create or update a note from JSON on stdin
-kb show <id>                 kb search <query> [--scope s] [--archive]
+kb show <id>                 kb search <words> [--scope s] [--archive]
 kb list [--scope s]          kb use <id>...
 kb archive <id>...           kb restore <id>...
 kb stale [--repo .]          kb verify <id>...
@@ -71,13 +71,16 @@ synced. The server listens on this machine only, and stops with Ctrl+C. To reach
 reverse proxy, name the proxy's host in `KB_SERVE_HOSTS`. Everybody who can open that name can
 change notes.
 
+`kb search` finds the notes that have every word of the query, in any order, in the title or the
+body. When no note has every word, it prints the closest notes and says so.
+
 Skills: `/kb:checkpoint`, `/kb:audit`, `/kb:promote`. Only you can start them.
 
 Every command accepts `--json`. The CLI knows nothing about Claude Code: only `hooks/` and `skills/` do.
 
 ## Install
 
-Requirements: a recent [Bun](https://bun.sh) (tested with 1.4) and git. `ripgrep` is optional. There is no install step and no dependency.
+Requirements: a recent [Bun](https://bun.sh) (tested with 1.4) and git. There is no install step and no dependency.
 
 ```bash
 /plugin install kb --marketplace <owner>/<repo>

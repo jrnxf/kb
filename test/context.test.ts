@@ -47,7 +47,7 @@ describe("kb context ranking", () => {
     expect(text).toContain(`### ${SCOPE} (1)\n- three [how-to] A repo fact`);
     expect(text).toContain("### one [gotcha] First fact\nverified 2026-01-01 at abc1234 | confidence medium | anchors: src/a.ts#run\nThe body of one.");
     expect(text.indexOf("## Index")).toBeLessThan(text.indexOf("## Notes"));
-    expect(text.trimEnd().endsWith("`kb search <query>` searches every note.")).toBe(true);
+    expect(text.trimEnd().endsWith("`kb search <words>` searches every note.")).toBe(true);
   });
 
   test("a note is printed once: its body, or an index line when the body did not fit", () => {

@@ -66,7 +66,7 @@ function bodyBlock(note: StoredNote): string {
 
 function pointer(dropped: number): string {
   const fit = dropped > 0 ? `${dropped} ${dropped === 1 ? "note is" : "notes are"} in the index only, because the bodies did not fit. ` : "";
-  return `${fit}\`kb show <id>\` prints one note. \`kb search <query>\` searches every note.`;
+  return `${fit}\`kb show <id>\` prints one note. \`kb search <words>\` searches every note.`;
 }
 
 export function buildContext(store: Store, repoPath: string): ContextResult {

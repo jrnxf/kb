@@ -30,7 +30,9 @@ Never save a secret, token, password, key, or credential. Never save the content
 
 ## 2. Search before you write
 
-For each candidate, run `kb search <two or three key words>`. Also check the notes injected at session start.
+For each candidate, run `kb search <two or three key words>`. It finds the notes that have every word, in any order.
+Use the nouns of the fact ("staging migration"), not a sentence. Also check the notes injected at session start.
+When the answer starts with `no note has every word. Closest:`, read those notes too: one of them can be the same fact in other words.
 
 - A note already covers it and is still correct: skip it.
 - A note covers it but is incomplete or wrong: update that note (pass its `id`).
@@ -60,7 +62,7 @@ KB_NOTE
 - `kind`: `gotcha`, `decision`, `convention`, `how-to` or `open-work`.
 - `confidence`: `high` when you verified it in this session, `medium` when it is likely, `low` when it is a guess.
 - `anchors`: repo-relative paths, or `path#symbol`, of the code the fact depends on. They let a later check find stale notes. Leave the list empty for a global note.
-- To update, add `"id": "<id>"` and only the fields that change. A new title, body or anchors also records the note as verified now.
+- To update, add `"id": "<id>"` and only the fields that change. A `body` replaces the whole body, so read the note with `kb show <id>` first and write the full new body, with the old detail that is still true. A new title, body or anchors also records the note as verified now.
 
 Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id>`, then update it or skip.
 

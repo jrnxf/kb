@@ -1,7 +1,6 @@
-// `kb search`: ripgrep over the notes, with a built-in scan when rg is missing.
+// `kb search`: every word of the query, in any order, anywhere in the title or the body of a note.
 
 import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
 import type { Store, StoredNote } from "./store.ts";
 
 export interface Hit {
@@ -16,56 +15,52 @@ export interface Hit {
 export interface SearchOptions {
   scope?: string;
   archive?: boolean;
-  /** Tests set this to exercise the fallback. */
-  forceScan?: boolean;
 }
 
-/** Case-insensitive fixed-string search. Returns one hit per matching line. */
-export function search(store: Store, query: string, options: SearchOptions = {}): Hit[] {
+export interface SearchResult {
+  hits: Hit[];
+  /** False when no note has every word. The hits are then the notes with the most words. */
+  complete: boolean;
+}
+
+/**
+ * Case-insensitive search for the words of the query. A note matches when each word is in its
+ * title or body. When no note has every word of a query with several words, the notes with the
+ * most words match instead, if they have at least two. One hit per line that has a word.
+ */
+export function searchNotes(store: Store, query: string, options: SearchOptions = {}): SearchResult {
+  const words = [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))];
   const notes = [...store.notes(), ...(options.archive ? store.notes({ archived: true }) : [])].filter(
     (n) => !options.scope || n.scope === options.scope,
   );
-  if (notes.length === 0 || !query) return [];
-  const byPath = new Map(notes.map((n) => [resolve(n.path), n]));
-  const hit = (n: StoredNote, line: number, text: string): Hit => ({ id: n.id, title: n.title, scope: n.scope, archived: n.archived, line, text: text.trim() });
-  // In the frontmatter only the title line counts, so an id or scope never doubles a hit.
-  const bodyStart = new Map<string, number>();
-  const counts = (n: StoredNote, line: number, text: string): boolean => {
-    let start = bodyStart.get(n.path);
-    if (start === undefined) {
-      start = readFileSync(n.path, "utf8").split("\n").indexOf("---", 1) + 2;
-      bodyStart.set(n.path, start);
-    }
-    return line >= start || text.startsWith("title:");
-  };
+  if (words.length === 0) return { hits: [], complete: true };
 
-  const rg = options.forceScan ? null : Bun.which("rg");
-  if (rg) {
-    const dirs = [join(store.home, "notes"), ...(options.archive ? [join(store.home, "archive")] : [])];
-    const result = Bun.spawnSync([rg, "--line-number", "--no-heading", "--with-filename", "--color", "never", "-i", "-F", "-g", "*.md", "-e", query, ...dirs], {
-      stdout: "pipe",
-      stderr: "ignore",
-      stdin: "ignore",
-    });
-    // Exit 1 means no match. Anything above that is a failure, so use the scan.
-    if (result.exitCode !== null && result.exitCode <= 1) {
-      const hits: Hit[] = [];
-      for (const row of result.stdout.toString().split("\n")) {
-        const match = /^(.*?\.md):(\d+):(.*)$/.exec(row);
-        const note = match && byPath.get(resolve(match[1]!));
-        if (match && note && counts(note, Number(match[2]), match[3]!)) hits.push(hit(note, Number(match[2]), match[3]!));
-      }
-      return hits.sort((a, b) => a.id.localeCompare(b.id) || a.line - b.line);
-    }
-  }
-
-  const needle = query.toLowerCase();
-  const hits: Hit[] = [];
+  const found: { note: StoredNote; matched: number; hits: Hit[] }[] = [];
   for (const note of notes) {
     const lines = readFileSync(note.path, "utf8").split("\n");
+    // In the frontmatter only the title line counts, so an id or scope never makes a hit.
+    const bodyStart = lines.indexOf("---", 1) + 1;
+    const matched = new Set<string>();
+    const hits: Hit[] = [];
     lines.forEach((text, i) => {
-      if (text.toLowerCase().includes(needle) && counts(note, i + 1, text)) hits.push(hit(note, i + 1, text));
+      if (i < bodyStart && !text.startsWith("title:")) return;
+      const lower = text.toLowerCase();
+      const here = words.filter((word) => lower.includes(word));
+      if (here.length === 0) return;
+      for (const word of here) matched.add(word);
+      hits.push({ id: note.id, title: note.title, scope: note.scope, archived: note.archived, line: i + 1, text: text.trim() });
     });
+    if (matched.size > 0) found.push({ note, matched: matched.size, hits });
   }
-  return hits.sort((a, b) => a.id.localeCompare(b.id) || a.line - b.line);
+
+  const best = Math.max(0, ...found.map((f) => f.matched));
+  const complete = best === words.length;
+  if (!complete && best < 2) return { hits: [], complete: true };
+  const hits = found
+    .filter((f) => f.matched === best)
+    .flatMap((f) => f.hits)
+    .sort((a, b) => a.id.localeCompare(b.id) || a.line - b.line);
+  return { hits, complete };
 }
+
+export const search = (store: Store, query: string, options: SearchOptions = {}): Hit[] => searchNotes(store, query, options).hits;

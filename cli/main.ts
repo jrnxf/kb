@@ -6,7 +6,7 @@ import { join, relative } from "node:path";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { CONFIDENCES, KINDS, KbError, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
-import { search } from "./search.ts";
+import { searchNotes } from "./search.ts";
 import { DEFAULT_PORT, isKbServer, serve } from "./serve.ts";
 import { markSaved } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
@@ -19,7 +19,8 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb context [--repo .]                  text for a session start: index, top notes, pointer
   kb add [--repo .]                      create or update a note from JSON on stdin
   kb show <id>                           print one note
-  kb search <query> [--scope s] [--archive]
+  kb search <words> [--scope s] [--archive]
+                                         notes that have every word, in any order
   kb list [--scope s] [--archive]        every note with kind, uses and verified date
   kb use <id>...                         record that these notes changed what you did
   kb archive <id>... | kb restore <id>...
@@ -165,10 +166,11 @@ function cmdShow(store: Store, args: Args): Output {
 
 function cmdSearch(store: Store, args: Args): Output {
   const query = args.positional.join(" ");
-  if (!query) throw new KbError("usage: kb search <query> [--scope s] [--archive]");
+  if (!query) throw new KbError("usage: kb search <words> [--scope s] [--archive]");
   const scope = args.flags.get("scope");
-  const hits = search(store, query, { scope: typeof scope === "string" ? scope : undefined, archive: args.flags.has("archive") });
-  const text = hits.length === 0 ? "no match" : hits.map((h) => `${h.id}${h.archived ? " (archived)" : ""} | ${h.title} | ${h.line}: ${h.text}`).join("\n");
+  const { hits, complete } = searchNotes(store, query, { scope: typeof scope === "string" ? scope : undefined, archive: args.flags.has("archive") });
+  const rows = hits.map((h) => `${h.id}${h.archived ? " (archived)" : ""} | ${h.title} | ${h.line}: ${h.text}`);
+  const text = hits.length === 0 ? "no match" : [...(complete ? [] : ["no note has every word. Closest:"]), ...rows].join("\n");
   return { json: hits, text };
 }
 
