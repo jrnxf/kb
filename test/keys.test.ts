@@ -70,6 +70,30 @@ describe("keys on a wide screen", () => {
     await page.keyboard.press("a");
     await until(() => store.find(id)?.archived ?? false, "the note is archived");
   });
+
+  test("Undo selects the restored note, and no other row on the way", async () => {
+    // The last row, so the row selected after the archive is not the first row.
+    const last = await page.locator("[data-id]").last().getAttribute("data-id");
+    await page.keyboard.press("j");
+    await page.keyboard.press("j");
+    await until(async () => (await selected(page)) === last, "the last row is selected");
+    const id = last!;
+    await page.keyboard.press("a");
+    await until(() => store.find(id)?.archived ?? false, "the note is archived");
+    const before = (await selected(page))!;
+    expect(await page.locator("[data-id]").first().getAttribute("data-id")).not.toBe(before);
+    // Every row that is the current one at any moment, from here on.
+    await page.evaluate(() => {
+      const seen: string[] = ((window as unknown as { seen: string[] }).seen = []);
+      new MutationObserver(() => {
+        for (const row of document.querySelectorAll("[data-id][aria-current=true]")) seen.push(row.getAttribute("data-id")!);
+      }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-current"] });
+    });
+    await page.keyboard.press("Meta+z");
+    await until(async () => (await selected(page)) === id, "the restored note is selected");
+    const seen = await page.evaluate(() => (window as unknown as { seen: string[] }).seen);
+    expect(seen.filter((row) => row !== id && row !== before)).toEqual([]);
+  });
 });
 
 describe("keys on a phone", () => {
