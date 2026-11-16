@@ -68,7 +68,7 @@ kb sync                      kb checkpointed <session-id>
 
 `kb serve`, or `kb` alone in a terminal, opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
 list, and the open note. The arrow keys move through the sidebar and the list. `e` edits the open
-note and `a` archives it. `?` lists every key. On a phone the scopes and the kinds are two rows that scroll sideways, and a tap on a note brings it to the top of the screen. Each change goes through the same code as the CLI, so it is validated, committed and
+note and `a` archives it. `1` to `5` turn kinds on and off, and several can be on at once. `?` lists every key. On a phone the scopes and the kinds are two rows that scroll sideways, and a tap on a note brings it to the top of the screen. Each change goes through the same code as the CLI, so it is validated, committed and
 synced. The server listens on this machine only, and stops with Ctrl+C. To reach it through a
 reverse proxy, name the proxy's host in `KB_SERVE_HOSTS`. Everybody who can open that name can
 change notes.

@@ -119,6 +119,9 @@ kbd { font:11px var(--mono); border:1px solid var(--line); border-radius:4px; pa
 .search input:focus { border-color:var(--faint); }
 .search kbd { position:absolute; right:9px; top:8px; pointer-events:none; }
 .search input:focus + kbd { display:none; }
+/* The cross that clears the field, in the colors of the page and not the bright one of the browser. */
+.search input::-webkit-search-cancel-button { -webkit-appearance:none; width:16px; height:16px; margin:0 -24px 0 8px; cursor:pointer; background:var(--faint); -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M4.5 4.5l7 7M11.5 4.5l-7 7'/%3E%3C/svg%3E") center / 16px no-repeat; }
+.search input::-webkit-search-cancel-button:hover { background:var(--fg); }
 .where { margin-top:14px; font:12px var(--mono); color:var(--faint); }
 #rows { padding:0 8px 24px; }
 .row { display:flex; gap:10px; align-items:baseline; width:100%; padding:7px 8px; border-radius:6px; font-size:14px; line-height:1.4; scroll-margin:104px 0 16px; }
@@ -129,7 +132,10 @@ kbd { font:11px var(--mono); border:1px solid var(--line); border-radius:4px; pa
 .row.archived .title { color:var(--muted); }
 /* The pane that has the keys marks its current item a little more. */
 body[data-pane=list] .row[aria-current=true], body[data-pane=rail] .item.cur { background:var(--sel); box-shadow:inset 0 0 0 1px var(--ring); color:var(--fg); }
-.empty { color:var(--muted); padding:8px 16px; margin:0; }
+.empty { display:grid; justify-items:start; gap:10px; padding:2px 16px 24px; font-size:13.5px; color:var(--muted); }
+.empty[hidden] { display:none; }
+.empty button { padding:3px 9px; border-radius:6px; font-size:12.5px; box-shadow:inset 0 0 0 1px var(--line); }
+.empty button:hover { background:var(--hover); color:var(--fg); }
 
 .read { padding:48px 48px 80px; }
 article { max-width:660px; }
@@ -208,12 +214,12 @@ pre code { padding:0; background:none; }
 
 // Runs in the page. String.raw keeps the regular expressions as written.
 const SCRIPT = String.raw`
-const q = document.getElementById("q"), read = document.getElementById("read"), where = document.getElementById("where"), none = document.getElementById("none");
+const q = document.getElementById("q"), read = document.getElementById("read"), where = document.getElementById("where"), none = document.getElementById("none"), clear = document.getElementById("clear");
 const rows = [...document.querySelectorAll(".row")], items = [...document.querySelectorAll(".item")], articles = [...document.querySelectorAll("article")];
 const kinds = items.filter((i) => i.dataset.kind).map((i) => i.dataset.kind);
 const TOKEN = document.body.dataset.token, VERSION = document.body.dataset.version;
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform), themeButton = document.getElementById("theme"), help = document.getElementById("help");
-const state = { scope: null, kind: null, archived: false };
+const state = { scope: null, kinds: new Set(), archived: false };
 // cursor: where the keys are in the sidebar. held: the scope to go back to when the cursor walks past the scopes.
 let pane = "list", current = null, shown = [], cursor = items[0], held = null, form = null;
 const isScope = (item) => item.dataset.scope !== undefined;
@@ -224,7 +230,7 @@ const article = () => (current ? document.getElementById("n-" + current.dataset.
 function remember(noteId) {
   const view = new URLSearchParams();
   if (state.scope) view.set("scope", state.scope);
-  if (state.kind) view.set("kind", state.kind);
+  if (state.kinds.size) view.set("kind", [...state.kinds].join(","));
   if (state.archived) view.set("archived", "1");
   if (q.value) view.set("q", q.value);
   const id = noteId !== undefined ? noteId : current && current.dataset.id;
@@ -252,7 +258,7 @@ function render() {
   shown = [];
   for (const row of rows) {
     const base = words.every((w) => row.dataset.search.includes(w)) && (state.archived || !row.classList.contains("archived"));
-    const inScope = !state.scope || row.dataset.scope === state.scope, inKind = !state.kind || row.dataset.kind === state.kind;
+    const inScope = !state.scope || row.dataset.scope === state.scope, inKind = state.kinds.size === 0 || state.kinds.has(row.dataset.kind);
     if (base && inKind) { anyScope++; byScope.set(row.dataset.scope, (byScope.get(row.dataset.scope) || 0) + 1); }
     if (base && inScope) byKind.set(row.dataset.kind, (byKind.get(row.dataset.kind) || 0) + 1);
     row.hidden = !(base && inScope && inKind);
@@ -263,16 +269,25 @@ function render() {
     const count = isScope(item) ? (item.dataset.scope === "*" ? anyScope : byScope.get(item.dataset.scope) || 0) : byKind.get(item.dataset.kind) || 0;
     item.querySelector(".num").textContent = count;
     item.classList.toggle("zero", count === 0);
-    item.setAttribute("aria-pressed", isScope(item) ? (state.scope || "*") === item.dataset.scope : state.kind === item.dataset.kind);
+    item.setAttribute("aria-pressed", isScope(item) ? (state.scope || "*") === item.dataset.scope : state.kinds.has(item.dataset.kind));
   }
   // The sidebar already says which scope and kind are picked. The list says only how many notes that is.
   where.textContent = shown.length + (shown.length === 1 ? " note" : " notes");
+  // An empty list says so once, and offers the shortest way to notes: the other scopes when
+  // the same search finds notes there, otherwise the list without the search and the kinds.
+  where.hidden = shown.length === 0;
   none.hidden = shown.length > 0;
+  const elsewhere = state.scope ? anyScope : 0;
+  if (rows.length) none.firstChild.textContent = elsewhere ? "no notes match in this scope" : "no notes match";
+  clear.dataset.way = elsewhere ? "scopes" : "filters";
+  clear.textContent = elsewhere ? "show " + elsewhere + " in all scopes" : "clear filters";
+  clear.hidden = !elsewhere && !q.value && state.kinds.size === 0;
   show(shown.includes(current) ? current : shown[0], true);
   paint();
 }
 function setScope(item) { state.scope = item.dataset.scope === "*" ? null : item.dataset.scope; }
-function toggleKind(kind) { state.kind = state.kind === kind ? null : kind; }
+/** Kinds add up: no kind picked shows every kind, and each picked kind adds its notes. */
+function toggleKind(kind) { if (!state.kinds.delete(kind)) state.kinds.add(kind); }
 /** A click or Enter on a sidebar item. A scope chosen this way is held. */
 function activate(item) {
   if (isScope(item)) { setScope(item); held = state.scope; }
@@ -372,6 +387,11 @@ document.addEventListener("click", (event) => {
   // The keys belong to the page, not to the button that took the click.
   if ((item || row || event.target.closest(".tool")) && document.activeElement !== q) document.activeElement.blur();
   if (event.target.closest("#keys")) toggleHelp();
+  else if (event.target === clear) {
+    if (clear.dataset.way === "scopes") { state.scope = held = null; cursor = scopeItem(); }
+    else { q.value = ""; state.kinds.clear(); }
+    render();
+  }
   // A click outside the box lands on the dialog itself, which is the backdrop.
   else if (event.target === help) help.close();
   else if (event.target.closest("#theme")) nextTheme();
@@ -442,7 +462,7 @@ document.addEventListener("keydown", (event) => {
 // Come back to the view in the address.
 const view = new URLSearchParams(location.hash.slice(1));
 if (items.some((i) => i.dataset.scope === view.get("scope"))) state.scope = view.get("scope");
-if (kinds.includes(view.get("kind"))) state.kind = view.get("kind");
+for (const kind of (view.get("kind") || "").split(",")) if (kinds.includes(kind)) state.kinds.add(kind);
 state.archived = view.has("archived") && items.some((i) => i.dataset.archived !== undefined);
 q.value = view.get("q") || "";
 current = rows.find((r) => r.dataset.id === view.get("note")) || null;
@@ -503,7 +523,7 @@ export function renderHtml(store: Store, token: string): string {
     [["&uarr;", "&darr;"], "move"],
     [["&larr;", "&rarr;"], "sidebar or list"],
     [["enter"], "pick in the sidebar"],
-    [["1", String(KINDS.length)], "kind on or off"],
+    [["1", String(KINDS.length)], "kinds on or off"],
     [["/"], "filter"],
     [["space"], "scroll the note"],
     [["e"], "edit"],
@@ -536,7 +556,7 @@ ${rail}
 <div id="rows">
 ${notes.map(rowHtml).join("\n")}
 </div>
-<p class="empty" id="none" hidden>${notes.length === 0 ? "The store has no notes yet." : "No notes match."}</p>
+<div class="empty" id="none" hidden><span>${notes.length === 0 ? "the store has no notes yet" : "no notes match"}</span><button type="button" id="clear">clear filters</button></div>
 </div>
 <main class="pane read" id="read">
 ${notes.map((note, n) => articleHtml(note, n, usage)).join("\n")}
