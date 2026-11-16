@@ -15,6 +15,8 @@ export interface Hit {
 export interface SearchOptions {
   scope?: string;
   archive?: boolean;
+  /** The scope of the directory of the caller. Its notes come first, then global, then the rest. */
+  first?: string;
 }
 
 export interface SearchResult {
@@ -53,13 +55,15 @@ export function searchNotes(store: Store, query: string, options: SearchOptions 
     if (matched.size > 0) found.push({ note, matched: matched.size, hits });
   }
 
+  // A store has the same fact for several repos. The caller wants the one for this repo.
+  const near = (h: Hit) => (h.archived ? 3 : h.scope === options.first ? 0 : h.scope === "global" ? 1 : 2);
   const best = Math.max(0, ...found.map((f) => f.matched));
   const complete = best === words.length;
   if (!complete && best < 2) return { hits: [], complete: true };
   const hits = found
     .filter((f) => f.matched === best)
     .flatMap((f) => f.hits)
-    .sort((a, b) => a.id.localeCompare(b.id) || a.line - b.line);
+    .sort((a, b) => near(a) - near(b) || a.id.localeCompare(b.id) || a.line - b.line);
   return { hits, complete };
 }
 

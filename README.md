@@ -72,7 +72,13 @@ reverse proxy, name the proxy's host in `KB_SERVE_HOSTS`. Everybody who can open
 change notes.
 
 `kb search` finds the notes that have every word of the query, in any order, in the title or the
-body. When no note has every word, it prints the closest notes and says so.
+body. When no note has every word, it prints the closest notes and says so. Each note is one line
+with its scope, then the body lines that matched. The notes of the current repo come first, then
+global, then other repos. `kb show` accepts a part of an id when only one note has it.
+
+`--scope` takes `repo` (the repo of the current directory), `global` or a repo id. A scope that
+has no notes is an error in `kb add`, `kb search` and `kb list`, so a typing error cannot put a
+note where no session loads it. The first note of a repo is written from inside that repo, or with `--repo`.
 
 Skills: `/kb:checkpoint`, `/kb:audit`, `/kb:promote`. Only you can start them.
 

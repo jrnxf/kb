@@ -32,6 +32,7 @@ describe("kb add", () => {
   test("the same title in another scope is a new note with a unique id", () => {
     const store = tempStore();
     add(store, { title: "Run the tests", kind: "how-to", body: "a", scope: "global" });
+    putNote(store, { id: "web-note", scope: "github.com/acme/web" });
     const other = add(store, { title: "Run the tests", kind: "how-to", body: "b", scope: "github.com/acme/web" });
     expect(other.json).toMatchObject({ status: "created", id: "run-the-tests-2" });
     expect(existsSync(join(store.home, "notes/github.com/acme/web/run-the-tests-2.md"))).toBe(true);
@@ -136,7 +137,78 @@ describe("kb use, archive, show, list", () => {
   });
 });
 
+// A note in a scope that no repo resolves to never loads in a session, and nothing says so.
+describe("a scope that does not exist", () => {
+  test("kb add refuses a scope without notes, and names the scopes that exist", () => {
+    const store = tempStore();
+    putNote(store, { id: "web-note", scope: "github.com/acme/web" });
+    const typo = add(store, { title: "Never force push", kind: "gotcha", body: "x", scope: "glbal" });
+    expect(typo.code).toBe(1);
+    expect(typo.json.error).toContain('no notes have the scope "glbal". Scopes: global, github.com/acme/web.');
+    expect(typo.json.error).toContain("--repo");
+    expect(add(store, { title: "Never force push", kind: "gotcha", body: "x", scope: "web" }).code).toBe(1);
+    expect(store.notes()).toHaveLength(1);
+    // The first note of a repo is written from inside that repo.
+    const repo = tempRepo({ remote: "git@github.com:acme/fresh.git" });
+    const first = kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ title: "First", kind: "gotcha", body: "x", scope: "github.com/acme/fresh" }) });
+    expect(first.json.status).toBe("created");
+  });
+
+  test("search and list take --scope repo, and refuse an unknown scope instead of an empty answer", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/web.git" });
+    putNote(store, { id: "web-cents", scope: "github.com/acme/web", title: "Amounts are integer cents" });
+    putNote(store, { id: "global-cents", title: "Print cents with two digits" });
+
+    const found = kb(store, ["search", "cents", "--scope", "repo"], { cwd: repo }).stdout;
+    expect(found).toStartWith("web-cents | github.com/acme/web | Amounts are integer cents");
+    expect(found).not.toContain("global-cents");
+    expect(kb(store, ["list", "--scope", "repo", "--json"], { cwd: repo }).json.map((n: any) => n.id)).toEqual(["web-cents"]);
+    for (const command of [["search", "cents"], ["list"]]) {
+      const unknown = kb(store, [...command, "--scope", "web"]);
+      expect(unknown.code).toBe(1);
+      expect(unknown.stderr).toContain('no notes have the scope "web". Scopes: global, github.com/acme/web.');
+      expect(kb(store, [...command, "--scope", "repo"]).code).toBe(1); // not in a repo
+    }
+  });
+});
+
+describe("kb show", () => {
+  test("a part of an id opens the note when one note has it, and lists the ids when several have it", () => {
+    const store = tempStore();
+    putNote(store, { id: "atlas-amounts-are-integer-cents", title: "Atlas amounts" });
+    putNote(store, { id: "ferry-amounts-are-integer-cents", title: "Ferry amounts" });
+    expect(kb(store, ["show", "atlas-amounts", "--json"]).json.id).toBe("atlas-amounts-are-integer-cents");
+    const several = kb(store, ["show", "amounts"]);
+    expect(several.code).toBe(1);
+    expect(several.stderr).toContain("atlas-amounts-are-integer-cents, ferry-amounts-are-integer-cents");
+    // A command that changes a note never guesses.
+    expect(kb(store, ["archive", "atlas-amounts"]).code).toBe(1);
+    expect(store.notes()).toHaveLength(2);
+  });
+});
+
 describe("kb search", () => {
+  // Several repos hold the same fact. The caller needs the note of this repo, and one line per note.
+  test("prints one line per note with its scope, this repo first, then the body lines that matched", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/web.git" });
+    putNote(store, { id: "api-cents", scope: "github.com/acme/api", title: "Amounts are integer cents", body: "No cents as floats." });
+    putNote(store, { id: "global-cents", title: "Print cents with two digits", body: "cents 1\ncents 2\ncents 3\ncents 4\ncents 5" });
+    putNote(store, { id: "web-cents", scope: "github.com/acme/web", title: "Amounts are integer cents", body: "Convert at the edge." });
+    expect(kb(store, ["search", "cents"], { cwd: repo }).stdout.trimEnd().split("\n")).toEqual([
+      "web-cents | github.com/acme/web | Amounts are integer cents",
+      "global-cents | global | Print cents with two digits",
+      "  12: cents 1",
+      "  13: cents 2",
+      "  14: cents 3",
+      "  ...",
+      "api-cents | github.com/acme/api | Amounts are integer cents",
+      "  12: No cents as floats.",
+    ]);
+  });
+
+
   test("finds a line in the title or the body, once, and honors scope and archive", () => {
     const store = tempStore();
     putNote(store, { id: "raw-body", title: "Stripe needs the raw body", body: "Mount express.raw() first.\nThe JSON parser breaks the Signature." });
@@ -145,7 +217,7 @@ describe("kb search", () => {
 
     const hits = search(store, "signature");
     expect(hits).toEqual([{ id: "raw-body", title: "Stripe needs the raw body", scope: "global", archived: false, line: 13, text: "The JSON parser breaks the Signature." }]);
-    expect(search(store, "signature", { archive: true }).map((h) => h.id)).toEqual(["old", "raw-body"]);
+    expect(search(store, "signature", { archive: true }).map((h) => h.id)).toEqual(["raw-body", "old"]);
     expect(search(store, "nothing", { scope: "global" })).toEqual([]);
     // A title match counts once. The id line does not double it.
     expect(search(store, "raw").map((h) => h.line)).toEqual([3, 12]);

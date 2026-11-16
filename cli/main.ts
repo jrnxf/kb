@@ -12,16 +12,17 @@ import { markSaved } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
-import { afterWrite, moveNotes, nowIso, requireNote, updateNote } from "./write.ts";
+import { afterWrite, closeIds, moveNotes, nowIso, requireNote, updateNote } from "./write.ts";
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
   kb context [--repo .]                  text for a session start: index, top notes, pointer
   kb add [--repo .]                      create or update a note from JSON on stdin
-  kb show <id>                           print one note
+  kb show <id>                           print one note. A part of the id is enough when one note has it
   kb search <words> [--scope s] [--archive]
-                                         notes that have every word, in any order
+                                         notes that have every word, in any order, this repo first
   kb list [--scope s] [--archive]        every note with kind, uses and verified date
+                                         --scope takes "repo", "global" or a repo id
   kb use <id>...                         record that these notes changed what you did
   kb archive <id>... | kb restore <id>...
   kb stale [--repo .]                    notes that may no longer be true, each with a reason
@@ -38,7 +39,7 @@ const USAGE = `kb - a personal knowledge store for coding agents
 Every command accepts --json. The store is ~/.kb, or KB_HOME.
 
 kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence"?, "indexed"?, "supersedes"?}
-  scope: "repo" (the default inside a git repo), "global", or an explicit repo id
+  scope: "repo" (the default inside a git repo), "global", or the id of a repo that has notes
   kind: ${KINDS.join(" | ")}
   confidence: ${CONFIDENCES.join(" | ")} (default medium)
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
@@ -82,6 +83,9 @@ function uniqueId(base: string, taken: Set<string>): string {
 
 type Output = { json: unknown; text: string };
 
+/** Body lines printed under one note in `kb search`. */
+const MAX_HIT_LINES = 3;
+
 function cmdContext(store: Store, args: Args): Output {
   const result = buildContext(store, String(args.flags.get("repo") ?? "."));
   return { json: result, text: result.text.trimEnd() };
@@ -119,6 +123,10 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
   }
 
   const scope = resolveScopeInput(input.scope, repo.scope);
+  // A scope that no repo resolves to never loads in a session. A typing error must not hide a note there.
+  if (scope !== repo.scope && !knownScopes(store).includes(scope)) {
+    throw new KbError(`${unknownScope(store, scope)} To start the notes of another repo, pass --repo <its directory>.`);
+  }
   if (typeof input.title !== "string" || !input.title.trim()) throw new KbError("invalid note: title: required");
   const slug = slugify(input.title);
   if (!slug) throw new KbError("invalid note: title: needs letters or digits");
@@ -155,10 +163,38 @@ function resolveScopeInput(value: unknown, repoScope: string | null): string {
   return value;
 }
 
+/** "global" and each scope that has a note, active or archived. */
+function knownScopes(store: Store): string[] {
+  const scopes = new Set([...store.notes(), ...store.notes({ archived: true })].map((n) => n.scope));
+  scopes.delete("global");
+  return ["global", ...[...scopes].sort()];
+}
+
+function unknownScope(store: Store, scope: string): string {
+  return `no notes have the scope "${scope}". Scopes: ${knownScopes(store).join(", ")}.`;
+}
+
+/** The --scope filter of search and list. "repo" is the repo of the directory, as in `kb add`. */
+function scopeFilter(store: Store, args: Args): string | undefined {
+  const value = args.flags.get("scope");
+  if (typeof value !== "string") return undefined;
+  if (value === "repo") {
+    const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
+    if (!repo.scope) throw new KbError("scope \"repo\" needs a git repo. Pass --repo, or use \"global\".");
+    return repo.scope;
+  }
+  // An answer of "no match" for a scope that does not exist reads as "no such note".
+  if (!knownScopes(store).includes(value)) throw new KbError(unknownScope(store, value));
+  return value;
+}
+
 function cmdShow(store: Store, args: Args): Output {
-  const id = args.positional[0];
-  if (!id) throw new KbError("usage: kb show <id>");
-  const note = requireNote(store, id);
+  const given = args.positional[0];
+  if (!given) throw new KbError("usage: kb show <id>");
+  // Ids are long. A part of one is enough to read a note, when only one note has it.
+  const close = store.find(given) ? [] : closeIds(store, given);
+  const note = requireNote(store, close.length === 1 ? close[0]! : given);
+  const id = note.id;
   const usage = store.usage().get(id) ?? { uses: 0 };
   const header = `# ${relative(store.home, note.path)} | uses ${usage.uses}${usage.last_used ? `, last used ${usage.last_used}` : ""}`;
   return { json: { ...note, ...usage }, text: `${header}\n${readFileSync(note.path, "utf8").trimEnd()}` };
@@ -167,18 +203,34 @@ function cmdShow(store: Store, args: Args): Output {
 function cmdSearch(store: Store, args: Args): Output {
   const query = args.positional.join(" ");
   if (!query) throw new KbError("usage: kb search <words> [--scope s] [--archive]");
-  const scope = args.flags.get("scope");
-  const { hits, complete } = searchNotes(store, query, { scope: typeof scope === "string" ? scope : undefined, archive: args.flags.has("archive") });
-  const rows = hits.map((h) => `${h.id}${h.archived ? " (archived)" : ""} | ${h.title} | ${h.line}: ${h.text}`);
+  const scope = scopeFilter(store, args);
+  const first = resolveRepo(String(args.flags.get("repo") ?? "."), store).scope ?? undefined;
+  const { hits, complete } = searchNotes(store, query, { scope, archive: args.flags.has("archive"), first });
+  // One line per note. The body lines that matched follow it, because the title is already there.
+  const rows: string[] = [];
+  let last = "";
+  let shown = 0;
+  for (const h of hits) {
+    const key = `${h.archived} ${h.id}`;
+    if (key !== last) {
+      rows.push(`${h.id}${h.archived ? " (archived)" : ""} | ${h.scope} | ${h.title}`);
+      last = key;
+      shown = 0;
+    }
+    if (h.text.startsWith("title:")) continue;
+    shown++;
+    if (shown <= MAX_HIT_LINES) rows.push(`  ${h.line}: ${h.text}`);
+    else if (shown === MAX_HIT_LINES + 1) rows.push("  ...");
+  }
   const text = hits.length === 0 ? "no match" : [...(complete ? [] : ["no note has every word. Closest:"]), ...rows].join("\n");
   return { json: hits, text };
 }
 
 function cmdList(store: Store, args: Args): Output {
-  const scope = args.flags.get("scope");
+  const scope = scopeFilter(store, args);
   const usage = store.usage();
   const notes = rank(
-    store.notes({ archived: args.flags.has("archive") }).filter((n) => typeof scope !== "string" || n.scope === scope),
+    store.notes({ archived: args.flags.has("archive") }).filter((n) => scope === undefined || n.scope === scope),
     usage,
   );
   const rows = notes.map((n) => ({
@@ -345,7 +397,7 @@ async function main(): Promise<number> {
     const store = new Store();
     // A person who types only `kb` in a terminal wants to see the notes. A script gets the help.
     if (!command && process.stdout.isTTY && store.exists()) await cmdServe(store, args, json);
-    if (!command || command === "help" || args.flags.has("help")) {
+    if (!command || command === "help" || command === "--help" || command === "-h" || args.flags.has("help")) {
       console.log(USAGE);
       return 0;
     }

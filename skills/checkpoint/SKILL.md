@@ -31,6 +31,7 @@ Never save a secret, token, password, key, or credential. Never save the content
 ## 2. Search before you write
 
 For each candidate, run `kb search <two or three key words>`. It finds the notes that have every word, in any order.
+Each note is one line, `id | scope | title`, with the notes of this repo first. A hit in another repo's scope does not cover this repo.
 Use the nouns of the fact ("staging migration"), not a sentence. Also check the notes injected at session start.
 When the answer starts with `no note has every word. Closest:`, read those notes too: one of them can be the same fact in other words.
 

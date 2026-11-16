@@ -15,10 +15,19 @@ export function afterWrite(store: Store, message: string): void {
   if (store.commit(message)) kickSync(store);
 }
 
+/** Ids that contain the given text. For a caller who remembers a part of an id. */
+export function closeIds(store: Store, part: string): string[] {
+  const text = part.toLowerCase();
+  if (!text) return [];
+  return [...store.notes(), ...store.notes({ archived: true })].filter((n) => n.id.includes(text)).map((n) => n.id).sort();
+}
+
 export function requireNote(store: Store, id: string): StoredNote {
   const note = store.find(id);
-  if (!note) throw new KbError(`no note with id "${id}"`);
-  return note;
+  if (note) return note;
+  const close = closeIds(store, id);
+  const more = close.length > 8 ? `, and ${close.length - 8} more` : "";
+  throw new KbError(`no note with id "${id}"${close.length > 0 ? `. Ids with that text: ${close.slice(0, 8).join(", ")}${more}` : ""}`);
 }
 
 /**
