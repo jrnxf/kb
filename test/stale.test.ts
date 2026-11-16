@@ -145,7 +145,7 @@ describe("kb budget", () => {
     const { repo, store } = fixture();
     putNote(store, { id: "a", scope: SCOPE });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
-    expect(b).toMatchObject({ scope: SCOPE, over: false, demote: [], index: { lines: 1, budget: 60, hidden: 0 }, context: { bodies: 1, dropped: 0, budget: 8000 } });
+    expect(b).toMatchObject({ scope: SCOPE, over: false, demote: [], index: { lines: 0, budget: 60, hidden: 0 }, context: { bodies: 1, dropped: 0, budget: 8000 } });
     expect(b.notes[0]).toMatchObject({ id: "a", shown: "body", uses: 0 });
   });
 

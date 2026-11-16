@@ -182,10 +182,11 @@ describe("session notices", () => {
   test("a store over its index budget gives one line, and a store within it gives none", () => {
     const store = tempStore();
     const repo = tempRepo();
-    for (let i = 0; i < 4; i++) putNote(store, { id: `n-${i}` });
+    // Long bodies: one fits the small budget below, so the other three need an index line each.
+    for (let i = 0; i < 4; i++) putNote(store, { id: `n-${i}`, body: "x".repeat(400) });
     const line = "The kb store is over its index budget here";
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain(line);
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 3, contextChars: 8000 } }));
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 2, contextChars: 1100 } }));
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(`${line}: 1 note is hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
   });
 

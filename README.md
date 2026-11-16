@@ -10,13 +10,17 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 - **Scope** is `global` or a repo id. The repo id is the normalised origin remote
   (`github.com/owner/name`), so SSH clones, HTTPS clones and worktrees share one scope.
   A repo with no remote uses its directory name.
-- **At session start** a hook injects `kb context`: one index line per note for `global` and
-  the current repo, then full bodies for the top-ranked notes, then a pointer to `kb show` and
-  `kb search`. It runs at startup, resume, `/clear`, compaction and fork.
+- **At session start** a hook injects `kb context` for `global` and the current repo: full
+  bodies for the top-ranked notes, one index line for each note whose body did not fit, and a
+  pointer to `kb show` and `kb search`. An index line is the id of the note, which is its title
+  in short form, and after `...` the words of the title that the id cut. So a title that states
+  the rule in full reaches every session, also when the body does not. It runs at startup,
+  resume, `/clear`, compaction and fork.
 - **Context stays small.** Two budgets in `kb.config.json`: `indexLines` (60) and
   `contextChars` (8000, clamped under the 10,000 character hook cap). Rank is open-work, gotcha,
   convention, decision, how-to, then repo before global, then last used, then last verified.
-  Whole notes drop from the bottom. The store can grow for years and a session loads the same amount.
+  Whole bodies drop from the bottom, and only a note without a body takes an index line.
+  The store can grow for years and a session loads the same amount.
 - **Before `/clear`** you run `/kb:checkpoint`. The agent saves what the session learned,
   updates notes instead of duplicating them, archives finished open work, and records which
   notes helped with `kb use`.
@@ -98,4 +102,10 @@ git clone <your-private-repo-url> ~/.kb
 
 ```bash
 bun install && bun test && bun run typecheck && claude plugin validate .
+```
+
+To try a change on a store that looks like months of use (about 150 invented notes, 9 repos):
+
+```bash
+dir=$(mktemp -d) && bun scripts/seed.ts "$dir/seed"   # prints the KB_HOME to export
 ```
