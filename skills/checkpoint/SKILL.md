@@ -87,14 +87,26 @@ It tells the session hooks that this session saved its knowledge. Skip it when a
 
 ## 7. Report
 
-End with this, and nothing after it:
+End with this, and nothing after it. Write it as Markdown, not in a code block, so it renders:
 
 ```
-saved:   <id> - <title>
-updated: <id> - <title>
-closed:  <id>
-skipped: <candidate> - <reason>
-safe to clear: yes
+**Safe to clear** - <n> saved, <n> updated, <n> closed, <n> skipped
+
+**Saved**
+- **<title>**
+  <what a future session loses without it>
+
+**Updated**
+- **<title>**
+  <what changed in the note>
+
+**Closed**
+- **<title>**
+  <what finished the work>
+
+**Skipped:** <candidate> (<reason>), <candidate> (<reason>).
 ```
 
-Leave out an empty group. Write `safe to clear: no - <what is unsaved>` when a `kb` command failed, or when open work exists that no note describes.
+- The first line is the verdict. Write `**Safe to clear**`, or `**Not safe to clear** - <what is unsaved>` when a `kb` command failed, or when open work exists that no note describes. Never add "yes" or "no".
+- Show the title of a note, not its id. Keep each reason to one short sentence.
+- Leave out a count that is 0, and a group that is empty.
