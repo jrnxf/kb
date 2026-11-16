@@ -87,14 +87,18 @@ It tells the session hooks that this session saved its knowledge. Skip it when a
 
 ## 7. Report
 
-End with this, and nothing after it:
+End with this, and nothing after it: a table with one row per candidate, then the `safe to clear` line.
 
 ```
-saved:   <id> - <title>
-updated: <id> - <title>
-closed:  <id>
-skipped: <candidate> - <reason>
+| Result  | Note | Why |
+| ------- | ---- | --- |
+| saved   | `<id>` - <title> | <what a future session loses without it> |
+| updated | `<id>` - <title> | <what changed in the note> |
+| closed  | `<id>` | <what finished the work> |
+| skipped | <candidate> | <reason> |
+
 safe to clear: yes
 ```
 
-Leave out an empty group. Write `safe to clear: no - <what is unsaved>` when a `kb` command failed, or when open work exists that no note describes.
+Write the table as Markdown, not in a code block, so it renders. Order the rows saved, updated, closed, skipped. Keep each `Why` to one short sentence. Leave out a result that has no row.
+Write `safe to clear: no - <what is unsaved>` when a `kb` command failed, or when open work exists that no note describes.
