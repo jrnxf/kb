@@ -15,7 +15,8 @@ describe("the page", () => {
     expect(page).not.toContain("<script>alert(1)</script>");
     expect(page).toContain("<code>x</code>");
     // No script, style, font or picture from the network.
-    expect(page).not.toMatch(/src="http|<link|@import|url\(/);
+    // A picture inside the page itself, as a data: address, is not from the network.
+    expect(page).not.toMatch(/src="http|<link|@import|url\((?!"data:)/);
   });
 
   test("a repo scope shows as owner/name and links to the repo", () => {

@@ -67,12 +67,17 @@ function articleHtml(note: StoredNote, n: number, usage: Map<string, Usage>): st
 </article>`;
 }
 
+const DARK = `--bg:#151514; --fg:#ececea; --muted:#96968f; --faint:#6b6b65; --line:#262624; --card:#1c1c1b; --hover:#1c1c1b; --sel:#262625; --ring:#3b3b38; --accent:#8aa6ff;
+  --k-open-work:#fb923c; --k-gotcha:#f87171; --k-convention:#4ade80; --k-decision:#c4b5fd; --k-how-to:#7dd3fc;`;
+
+// The theme follows the system until the person picks one. The pick sits in data-theme on the root.
 const STYLE = `
 :root { --bg:#fbfbfa; --fg:#1c1c1a; --muted:#6f6f6a; --faint:#a3a39c; --line:#e7e7e2; --card:#fff; --hover:#f3f3f0; --sel:#eaeae6; --ring:#d3d3cd; --accent:#2f5bd8;
   --k-open-work:#c2410c; --k-gotcha:#b91c1c; --k-convention:#15803d; --k-decision:#6d28d9; --k-how-to:#0369a1;
   --mono:ui-monospace, SFMono-Regular, Menlo, monospace; color-scheme: light dark; }
-@media (prefers-color-scheme: dark) { :root { --bg:#151514; --fg:#ececea; --muted:#96968f; --faint:#6b6b65; --line:#262624; --card:#1c1c1b; --hover:#1c1c1b; --sel:#262625; --ring:#3b3b38; --accent:#8aa6ff;
-  --k-open-work:#fb923c; --k-gotcha:#f87171; --k-convention:#4ade80; --k-decision:#c4b5fd; --k-how-to:#7dd3fc; } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme=light]) { ${DARK} } }
+:root[data-theme=dark] { ${DARK} color-scheme:dark; }
+:root[data-theme=light] { color-scheme:light; }
 * { box-sizing: border-box; }
 [hidden] { display:none !important; }
 html, body { margin:0; }
@@ -84,10 +89,9 @@ button { font:inherit; color:inherit; background:none; border:0; padding:0; curs
 .dot { flex:none; width:7px; height:7px; border-radius:50%; background:var(--k); }
 .k-open-work { --k:var(--k-open-work); } .k-gotcha { --k:var(--k-gotcha); } .k-convention { --k:var(--k-convention); } .k-decision { --k:var(--k-decision); } .k-how-to { --k:var(--k-how-to); }
 
-.rail { padding:28px 12px 28px 16px; border-right:1px solid var(--line); }
+.rail { display:flex; flex-direction:column; padding:28px 12px 16px 16px; border-right:1px solid var(--line); }
 .rail header { display:flex; align-items:baseline; gap:10px; padding:0 8px; }
 h1 { font-size:20px; margin:0; letter-spacing:-0.01em; }
-.sub { color:var(--muted); font-size:13px; }
 .rail h3 { margin:22px 0 6px; padding:0 8px; font-size:11px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase; color:var(--faint); }
 .item { display:flex; align-items:center; gap:8px; width:100%; padding:4px 8px; border-radius:6px; font-size:13.5px; color:var(--muted); }
 .item:hover { background:var(--hover); color:var(--fg); }
@@ -96,6 +100,11 @@ h1 { font-size:20px; margin:0; letter-spacing:-0.01em; }
 .item .num { font-size:12px; font-weight:400; }
 .item.zero { opacity:0.4; }
 .keys { margin:22px 8px 0; padding-top:12px; border-top:1px solid var(--line); font-size:12px; color:var(--faint); line-height:2; }
+.foot { margin-top:auto; padding:20px 2px 0; }
+.theme { display:grid; place-items:center; width:30px; height:30px; border-radius:6px; color:var(--muted); }
+.theme:hover { background:var(--hover); color:var(--fg); }
+.theme svg { display:none; width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+:root:not([data-theme]) .theme .system, :root[data-theme=light] .theme .light, :root[data-theme=dark] .theme .dark { display:block; }
 kbd { font:11px var(--mono); border:1px solid var(--line); border-radius:4px; padding:1px 5px; color:var(--muted); }
 
 .list { border-right:1px solid var(--line); }
@@ -116,7 +125,7 @@ kbd { font:11px var(--mono); border:1px solid var(--line); border-radius:4px; pa
 .row[aria-current=true] { background:var(--hover); font-weight:550; }
 .row.archived .title { color:var(--muted); }
 /* The pane that has the keys marks its current item a little more. */
-body[data-pane=list] .row[aria-current=true], body[data-pane=rail] .item.cur, body[data-pane=read] .acts button { background:var(--sel); box-shadow:inset 0 0 0 1px var(--ring); color:var(--fg); }
+body[data-pane=list] .row[aria-current=true], body[data-pane=rail] .item.cur { background:var(--sel); box-shadow:inset 0 0 0 1px var(--ring); color:var(--fg); }
 .empty { color:var(--muted); padding:8px 16px; margin:0; }
 
 .read { padding:48px 48px 80px; }
@@ -134,6 +143,7 @@ article { max-width:660px; }
 .form input, .form select, .form textarea { width:100%; padding:8px 10px; font:inherit; color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:8px; outline:0; }
 .form input:focus, .form select:focus, .form textarea:focus { border-color:var(--faint); }
 .form input { font-size:17px; font-weight:600; }
+.form select { appearance:none; -webkit-appearance:none; padding-right:34px; background:var(--card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238a8a84' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E") no-repeat right 12px center / 12px; }
 .form textarea { min-height:260px; font:13.5px/1.6 var(--mono); resize:vertical; }
 .form .pair { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
 .form .end { display:flex; align-items:center; gap:8px; }
@@ -156,7 +166,8 @@ pre code { padding:0; background:none; }
 
 @media (max-width:900px) {
   .page { display:block; height:auto; }
-  .rail { padding:20px 16px 12px; border-right:0; border-bottom:1px solid var(--line); }
+  .rail { display:block; position:relative; padding:20px 16px 12px; border-right:0; border-bottom:1px solid var(--line); }
+  .foot { position:absolute; top:14px; right:12px; padding:0; }
   .rail nav { display:flex; flex-wrap:wrap; gap:4px; margin-top:12px; }
   .rail h3, .keys { display:none; }
   .item { width:auto; border:1px solid var(--line); border-radius:999px; padding:2px 10px; }
@@ -172,6 +183,7 @@ const q = document.getElementById("q"), read = document.getElementById("read"), 
 const rows = [...document.querySelectorAll(".row")], items = [...document.querySelectorAll(".item")], articles = [...document.querySelectorAll("article")];
 const kinds = items.filter((i) => i.dataset.kind).map((i) => i.dataset.kind);
 const TOKEN = document.body.dataset.token, VERSION = document.body.dataset.version;
+const MAC = /Mac|iPhone|iPad/.test(navigator.platform), themeButton = document.getElementById("theme");
 const state = { scope: null, kind: null, archived: false };
 // cursor: where the keys are in the sidebar. held: the scope to go back to when the cursor walks past the scopes.
 let pane = "list", current = null, shown = [], cursor = items[0], held = null, form = null;
@@ -188,11 +200,10 @@ function remember(noteId) {
   if (q.value) view.set("q", q.value);
   const id = noteId !== undefined ? noteId : current && current.dataset.id;
   if (id) view.set("note", id);
-  if (pane !== "list") view.set("pane", pane);
+  if (pane === "rail") view.set("pane", pane);
   history.replaceState(null, "", "#" + view);
 }
 function paint() {
-  if (pane === "read" && !current) pane = "list";
   document.body.dataset.pane = pane;
   for (const item of items) item.classList.toggle("cur", item === cursor);
   remember();
@@ -240,6 +251,15 @@ function activate(item) {
   else state.archived = !state.archived;
   render();
 }
+/** system, light or dark. Only a pick that is not "system" is kept. */
+function setTheme(theme) {
+  const root = document.documentElement;
+  if (theme === "system") delete root.dataset.theme; else root.dataset.theme = theme;
+  try { if (theme === "system") localStorage.removeItem("kb-theme"); else localStorage.setItem("kb-theme", theme); } catch {}
+  themeButton.title = "Theme: " + theme + " (t)";
+  themeButton.setAttribute("aria-label", themeButton.title);
+}
+const nextTheme = () => setTheme({ system: "light", light: "dark", dark: "system" }[document.documentElement.dataset.theme || "system"]);
 function step(list, from, by) { return list[Math.max(0, Math.min(list.length - 1, list.indexOf(from) + by))]; }
 
 // ---- changes: every one goes to the server, then the page loads again ----
@@ -280,7 +300,7 @@ async function edit() {
     el("label", null, "Title", el("input", { name: "title", value: note.title, autocomplete: "off" })),
     el("div", { className: "pair" }, el("label", null, "Kind", select("kind", kinds, note.kind)), el("label", null, "Confidence", select("confidence", ["high", "medium", "low"], note.confidence))),
     el("label", null, "Body, in Markdown", el("textarea", { name: "body", value: note.body, spellcheck: true })),
-    el("div", { className: "end" }, el("button", { type: "submit" }, "Save", el("kbd", null, "ctrl enter")), el("button", { type: "button", onclick: closeForm }, "Cancel", el("kbd", null, "esc")), error));
+    el("div", { className: "end" }, el("button", { type: "submit" }, "Save", el("kbd", null, MAC ? "⌘ ↵" : "ctrl enter")), el("button", { type: "button", onclick: closeForm }, "Cancel", el("kbd", null, "esc")), error));
   form.onsubmit = async (event) => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(form));
@@ -319,13 +339,16 @@ async function undo() {
 q.addEventListener("input", render);
 document.addEventListener("click", (event) => {
   const copy = event.target.closest("[data-copy]"), act = event.target.closest("[data-act]"), item = event.target.closest(".item"), row = event.target.closest(".row");
-  if (copy) {
+  // The keys belong to the page, not to the button that took the click.
+  if ((item || row || event.target.closest("#theme")) && document.activeElement !== q) document.activeElement.blur();
+  if (event.target.closest("#theme")) nextTheme();
+  else if (copy) {
     if (navigator.clipboard) navigator.clipboard.writeText(copy.dataset.copy);
     const id = copy.textContent;
     copy.textContent = "copied";
     setTimeout(() => (copy.textContent = id), 900);
   } else if (act) {
-    pane = "read";
+    pane = "list";
     paint();
     if (act.dataset.act === "edit") edit(); else archive();
   } else if (item) {
@@ -342,7 +365,7 @@ document.addEventListener("keydown", (event) => {
   const key = event.key;
   if (form) {
     if (key === "Escape") closeForm();
-    else if (key === "Enter" && (event.metaKey || event.ctrlKey)) form.requestSubmit();
+    else if (key === "Enter" && (MAC ? event.metaKey : event.ctrlKey)) form.requestSubmit();
     return;
   }
   if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -354,10 +377,8 @@ document.addEventListener("keydown", (event) => {
   const by = key === "ArrowDown" || key === "j" ? 1 : key === "ArrowUp" || key === "k" ? -1 : 0;
   if (key === "/") { q.focus(); q.select(); }
   else if (key === "ArrowLeft" || key === "h") {
-    if (pane === "read") pane = "list";
-    else if (pane === "list") { cursor = scopeItem(); held = state.scope; pane = "rail"; }
-  } else if (key === "ArrowRight" || key === "l") pane = pane === "rail" ? "list" : "read";
-  else if (by && pane === "read") read.scrollBy({ top: by * 80 });
+    if (pane === "list") { cursor = scopeItem(); held = state.scope; pane = "rail"; }
+  } else if (key === "ArrowRight" || key === "l") pane = "list";
   else if (by && pane === "list") { if (shown.length) show(step(shown, current, by), true); }
   else if (by) {
     const was = cursor;
@@ -367,8 +388,11 @@ document.addEventListener("keydown", (event) => {
     else if (isScope(was)) { state.scope = held; render(); }
     cursor.scrollIntoView({ block: "nearest" });
   } else if ((key === "Enter" || key === " ") && pane === "rail") activate(cursor);
-  else if (key === "e" && pane === "read") edit();
-  else if (key === "a" && pane === "read") archive();
+  // The note has no keys of its own. Space pages through it from the list.
+  else if (key === " ") read.scrollBy({ top: (event.shiftKey ? -0.8 : 0.8) * read.clientHeight });
+  else if (key === "e" && pane === "list") edit();
+  else if (key === "a" && pane === "list") archive();
+  else if (key === "t") nextTheme();
   else if (key === "u" && sessionStorage.getItem("kb-undo")) undo();
   else if (kinds[Number(key) - 1]) { toggleKind(kinds[Number(key) - 1]); render(); }
   else return;
@@ -383,7 +407,8 @@ if (kinds.includes(view.get("kind"))) state.kind = view.get("kind");
 state.archived = view.has("archived") && items.some((i) => i.dataset.archived !== undefined);
 q.value = view.get("q") || "";
 current = rows.find((r) => r.dataset.id === view.get("note")) || null;
-if (["rail", "read"].includes(view.get("pane"))) pane = view.get("pane");
+if (view.get("pane") === "rail") pane = "rail";
+setTheme(document.documentElement.dataset.theme || "system");
 cursor = scopeItem(); held = state.scope;
 render();
 if (sessionStorage.getItem("kb-undo")) {
@@ -431,16 +456,18 @@ export function renderHtml(store: Store, token: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kb</title>
+<script>try { const theme = localStorage.getItem("kb-theme"); if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme; } catch {}</script>
 <style>${STYLE}</style>
 </head>
 <body data-pane="list" data-token="${esc(token)}" data-version="${storeVersion(store)}">
 <div class="page">
 <aside class="pane rail">
-<header><h1>kb</h1><span class="sub">${active.length} ${active.length === 1 ? "note" : "notes"}${archived.length > 0 ? `, ${archived.length} archived` : ""}</span></header>
+<header><h1>kb</h1></header>
 <nav>
 ${rail}
 </nav>
-<p class="keys">${KEY("&uarr;")} ${KEY("&darr;")} move<br>${KEY("&larr;")} ${KEY("&rarr;")} change pane<br>${KEY("enter")} pick in the sidebar<br>${KEY("e")} edit, ${KEY("a")} archive, in the note<br>${KEY("1")} to ${KEY(String(KINDS.length))} kind on or off<br>${KEY("/")} filter</p>
+<p class="keys">${KEY("&uarr;")} ${KEY("&darr;")} move<br>${KEY("&larr;")} ${KEY("&rarr;")} sidebar or list<br>${KEY("enter")} pick in the sidebar<br>${KEY("e")} edit, ${KEY("a")} archive<br>${KEY("space")} scroll the note<br>${KEY("1")} to ${KEY(String(KINDS.length))} kind on or off<br>${KEY("/")} filter</p>
+<div class="foot"><button class="theme" id="theme" type="button"><svg class="system" viewBox="0 0 16 16"><rect x="1.8" y="2.5" width="12.4" height="8.5" rx="1.5"/><path d="M5.5 13.8h5M8 11v2.8"/></svg><svg class="light" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.8"/><path d="M8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.4 3.4l.9.9M11.7 11.7l.9.9M3.4 12.6l.9-.9M11.7 4.3l.9-.9"/></svg><svg class="dark" viewBox="0 0 16 16"><path d="M13.5 9.6A5.8 5.8 0 0 1 6.4 2.5a5.8 5.8 0 1 0 7.1 7.1z"/></svg></button></div>
 </aside>
 <div class="pane list">
 <div class="top"><div class="search"><input type="search" id="q" placeholder="Filter notes" autocomplete="off"><kbd>/</kbd></div><div class="where" id="where"><span></span><span class="num"></span></div></div>

@@ -61,8 +61,8 @@ kb sync                      kb checkpointed <session-id>
 ```
 
 `kb serve` opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
-list, and the open note. The arrow keys move through all of it. In the note, `e` edits and `a`
-archives. Each change goes through the same code as the CLI, so it is validated, committed and
+list, and the open note. The arrow keys move through the sidebar and the list. `e` edits the open
+note and `a` archives it. Each change goes through the same code as the CLI, so it is validated, committed and
 synced. The server listens on this machine only, and stops with Ctrl+C. To reach it through a
 reverse proxy, name the proxy's host in `KB_SERVE_HOSTS`. Everybody who can open that name can
 change notes.
