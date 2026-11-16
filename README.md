@@ -97,8 +97,16 @@ Every command accepts `--json`. The CLI knows nothing about Claude Code: only `h
 Requirements: a recent [Bun](https://bun.sh) (tested with 1.4) and git. There is no install step and no dependency to install:
 the page of `kb serve` comes built in `web/dist`.
 
+This repository is the plugin only. A marketplace lists it with a `github` source:
+
+```json
+{ "name": "kb", "source": { "source": "github", "repo": "<owner>/kb" } }
+```
+
+Then install it from that marketplace:
+
 ```bash
-/plugin install kb --marketplace <owner>/<repo>
+/plugin install kb --marketplace <owner>/<marketplace-repo>
 ```
 
 With auto-update on for the marketplace, each machine follows the default branch. The plugin
