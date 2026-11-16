@@ -165,7 +165,22 @@ describe("kb html", () => {
     expect(page).toContain("A &lt;b&gt;bold&lt;/b&gt; title");
     expect(page).not.toContain("<script>alert(1)</script>");
     expect(page).toContain("<code>x</code>");
-    expect(page).not.toMatch(/(src|href)="http/);
+    // Self-contained: no script, style, font or picture from the network.
+    expect(page).not.toMatch(/src="http|<link|@import|url\(/);
+  });
+
+  test("a repo scope shows as owner/name and links to the repo", () => {
+    const store = tempStore();
+    putNote(store, { id: "a", scope: "github.com/acme/web" });
+    putNote(store, { id: "b", scope: "gitlab.com/acme/api" });
+    putNote(store, { id: "c", scope: "local-project" });
+    putNote(store, { id: "d" });
+    kb(store, ["html", "--no-open"]);
+    const page = readFileSync(join(store.home, "index.html"), "utf8");
+    expect(page).toContain('<h2><a href="https://github.com/acme/web" target="_blank" rel="noopener noreferrer">acme/web</a> ');
+    expect(page).toContain('<h2><a href="https://gitlab.com/acme/api" target="_blank" rel="noopener noreferrer">gitlab.com/acme/api</a> ');
+    expect(page).toContain("<h2>local-project ");
+    expect(page).toContain("<h2>global ");
   });
 
   test("fails with a clear message when there is no store", () => {

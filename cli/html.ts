@@ -15,6 +15,14 @@ function renderBody(markdown: string): string {
   }
 }
 
+/** A repo scope is host/owner/name. Show owner/name for GitHub, and link to the repo. */
+function scopeLabel(scope: string): string {
+  const parts = scope.split("/");
+  if (parts.length < 2 || !parts[0]!.includes(".")) return esc(scope);
+  const label = parts[0] === "github.com" ? parts.slice(1).join("/") : scope;
+  return `<a href="https://${esc(scope)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
+}
+
 function noteHtml(note: StoredNote, usage: Map<string, Usage>): string {
   const used = usage.get(note.id);
   const meta = [
@@ -44,7 +52,7 @@ export function renderHtml(store: Store): string {
       const live = rank(active.filter((n) => n.scope === scope), usage);
       const old = rank(archived.filter((n) => n.scope === scope), usage);
       return `<section${live.length === 0 ? ' class="only-archived"' : ""}>
-<h2>${esc(scope)} <span class="count">${live.length}</span></h2>
+<h2>${scopeLabel(scope)} <span class="count">${live.length}</span></h2>
 ${[...live, ...old].map((n) => noteHtml(n, usage)).join("\n")}
 </section>`;
     })
@@ -70,6 +78,8 @@ input[type=search] { flex:1; min-width:0; height:36px; padding:0 12px; font:inhe
 input[type=search]:focus { outline:2px solid var(--accent); outline-offset:-1px; }
 label { color:var(--muted); font-size:13px; white-space:nowrap; display:flex; gap:6px; align-items:center; }
 h2 { font-size:13px; font-weight:600; color:var(--muted); margin:28px 0 8px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+h2 a { color:inherit; text-decoration:none; }
+h2 a:hover { color:var(--accent); text-decoration:underline; }
 .count { font-weight:400; margin-left:4px; }
 .note { background:var(--card); border:1px solid var(--line); border-radius:8px; margin-bottom:6px; }
 summary { display:flex; gap:10px; align-items:baseline; padding:9px 12px; cursor:pointer; list-style:none; }

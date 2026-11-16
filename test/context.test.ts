@@ -40,6 +40,13 @@ describe("kb context ranking", () => {
     const { text } = buildContext(store, repo);
     expect(text).toContain(`# kb: saved knowledge for ${SCOPE}`);
     expect(text).toContain("### global (1)\n- two [gotcha] A global fact");
+    // An id that is the slug of its title stands alone: the title would say it twice.
+    putNote(store, { id: "amounts-are-integer-cents", title: "Amounts are integer cents!" });
+    putNote(store, { id: "a-long-title-that-was-cut", title: "A long title that was cut at a word boundary" });
+    const again = buildContext(store, repo).text;
+    expect(again).toContain("- amounts-are-integer-cents [gotcha]\n");
+    expect(again).toContain("- a-long-title-that-was-cut [gotcha]\n");
+    expect(again).toContain("- two [gotcha] A global fact\n");
     expect(text).toContain(`### ${SCOPE} (1)\n- one [gotcha] First fact`);
     expect(text).toContain("### one [gotcha] First fact\nverified 2026-01-01 at abc1234 | confidence medium | anchors: src/a.ts#run\nThe body of one.");
     expect(text.indexOf("## Index")).toBeLessThan(text.indexOf("## Notes"));

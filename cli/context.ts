@@ -1,6 +1,6 @@
 // `kb context`: the text a session gets at start. Ranking and both budgets live here.
 
-import { KINDS } from "./note.ts";
+import { KINDS, normalizeTitle } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { HARD_CONTEXT_CAP, type Store, type StoredNote, type Usage } from "./store.ts";
 
@@ -39,8 +39,14 @@ function localDate(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/**
+ * One index line. An id is the slug of its title, cut at 48 characters, so a title next to it
+ * says the same thing twice and doubles the cost of the index. The title is added only when
+ * the id does not come from it: a rewritten title, or an id with a number suffix.
+ */
 export function indexLine(note: StoredNote): string {
-  return `- ${note.id} [${note.kind}] ${note.title}`;
+  const fromTitle = normalizeTitle(note.title).startsWith(note.id);
+  return `- ${note.id} [${note.kind}]${fromTitle ? "" : ` ${note.title}`}`;
 }
 
 function bodyBlock(note: StoredNote): string {
@@ -70,7 +76,7 @@ export function buildContext(store: Store, repoPath: string): ContextResult {
   let indexCount = Math.min(ranked.length, Math.max(1, config.budgets.indexLines));
 
   const render = (indexed: StoredNote[], bodies: StoredNote[], droppedBodies: number): string => {
-    const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, "These notes come from earlier sessions. Index lines are titles only."];
+    const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, "These notes come from earlier sessions. An index line is the id of a note, which is its title in short form."];
     if (syncError) lines.push(`kb sync did not finish: ${syncError} \`kb sync\` shows the detail.`);
     if (indexed.length > 0) {
       lines.push("", "## Index");
