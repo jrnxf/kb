@@ -177,12 +177,22 @@ pre code { padding:0; background:none; }
   .page { display:block; height:auto; }
   .rail { display:block; position:relative; padding:20px 16px 12px; border-right:0; border-bottom:1px solid var(--line); }
   .foot { position:absolute; top:14px; right:12px; padding:0; }
-  .rail nav { display:flex; flex-wrap:wrap; gap:4px; margin-top:12px; }
+  /* A strip runs to both edges of the screen, so a chip that is cut at the edge says that there are more. */
+  .strip { display:flex; gap:6px; margin:10px -16px 0; padding:0 16px; overflow-x:auto; scrollbar-width:none; }
+  .strip::-webkit-scrollbar { display:none; }
   .rail h3, .keys { display:none; }
-  .item { width:auto; border:1px solid var(--line); border-radius:999px; padding:2px 10px; }
+  .item { flex:none; width:auto; border:1px solid var(--line); border-radius:999px; padding:4px 12px; scroll-margin:0 16px; }
+  .item .name { overflow:visible; }
   .list { max-height:46vh; border-right:0; border-bottom:1px solid var(--line); }
   .top { padding-top:14px; }
-  .read { padding:24px 16px 60px; }
+  /* A short note also fills the screen, so a tap on a row can bring it to the top. */
+  .read { padding:24px 16px 60px; min-height:100vh; min-height:100dvh; }
+  /* Safari on a phone zooms into a field with smaller text, and does not zoom back. */
+  .search input, .form input, .form select, .form textarea { font-size:16px; }
+}
+/* A screen without a keyboard does not show the keys. */
+@media (hover:none) and (pointer:coarse) {
+  .acts kbd, .form kbd, .search kbd { display:none; }
 }
 `;
 
@@ -420,6 +430,8 @@ if (view.get("pane") === "rail") pane = "rail";
 setTheme(document.documentElement.dataset.theme || "system");
 cursor = scopeItem(); held = state.scope;
 render();
+// On a phone the scopes are one row that scrolls sideways. Start with the picked scope in view.
+cursor.parentElement.scrollLeft = cursor.offsetLeft - cursor.parentElement.offsetLeft - (cursor.parentElement.clientWidth - cursor.offsetWidth) / 2;
 if (sessionStorage.getItem("kb-undo")) {
   toast("Archived.", "Undo (u)", undo);
   setTimeout(() => sessionStorage.removeItem("kb-undo"), 7000);
@@ -450,13 +462,15 @@ export function renderHtml(store: Store, token: string): string {
   const notes = scopes.flatMap((scope) => [...rank(active.filter((n) => n.scope === scope), usage), ...rank(archived.filter((n) => n.scope === scope), usage)]);
 
   const item = (attrs: string, name: string, cls = "") => `<button class="item${cls}" ${attrs} aria-pressed="false" tabindex="-1">${name}<span class="num"></span></button>`;
+  // On a phone each strip is one row that scrolls sideways: the scopes, then the kinds and the archive.
   const rail = [
-    "<h3>Scopes</h3>",
+    '<h3>Scopes</h3>\n<div class="strip">',
     item('data-scope="*"', '<span class="name">all notes</span>'),
     ...scopes.map((scope) => item(`data-scope="${esc(scope)}" title="${esc(scope)}"`, `<span class="name">${esc(scopeName(scope))}</span>`)),
-    "<h3>Kinds</h3>",
+    '</div>\n<div class="strip">\n<h3>Kinds</h3>',
     ...KINDS.map((kind) => item(`data-kind="${kind}"`, `<span class="dot"></span><span class="name">${kind}</span>`, ` k-${kind}`)),
     ...(archived.length > 0 ? ["<h3>Archive</h3>", `<button class="item" data-archived aria-pressed="false" tabindex="-1"><span class="name">Show archived</span><span class="num">${archived.length}</span></button>`] : []),
+    "</div>",
   ].join("\n");
 
   return `<!doctype html>

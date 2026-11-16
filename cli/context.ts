@@ -7,13 +7,13 @@ import { HARD_CONTEXT_CAP, type Store, type StoredNote, type Usage } from "./sto
 export interface ContextResult {
   text: string;
   scope: string | null;
-  /** Ids shown as index lines. */
+  /** Ids shown as index lines: the notes with no body, up to the index budget. */
   index: string[];
   /** Ids printed with a full body. */
   bodies: string[];
   /** Ids whose body did not fit the character budget. */
   dropped: string[];
-  /** Index lines cut by the index budget. */
+  /** Notes with no body and no index line: the index budget cut them. A session cannot see them. */
   hiddenIndexLines: number;
   chars: number;
 }
@@ -41,12 +41,21 @@ function localDate(iso: string): string {
 
 /**
  * One index line. An id is the slug of its title, cut at 48 characters, so a title next to it
- * says the same thing twice and doubles the cost of the index. The title is added only when
- * the id does not come from it: a rewritten title, or an id with a number suffix.
+ * says the same thing twice and doubles the cost of the index. For most notes the line is the
+ * only thing a session gets, so it must not lose the words that the cut removed: they follow
+ * after "...". The full title is added only when the id does not come from it: a rewritten
+ * title, or an id with a number suffix.
  */
 export function indexLine(note: StoredNote): string {
-  const fromTitle = normalizeTitle(note.title).startsWith(note.id);
-  return `- ${note.id} [${note.kind}]${fromTitle ? "" : ` ${note.title}`}`;
+  const head = `- ${note.id} [${note.kind}]`;
+  const full = normalizeTitle(note.title);
+  if (full === note.id) return head;
+  if (!full.startsWith(`${note.id}-`)) return `${head} ${note.title}`;
+  // The shortest start of the title that gives the id. What follows is the part that was cut.
+  let end = 0;
+  while (end < note.title.length && normalizeTitle(note.title.slice(0, end)) !== note.id) end++;
+  const rest = note.title.slice(end).replace(/^[^\p{L}\p{N}]+/u, "").trim();
+  return rest ? `${head} ...${rest}` : head;
 }
 
 function bodyBlock(note: StoredNote): string {
@@ -57,7 +66,7 @@ function bodyBlock(note: StoredNote): string {
 
 function pointer(dropped: number): string {
   const fit = dropped > 0 ? `${dropped} ${dropped === 1 ? "note is" : "notes are"} in the index only, because the bodies did not fit. ` : "";
-  return `${fit}\`kb show <id>\` prints one note. \`kb search <query>\` searches every note.`;
+  return `${fit}\`kb show <id>\` prints one note. \`kb search <words>\` searches every note.`;
 }
 
 export function buildContext(store: Store, repoPath: string): ContextResult {
@@ -75,17 +84,21 @@ export function buildContext(store: Store, repoPath: string): ContextResult {
   const charBudget = Math.max(500, Math.min(config.budgets.contextChars, HARD_CONTEXT_CAP));
   let indexCount = Math.min(ranked.length, Math.max(1, config.budgets.indexLines));
 
-  const render = (indexed: StoredNote[], bodies: StoredNote[], droppedBodies: number): string => {
-    const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, "These notes come from earlier sessions. An index line is the id of a note, which is its title in short form."];
+  // A note with a body needs no index line: the body starts with its id and title. Bodies are
+  // the top of the ranking, so the index is the next notes, up to the index budget.
+  const listedFor = (bodyCount: number, lines: number) => ranked.slice(bodyCount, bodyCount + lines);
+
+  const render = (listed: StoredNote[], bodies: StoredNote[]): string => {
+    const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, "These notes come from earlier sessions. Each is below once: with its body, or as an index line. An index line is the id, then after \"...\" the words of the title that the id cut."];
     if (syncError) lines.push(`kb sync did not finish: ${syncError} \`kb sync\` shows the detail.`);
-    if (indexed.length > 0) {
+    if (listed.length > 0) {
       lines.push("", "## Index");
       for (const section of ["global", scope]) {
-        const inSection = indexed.filter((n) => n.scope === section);
+        const inSection = listed.filter((n) => n.scope === section);
         if (inSection.length === 0) continue;
         lines.push(`### ${section} (${inSection.length})`, ...inSection.map(indexLine));
       }
-      const hidden = ranked.length - indexed.length;
+      const hidden = ranked.length - bodies.length - listed.length;
       if (hidden > 0) lines.push(`${hidden} more index ${hidden === 1 ? "line is" : "lines are"} over the index budget.`);
     }
     if (bodies.length > 0) {
@@ -94,32 +107,32 @@ export function buildContext(store: Store, repoPath: string): ContextResult {
     } else {
       lines.push("");
     }
-    if (ranked.length > 0) lines.push(pointer(droppedBodies));
+    if (ranked.length > 0) lines.push(pointer(listed.length));
     return `${lines.join("\n")}\n`;
   };
 
   // The index comes first. If it alone is over the character budget, cut it from the bottom.
-  while (indexCount > 1 && render(ranked.slice(0, indexCount), [], ranked.length).length > charBudget) indexCount--;
-  const indexed = ranked.slice(0, indexCount);
+  while (indexCount > 1 && render(listedFor(0, indexCount), []).length > charBudget) indexCount--;
 
   // Whole bodies in rank order. The first one that does not fit ends the list, so a note is
   // never cut in half and a low-ranked short note never jumps ahead of a higher one.
   const bodies: StoredNote[] = [];
   for (const note of ranked) {
-    const candidate = render(indexed, [...bodies, note], ranked.length);
+    const candidate = render(listedFor(bodies.length + 1, indexCount), [...bodies, note]);
     if (candidate.length > charBudget) break;
     bodies.push(note);
   }
 
+  const listed = listedFor(bodies.length, indexCount);
   const dropped = ranked.slice(bodies.length);
-  const text = render(indexed, bodies, dropped.length);
+  const text = render(listed, bodies);
   return {
     text,
     scope,
-    index: indexed.map((n) => n.id),
+    index: listed.map((n) => n.id),
     bodies: bodies.map((n) => n.id),
     dropped: dropped.map((n) => n.id),
-    hiddenIndexLines: ranked.length - indexed.length,
+    hiddenIndexLines: dropped.length - listed.length,
     chars: text.length,
   };
 }
@@ -128,19 +141,23 @@ export interface BudgetResult {
   scope: string | null;
   index: { lines: number; budget: number; hidden: number };
   context: { chars: number; budget: number; bodies: number; dropped: number };
+  /** True only when a note reaches no session: it has no body and no index line. Bodies that drop to an index line are the normal state. */
   over: boolean;
   /** Every note a session of this scope can see, in rank order. */
   notes: { id: string; kind: string; scope: string; uses: number; last_used: string | null; chars: number; shown: "body" | "index" | "hidden" }[];
-  /** Notes to take out of the index first: fewest uses, then longest unused. Empty when nothing is over budget. */
+  /** As many notes as are hidden, to take out of the index first: fewest uses, longest unused, lowest rank. Empty when no note is hidden. */
   demote: { id: string; reason: string }[];
+  /** Notes of this scope that were demoted (`indexed: false`): no session loads them. */
+  demoted: string[];
 }
 
-/** `kb budget`: sizes against both budgets, and which notes to demote when one is exceeded. */
+/** `kb budget`: what a session loads, which notes reach no session, and what to demote for them. */
 export function buildBudget(store: Store, repoPath: string): BudgetResult {
   const context = buildContext(store, repoPath);
   const config = store.config();
   const usage = store.usage();
-  const byId = new Map(store.notes().map((n) => [n.id, n]));
+  const all = store.notes();
+  const byId = new Map(all.map((n) => [n.id, n]));
   const ranked = [...context.bodies, ...context.dropped].map((id) => byId.get(id)!).filter(Boolean);
   const bodies = new Set(context.bodies);
   const index = new Set(context.index);
@@ -153,21 +170,27 @@ export function buildBudget(store: Store, repoPath: string): BudgetResult {
     chars: bodyBlock(n).length,
     shown: bodies.has(n.id) ? ("body" as const) : index.has(n.id) ? ("index" as const) : ("hidden" as const),
   }));
-  const over = context.dropped.length > 0 || context.hiddenIndexLines > 0;
-  // Open work is never a demotion candidate: it leaves the index when it is done.
+  // A body that did not fit still reaches the session as an index line: that is how the store
+  // stays small, not a fault. Only a note with neither is a reason to demote something.
+  const over = context.hiddenIndexLines > 0;
+  const position = new Map(notes.map((n, i) => [n.id, i]));
+  // Open work is never a demotion candidate: it leaves the index when it is done. Among notes
+  // that nobody used, the lowest rank goes first, so a gotcha is the last to be named.
   const demote = over
     ? notes
         .filter((n) => n.kind !== "open-work")
-        .sort((a, b) => a.uses - b.uses || (a.last_used ?? "").localeCompare(b.last_used ?? "") || b.chars - a.chars)
-        .slice(0, Math.max(context.dropped.length, context.hiddenIndexLines))
+        .sort((a, b) => a.uses - b.uses || (a.last_used ?? "").localeCompare(b.last_used ?? "") || position.get(b.id)! - position.get(a.id)!)
+        .slice(0, context.hiddenIndexLines)
         .map((n) => ({ id: n.id, reason: n.uses === 0 ? "never used" : `${n.uses} ${n.uses === 1 ? "use" : "uses"}, last ${n.last_used?.slice(0, 10)}` }))
     : [];
+  const demoted = all.filter((n) => !n.indexed && !n.promoted_to && (n.scope === "global" || n.scope === context.scope)).map((n) => n.id);
   return {
     scope: context.scope,
-    index: { lines: ranked.length, budget: config.budgets.indexLines, hidden: context.hiddenIndexLines },
+    index: { lines: context.index.length, budget: config.budgets.indexLines, hidden: context.hiddenIndexLines },
     context: { chars: context.chars, budget: Math.min(config.budgets.contextChars, HARD_CONTEXT_CAP), bodies: context.bodies.length, dropped: context.dropped.length },
     over,
     notes,
     demote,
+    demoted,
   };
 }

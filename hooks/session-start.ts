@@ -25,8 +25,9 @@ try {
   const notices: string[] = [];
 
   if (store.exists()) {
-    // Sessions of this directory that ended with /clear and no checkpoint. Reported once.
-    for (const lost of takeUnsaved(store, cwd)) {
+    const repo = resolveRepo(cwd, store);
+    // Sessions of this directory or checkout that ended with /clear and no checkpoint. Reported once.
+    for (const lost of takeUnsaved(store, cwd, repo.root)) {
       notices.push(`An earlier session in this directory ended with /clear before /kb:checkpoint ran. Its transcript is ${lost.transcript}. Read it only if the user asks to recover something from it.`);
     }
 
@@ -36,7 +37,6 @@ try {
 
     // The stale checks run git once per commit, so they never run here. This reads the last
     // count and, when it is out of date, starts the checks in the background for next time.
-    const repo = resolveRepo(cwd, store);
     const stale = cachedStaleCount(store, repo.scope, repo.head);
     // Hook output reaches the agent only, so each line asks it to pass the message on.
     if (stale && stale.notes > STALE_NOTICE_ABOVE) notices.push(`${stale.notes} kb notes for this scope may be stale. Tell the user in one line, in your first reply, that /kb:audit checks them.`);

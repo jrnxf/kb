@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildContext } from "../cli/context.ts";
-import { HARD_CONTEXT_CAP } from "../cli/store.ts";
+import { buildContext, indexLine } from "../cli/context.ts";
+import { slugify } from "../cli/note.ts";
+import { HARD_CONTEXT_CAP, type StoredNote } from "../cli/store.ts";
 import { plain, putNote, tempRepo, tempStore } from "./helpers.ts";
 
 const REMOTE = "git@github.com:acme/billing.git";
@@ -34,23 +35,59 @@ describe("kb context ranking", () => {
 
   test("prints the index, then bodies, then the pointer", () => {
     const store = tempStore();
+    setConfig(store.home, { contextChars: 700 });
     const repo = tempRepo({ remote: REMOTE });
     putNote(store, { id: "one", scope: SCOPE, title: "First fact", body: "The body of one.", anchors: ["src/a.ts#run"], verified_at_commit: "abc1234" });
-    putNote(store, { id: "two", title: "A global fact" });
-    const { text } = buildContext(store, repo);
+    putNote(store, { id: "two", kind: "convention", title: "A global fact", body: "w".repeat(600) });
+    putNote(store, { id: "three", kind: "how-to", scope: SCOPE, title: "A repo fact" });
+    const { text, bodies } = buildContext(store, repo);
+    expect(bodies).toEqual(["one"]);
     expect(text).toContain(`# kb: saved knowledge for ${SCOPE}`);
-    expect(text).toContain("### global (1)\n- two [gotcha] A global fact");
-    // An id that is the slug of its title stands alone: the title would say it twice.
-    putNote(store, { id: "amounts-are-integer-cents", title: "Amounts are integer cents!" });
-    putNote(store, { id: "a-long-title-that-was-cut", title: "A long title that was cut at a word boundary" });
-    const again = buildContext(store, repo).text;
-    expect(again).toContain("- amounts-are-integer-cents [gotcha]\n");
-    expect(again).toContain("- a-long-title-that-was-cut [gotcha]\n");
-    expect(again).toContain("- two [gotcha] A global fact\n");
-    expect(text).toContain(`### ${SCOPE} (1)\n- one [gotcha] First fact`);
+    expect(text).toContain("### global (1)\n- two [convention] A global fact");
+    expect(text).toContain(`### ${SCOPE} (1)\n- three [how-to] A repo fact`);
     expect(text).toContain("### one [gotcha] First fact\nverified 2026-01-01 at abc1234 | confidence medium | anchors: src/a.ts#run\nThe body of one.");
     expect(text.indexOf("## Index")).toBeLessThan(text.indexOf("## Notes"));
-    expect(text.trimEnd().endsWith("`kb search <query>` searches every note.")).toBe(true);
+    expect(text.trimEnd().endsWith("`kb search <words>` searches every note.")).toBe(true);
+  });
+
+  test("a note is printed once: its body, or an index line when the body did not fit", () => {
+    const store = tempStore();
+    setConfig(store.home, { contextChars: 2000 });
+    const ids = Array.from({ length: 12 }, (_, i) => `note-${String(i).padStart(2, "0")}`);
+    ids.forEach((id, i) => putNote(store, { id, body: "x".repeat(200), last_verified: `2026-01-${String(28 - i).padStart(2, "0")}T00:00:00Z` }));
+    const result = buildContext(store, plain());
+    expect(result.dropped.length).toBeGreaterThan(0);
+    for (const id of ids) {
+      const line = result.text.includes(`\n- ${id} [gotcha]`);
+      const body = result.text.includes(`\n### ${id} [gotcha]`);
+      expect(body).toBe(result.bodies.includes(id));
+      expect(line).toBe(!body);
+    }
+    expect(result.text).toContain(`### global (${result.dropped.length})`);
+  });
+
+  test("when every body fits, there is no index", () => {
+    const store = tempStore();
+    putNote(store, { id: "one" });
+    putNote(store, { id: "two" });
+    const { text } = buildContext(store, plain());
+    expect(text).not.toContain("## Index");
+    expect(text).toContain("## Notes (2 of 2, by rank)");
+  });
+
+  test("an index line keeps the words of the title that the id cut", () => {
+    const line = (id: string, title: string) => indexLine({ id, title, kind: "gotcha" } as StoredNote);
+    // The gotcha is in the last word. The id alone would lose it.
+    const title = "The deploy CLI exits 0 when the upload was rejected";
+    expect(slugify(title)).toBe("the-deploy-cli-exits-0-when-the-upload-was");
+    expect(line(slugify(title), title)).toBe("- the-deploy-cli-exits-0-when-the-upload-was [gotcha] ...rejected");
+    const long = "Never run the migration tool against the shared staging database (it is shared)";
+    expect(line(slugify(long), long)).toBe("- never-run-the-migration-tool-against-the-shared [gotcha] ...staging database (it is shared)");
+    // An id that is the whole title stands alone: the title would say it twice.
+    expect(line("amounts-are-integer-cents", "Amounts are integer cents!")).toBe("- amounts-are-integer-cents [gotcha]");
+    // An id that does not come from the title gets the whole title.
+    expect(line("two", "A global fact")).toBe("- two [gotcha] A global fact");
+    expect(line("amounts-are-integer-cents-2", "Amounts are integer cents")).toBe("- amounts-are-integer-cents-2 [gotcha] Amounts are integer cents");
   });
 });
 
@@ -64,7 +101,7 @@ describe("kb context visibility", () => {
     expect(other.text).toContain("global-note");
     const outside = buildContext(store, plain());
     expect(outside.scope).toBeNull();
-    expect(outside.index).toEqual(["global-note"]);
+    expect(outside.bodies).toEqual(["global-note"]);
   });
 
   test("excludes promoted, unindexed and archived notes", () => {
@@ -74,7 +111,6 @@ describe("kb context visibility", () => {
     putNote(store, { id: "gone" }, true);
     putNote(store, { id: "kept" });
     const result = buildContext(store, plain());
-    expect(result.index).toEqual(["kept"]);
     expect(result.bodies).toEqual(["kept"]);
   });
 
@@ -106,8 +142,8 @@ describe("kb context budgets", () => {
       expect(result.text.includes(`END-${id}`)).toBe(hasStart);
       expect(hasStart).toBe(result.bodies.includes(id));
     }
-    // Every note still has its index line.
-    expect(result.index).toEqual(ids);
+    // Every note without a body has its index line.
+    expect(result.index).toEqual(result.dropped);
     expect(result.text).toContain(`${result.dropped.length} notes are in the index only`);
   });
 
@@ -124,14 +160,28 @@ describe("kb context budgets", () => {
 
   test("index budget keeps the top-ranked lines and reports the others", () => {
     const store = tempStore();
-    setConfig(store.home, { indexLines: 5 });
-    const ids = Array.from({ length: 9 }, (_, i) => `n${i}`);
-    ids.forEach((id, i) => putNote(store, { id, last_verified: `2026-01-${String(20 - i).padStart(2, "0")}T00:00:00Z` }));
+    setConfig(store.home, { indexLines: 5, contextChars: 900 });
+    const ids = Array.from({ length: 12 }, (_, i) => `n${String(i).padStart(2, "0")}`);
+    ids.forEach((id, i) => putNote(store, { id, body: "x".repeat(150), last_verified: `2026-01-${String(20 - i).padStart(2, "0")}T00:00:00Z` }));
     const result = buildContext(store, plain());
-    expect(result.index).toEqual(ids.slice(0, 5));
-    expect(result.hiddenIndexLines).toBe(4);
-    expect(result.text).toContain("4 more index lines are over the index budget.");
-    expect(result.text.match(/^- n\d \[/gm)?.length).toBe(5);
+    const shown = result.bodies.length;
+    expect(shown).toBeGreaterThan(0);
+    // The five lines go to the notes that rank next after the bodies.
+    expect(result.index).toEqual(ids.slice(shown, shown + 5));
+    expect(result.hiddenIndexLines).toBe(12 - shown - 5);
+    expect(result.text).toContain(`${12 - shown - 5} more index lines are over the index budget.`);
+    expect(result.text.match(/^- n\d\d \[/gm)?.length).toBe(5);
+    expect(result.chars).toBeLessThanOrEqual(900);
+  });
+
+  test("a note with a body does not count against the index budget", () => {
+    const store = tempStore();
+    setConfig(store.home, { indexLines: 5 });
+    for (let i = 0; i < 9; i++) putNote(store, { id: `n${i}` });
+    const result = buildContext(store, plain());
+    expect(result.bodies.length).toBe(9);
+    expect(result.hiddenIndexLines).toBe(0);
+    expect(result.text).not.toContain("over the index budget");
   });
 
   test("a configured budget above the SessionStart cap is clamped", () => {

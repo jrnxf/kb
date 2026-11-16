@@ -1,8 +1,8 @@
 // Session marks: which sessions saved their knowledge, and which ended without doing so.
 // Per-machine state in .state/, never committed. One small file per session, so sessions never race.
 
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { join, sep } from "node:path";
 import { type Store, writeAtomic } from "./store.ts";
 
 const KEEP_MS = 7 * 86_400_000;
@@ -31,8 +31,22 @@ export function recordUnsaved(store: Store, entry: UnsavedSession): void {
   writeAtomic(store.statePath(`unsaved-${safe(entry.session)}.json`), JSON.stringify(entry));
 }
 
-/** Return the unsaved sessions of a directory and forget them, so each one is reported once. */
-export function takeUnsaved(store: Store, cwd: string): UnsavedSession[] {
+function real(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * Return the unsaved sessions of a directory and forget them, so each one is reported once.
+ * With `root`, the root of the repo around `cwd`, a session that ended anywhere in that
+ * checkout counts: a session can end in a subdirectory and the next one start at the root.
+ */
+export function takeUnsaved(store: Store, cwd: string, root: string | null = null): UnsavedSession[] {
+  const top = root && real(root);
+  const here = (ended: string) => ended === cwd || (top !== null && (real(ended) === top || real(ended).startsWith(top + sep)));
   const dir = store.statePath("");
   let names: string[];
   try {
@@ -46,7 +60,7 @@ export function takeUnsaved(store: Store, cwd: string): UnsavedSession[] {
     try {
       if (name.startsWith("unsaved-")) {
         const entry = JSON.parse(readFileSync(path, "utf8")) as UnsavedSession;
-        if (entry.cwd === cwd) {
+        if (here(entry.cwd)) {
           found.push(entry);
           rmSync(path, { force: true });
           continue;
