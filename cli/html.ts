@@ -99,11 +99,15 @@ h1 { font-size:20px; margin:0; letter-spacing:-0.01em; }
 .item .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .item .num { font-size:12px; font-weight:400; }
 .item.zero { opacity:0.4; }
-.keys { margin:22px 8px 0; padding-top:12px; border-top:1px solid var(--line); font-size:12px; color:var(--faint); line-height:2; }
-.foot { margin-top:auto; padding:20px 2px 0; }
-.theme { display:grid; place-items:center; width:30px; height:30px; border-radius:6px; color:var(--muted); }
-.theme:hover { background:var(--hover); color:var(--fg); }
-.theme svg { display:none; width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+/* The key of a kind sits next to its name, so the count at the right edge stays the only number there. */
+.item kbd { flex:none; margin-right:auto; padding:0 4px; font-weight:400; color:var(--faint); }
+.item:has(kbd) .name { flex:0 1 auto; }
+.sep { height:1px; margin:6px 8px; border:0; background:var(--line); }
+.foot { display:flex; gap:2px; margin-top:auto; padding:20px 2px 0; }
+.tool { display:grid; place-items:center; width:30px; height:30px; border-radius:6px; color:var(--muted); }
+.tool:hover { background:var(--hover); color:var(--fg); }
+.tool svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.theme svg { display:none; }
 :root:not([data-theme]) .theme .system, :root[data-theme=light] .theme .light, :root[data-theme=dark] .theme .dark { display:block; }
 kbd { font:11px var(--mono); border:1px solid var(--line); border-radius:4px; padding:1px 5px; color:var(--muted); }
 
@@ -115,8 +119,10 @@ kbd { font:11px var(--mono); border:1px solid var(--line); border-radius:4px; pa
 .search input:focus { border-color:var(--faint); }
 .search kbd { position:absolute; right:9px; top:8px; pointer-events:none; }
 .search input:focus + kbd { display:none; }
-.where { display:flex; align-items:baseline; gap:8px; margin-top:14px; font:600 13px var(--mono); }
-.where .num { font-weight:400; }
+/* The cross that clears the field, in the colors of the page and not the bright one of the browser. */
+.search input::-webkit-search-cancel-button { -webkit-appearance:none; width:16px; height:16px; margin:0 -24px 0 8px; cursor:pointer; background:var(--faint); -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M4.5 4.5l7 7M11.5 4.5l-7 7'/%3E%3C/svg%3E") center / 16px no-repeat; }
+.search input::-webkit-search-cancel-button:hover { background:var(--fg); }
+.where { margin-top:14px; font:12px var(--mono); color:var(--faint); }
 #rows { padding:0 8px 24px; }
 .row { display:flex; gap:10px; align-items:baseline; width:100%; padding:7px 8px; border-radius:6px; font-size:14px; line-height:1.4; scroll-margin:104px 0 16px; }
 .row .dot { position:relative; top:-2px; }
@@ -126,7 +132,10 @@ kbd { font:11px var(--mono); border:1px solid var(--line); border-radius:4px; pa
 .row.archived .title { color:var(--muted); }
 /* The pane that has the keys marks its current item a little more. */
 body[data-pane=list] .row[aria-current=true], body[data-pane=rail] .item.cur { background:var(--sel); box-shadow:inset 0 0 0 1px var(--ring); color:var(--fg); }
-.empty { color:var(--muted); padding:8px 16px; margin:0; }
+.empty { display:grid; justify-items:start; gap:10px; padding:2px 16px 24px; font-size:13.5px; color:var(--muted); }
+.empty[hidden] { display:none; }
+.empty button { padding:3px 9px; border-radius:6px; font-size:12.5px; box-shadow:inset 0 0 0 1px var(--line); }
+.empty button:hover { background:var(--hover); color:var(--fg); }
 
 .read { padding:48px 48px 80px; }
 article { max-width:660px; }
@@ -159,6 +168,13 @@ body[data-pane] .acts button:hover { color:var(--fg); }
 .form .error { margin-right:auto; color:var(--k-gotcha); font-size:13px; }
 .toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); display:flex; align-items:center; gap:10px; padding:8px 14px; font-size:13px; background:var(--card); border:1px solid var(--ring); border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,0.18); }
 .toast button { color:var(--muted); } .toast button:hover { color:var(--fg); }
+.help { width:min(340px, calc(100vw - 32px)); margin:auto; outline:0; padding:18px 20px 20px; color:var(--fg); background:var(--card); border:1px solid var(--ring); border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,0.28); }
+.help::backdrop { background:rgba(0,0,0,0.4); }
+.help header { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:12px; font:600 13px var(--mono); }
+.help header kbd { font-weight:400; }
+.help dl { display:grid; grid-template-columns:auto 1fr; gap:9px 16px; margin:0; font-size:13.5px; }
+.help dt { display:flex; gap:4px; align-items:center; }
+.help dd { margin:0; color:var(--muted); }
 article h2 { font-size:24px; line-height:1.25; letter-spacing:-0.015em; margin:0 0 14px; overflow-wrap:anywhere; }
 .meta { display:flex; flex-wrap:wrap; gap:4px 14px; color:var(--muted); font-size:12.5px; margin:0 0 20px; padding-bottom:16px; border-bottom:1px solid var(--line); }
 .meta button { font:12px var(--mono); color:var(--muted); overflow-wrap:anywhere; }
@@ -180,7 +196,7 @@ pre code { padding:0; background:none; }
   /* A strip runs to both edges of the screen, so a chip that is cut at the edge says that there are more. */
   .strip { display:flex; gap:6px; margin:10px -16px 0; padding:0 16px; overflow-x:auto; scrollbar-width:none; }
   .strip::-webkit-scrollbar { display:none; }
-  .rail h3, .keys { display:none; }
+  .rail h3, .sep { display:none; }
   .item { flex:none; width:auto; border:1px solid var(--line); border-radius:999px; padding:4px 12px; scroll-margin:0 16px; }
   .item .name { overflow:visible; }
   .list { max-height:46vh; border-right:0; border-bottom:1px solid var(--line); }
@@ -192,18 +208,18 @@ pre code { padding:0; background:none; }
 }
 /* A screen without a keyboard does not show the keys. */
 @media (hover:none) and (pointer:coarse) {
-  .acts kbd, .form kbd, .search kbd { display:none; }
+  .acts kbd, .form kbd, .search kbd, .item kbd, #keys { display:none; }
 }
 `;
 
 // Runs in the page. String.raw keeps the regular expressions as written.
 const SCRIPT = String.raw`
-const q = document.getElementById("q"), read = document.getElementById("read"), where = document.getElementById("where"), none = document.getElementById("none");
+const q = document.getElementById("q"), read = document.getElementById("read"), where = document.getElementById("where"), none = document.getElementById("none"), clear = document.getElementById("clear");
 const rows = [...document.querySelectorAll(".row")], items = [...document.querySelectorAll(".item")], articles = [...document.querySelectorAll("article")];
 const kinds = items.filter((i) => i.dataset.kind).map((i) => i.dataset.kind);
 const TOKEN = document.body.dataset.token, VERSION = document.body.dataset.version;
-const MAC = /Mac|iPhone|iPad/.test(navigator.platform), themeButton = document.getElementById("theme");
-const state = { scope: null, kind: null, archived: false };
+const MAC = /Mac|iPhone|iPad/.test(navigator.platform), themeButton = document.getElementById("theme"), help = document.getElementById("help");
+const state = { scope: null, kinds: new Set(), archived: false };
 // cursor: where the keys are in the sidebar. held: the scope to go back to when the cursor walks past the scopes.
 let pane = "list", current = null, shown = [], cursor = items[0], held = null, form = null;
 const isScope = (item) => item.dataset.scope !== undefined;
@@ -214,7 +230,7 @@ const article = () => (current ? document.getElementById("n-" + current.dataset.
 function remember(noteId) {
   const view = new URLSearchParams();
   if (state.scope) view.set("scope", state.scope);
-  if (state.kind) view.set("kind", state.kind);
+  if (state.kinds.size) view.set("kind", [...state.kinds].join(","));
   if (state.archived) view.set("archived", "1");
   if (q.value) view.set("q", q.value);
   const id = noteId !== undefined ? noteId : current && current.dataset.id;
@@ -242,7 +258,7 @@ function render() {
   shown = [];
   for (const row of rows) {
     const base = words.every((w) => row.dataset.search.includes(w)) && (state.archived || !row.classList.contains("archived"));
-    const inScope = !state.scope || row.dataset.scope === state.scope, inKind = !state.kind || row.dataset.kind === state.kind;
+    const inScope = !state.scope || row.dataset.scope === state.scope, inKind = state.kinds.size === 0 || state.kinds.has(row.dataset.kind);
     if (base && inKind) { anyScope++; byScope.set(row.dataset.scope, (byScope.get(row.dataset.scope) || 0) + 1); }
     if (base && inScope) byKind.set(row.dataset.kind, (byKind.get(row.dataset.kind) || 0) + 1);
     row.hidden = !(base && inScope && inKind);
@@ -253,16 +269,25 @@ function render() {
     const count = isScope(item) ? (item.dataset.scope === "*" ? anyScope : byScope.get(item.dataset.scope) || 0) : byKind.get(item.dataset.kind) || 0;
     item.querySelector(".num").textContent = count;
     item.classList.toggle("zero", count === 0);
-    item.setAttribute("aria-pressed", isScope(item) ? (state.scope || "*") === item.dataset.scope : state.kind === item.dataset.kind);
+    item.setAttribute("aria-pressed", isScope(item) ? (state.scope || "*") === item.dataset.scope : state.kinds.has(item.dataset.kind));
   }
-  where.firstChild.textContent = scopeItem().querySelector(".name").textContent + (state.kind ? " / " + state.kind : "");
-  where.lastChild.textContent = shown.length;
+  // The sidebar already says which scope and kind are picked. The list says only how many notes that is.
+  where.textContent = shown.length + (shown.length === 1 ? " note" : " notes");
+  // An empty list says so once, and offers the shortest way to notes: the other scopes when
+  // the same search finds notes there, otherwise the list without the search and the kinds.
+  where.hidden = shown.length === 0;
   none.hidden = shown.length > 0;
+  const elsewhere = state.scope ? anyScope : 0;
+  if (rows.length) none.firstChild.textContent = elsewhere ? "no notes match in this scope" : "no notes match";
+  clear.dataset.way = elsewhere ? "scopes" : "filters";
+  clear.textContent = elsewhere ? "show " + elsewhere + " in all scopes" : "clear filters";
+  clear.hidden = !elsewhere && !q.value && state.kinds.size === 0;
   show(shown.includes(current) ? current : shown[0], true);
   paint();
 }
 function setScope(item) { state.scope = item.dataset.scope === "*" ? null : item.dataset.scope; }
-function toggleKind(kind) { state.kind = state.kind === kind ? null : kind; }
+/** Kinds add up: no kind picked shows every kind, and each picked kind adds its notes. */
+function toggleKind(kind) { if (!state.kinds.delete(kind)) state.kinds.add(kind); }
 /** A click or Enter on a sidebar item. A scope chosen this way is held. */
 function activate(item) {
   if (isScope(item)) { setScope(item); held = state.scope; }
@@ -279,6 +304,7 @@ function setTheme(theme) {
   themeButton.setAttribute("aria-label", themeButton.title);
 }
 const nextTheme = () => setTheme({ system: "light", light: "dark", dark: "system" }[document.documentElement.dataset.theme || "system"]);
+const toggleHelp = () => (help.open ? help.close() : help.showModal());
 function step(list, from, by) { return list[Math.max(0, Math.min(list.length - 1, list.indexOf(from) + by))]; }
 
 // ---- changes: every one goes to the server, then the page loads again ----
@@ -359,8 +385,16 @@ q.addEventListener("input", render);
 document.addEventListener("click", (event) => {
   const copy = event.target.closest("[data-copy]"), act = event.target.closest("[data-act]"), item = event.target.closest(".item"), row = event.target.closest(".row");
   // The keys belong to the page, not to the button that took the click.
-  if ((item || row || event.target.closest("#theme")) && document.activeElement !== q) document.activeElement.blur();
-  if (event.target.closest("#theme")) nextTheme();
+  if ((item || row || event.target.closest(".tool")) && document.activeElement !== q) document.activeElement.blur();
+  if (event.target.closest("#keys")) toggleHelp();
+  else if (event.target === clear) {
+    if (clear.dataset.way === "scopes") { state.scope = held = null; cursor = scopeItem(); }
+    else { q.value = ""; state.kinds.clear(); }
+    render();
+  }
+  // A click outside the box lands on the dialog itself, which is the backdrop.
+  else if (event.target === help) help.close();
+  else if (event.target.closest("#theme")) nextTheme();
   else if (copy) {
     if (navigator.clipboard) navigator.clipboard.writeText(copy.dataset.copy);
     const id = copy.textContent;
@@ -388,6 +422,11 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.metaKey || event.ctrlKey || event.altKey) return;
+  // The open list of keys takes every key. The browser closes it on Escape.
+  if (help.open) {
+    if (key === "?") { event.preventDefault(); help.close(); }
+    return;
+  }
   if (document.activeElement === q) {
     if (key === "Escape") { q.value = ""; q.blur(); render(); }
     else if (key === "ArrowDown" || key === "Enter") { event.preventDefault(); q.blur(); pane = "list"; paint(); }
@@ -412,6 +451,7 @@ document.addEventListener("keydown", (event) => {
   else if (key === "e" && pane === "list") edit();
   else if (key === "a" && pane === "list") archive();
   else if (key === "t") nextTheme();
+  else if (key === "?") toggleHelp();
   else if (key === "u" && sessionStorage.getItem("kb-undo")) undo();
   else if (kinds[Number(key) - 1]) { toggleKind(kinds[Number(key) - 1]); render(); }
   else return;
@@ -422,7 +462,7 @@ document.addEventListener("keydown", (event) => {
 // Come back to the view in the address.
 const view = new URLSearchParams(location.hash.slice(1));
 if (items.some((i) => i.dataset.scope === view.get("scope"))) state.scope = view.get("scope");
-if (kinds.includes(view.get("kind"))) state.kind = view.get("kind");
+for (const kind of (view.get("kind") || "").split(",")) if (kinds.includes(kind)) state.kinds.add(kind);
 state.archived = view.has("archived") && items.some((i) => i.dataset.archived !== undefined);
 q.value = view.get("q") || "";
 current = rows.find((r) => r.dataset.id === view.get("note")) || null;
@@ -462,16 +502,36 @@ export function renderHtml(store: Store, token: string): string {
   const notes = scopes.flatMap((scope) => [...rank(active.filter((n) => n.scope === scope), usage), ...rank(archived.filter((n) => n.scope === scope), usage)]);
 
   const item = (attrs: string, name: string, cls = "") => `<button class="item${cls}" ${attrs} aria-pressed="false" tabindex="-1">${name}<span class="num"></span></button>`;
+  const SEP = '<hr class="sep">';
+  // "all" and "global" are in every store. The line sets them apart from the repos, which change.
+  const repos = scopes.filter((scope) => scope !== "global");
   // On a phone each strip is one row that scrolls sideways: the scopes, then the kinds and the archive.
   const rail = [
     '<h3>Scopes</h3>\n<div class="strip">',
-    item('data-scope="*"', '<span class="name">all notes</span>'),
-    ...scopes.map((scope) => item(`data-scope="${esc(scope)}" title="${esc(scope)}"`, `<span class="name">${esc(scopeName(scope))}</span>`)),
+    item('data-scope="*"', '<span class="name">all</span>'),
+    ...(scopes.includes("global") ? [item('data-scope="global" title="global"', '<span class="name">global</span>')] : []),
+    ...(repos.length > 0 ? [SEP] : []),
+    ...repos.map((scope) => item(`data-scope="${esc(scope)}" title="${esc(scope)}"`, `<span class="name">${esc(scopeName(scope))}</span>`)),
     '</div>\n<div class="strip">\n<h3>Kinds</h3>',
-    ...KINDS.map((kind) => item(`data-kind="${kind}"`, `<span class="dot"></span><span class="name">${kind}</span>`, ` k-${kind}`)),
-    ...(archived.length > 0 ? ["<h3>Archive</h3>", `<button class="item" data-archived aria-pressed="false" tabindex="-1"><span class="name">Show archived</span><span class="num">${archived.length}</span></button>`] : []),
+    // The number is the key that turns the kind on or off.
+    ...KINDS.map((kind, i) => item(`data-kind="${kind}"`, `<span class="dot"></span><span class="name">${kind}</span>${KEY(String(i + 1))}`, ` k-${kind}`)),
+    ...(archived.length > 0 ? [SEP, `<button class="item" data-archived aria-pressed="false" tabindex="-1"><span class="name">archived</span><span class="num">${archived.length}</span></button>`] : []),
     "</div>",
   ].join("\n");
+
+  const keys: [string[], string][] = [
+    [["&uarr;", "&darr;"], "move"],
+    [["&larr;", "&rarr;"], "sidebar or list"],
+    [["enter"], "pick in the sidebar"],
+    [["1", String(KINDS.length)], "kinds on or off"],
+    [["/"], "filter"],
+    [["space"], "scroll the note"],
+    [["e"], "edit"],
+    [["a"], "archive or restore"],
+    [["u"], "undo an archive"],
+    [["t"], "theme"],
+    [["?"], "this list"],
+  ];
 
   return `<!doctype html>
 <html lang="en">
@@ -489,20 +549,25 @@ export function renderHtml(store: Store, token: string): string {
 <nav>
 ${rail}
 </nav>
-<p class="keys">${KEY("&uarr;")} ${KEY("&darr;")} move<br>${KEY("&larr;")} ${KEY("&rarr;")} sidebar or list<br>${KEY("enter")} pick in the sidebar<br>${KEY("e")} edit, ${KEY("a")} archive<br>${KEY("space")} scroll the note<br>${KEY("1")} to ${KEY(String(KINDS.length))} kind on or off<br>${KEY("/")} filter</p>
-<div class="foot"><button class="theme" id="theme" type="button"><svg class="system" viewBox="0 0 16 16"><rect x="1.8" y="2.5" width="12.4" height="8.5" rx="1.5"/><path d="M5.5 13.8h5M8 11v2.8"/></svg><svg class="light" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.8"/><path d="M8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.4 3.4l.9.9M11.7 11.7l.9.9M3.4 12.6l.9-.9M11.7 4.3l.9-.9"/></svg><svg class="dark" viewBox="0 0 16 16"><path d="M13.5 9.6A5.8 5.8 0 0 1 6.4 2.5a5.8 5.8 0 1 0 7.1 7.1z"/></svg></button></div>
+<div class="foot"><button class="tool theme" id="theme" type="button"><svg class="system" viewBox="0 0 16 16"><rect x="1.8" y="2.5" width="12.4" height="8.5" rx="1.5"/><path d="M5.5 13.8h5M8 11v2.8"/></svg><svg class="light" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.8"/><path d="M8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.4 3.4l.9.9M11.7 11.7l.9.9M3.4 12.6l.9-.9M11.7 4.3l.9-.9"/></svg><svg class="dark" viewBox="0 0 16 16"><path d="M13.5 9.6A5.8 5.8 0 0 1 6.4 2.5a5.8 5.8 0 1 0 7.1 7.1z"/></svg></button><button class="tool" id="keys" type="button" title="Keys (?)" aria-label="Keys (?)"><svg viewBox="0 0 16 16"><rect x="1.5" y="3.8" width="13" height="8.4" rx="1.5"/><path d="M4.4 6.7h.01M6.8 6.7h.01M9.2 6.7h.01M11.6 6.7h.01M5.4 9.4h5.2"/></svg></button></div>
 </aside>
 <div class="pane list">
-<div class="top"><div class="search"><input type="search" id="q" placeholder="Filter notes" autocomplete="off"><kbd>/</kbd></div><div class="where" id="where"><span></span><span class="num"></span></div></div>
+<div class="top"><div class="search"><input type="search" id="q" placeholder="Filter notes" autocomplete="off"><kbd>/</kbd></div><div class="where" id="where"></div></div>
 <div id="rows">
 ${notes.map(rowHtml).join("\n")}
 </div>
-<p class="empty" id="none" hidden>${notes.length === 0 ? "The store has no notes yet." : "No notes match."}</p>
+<div class="empty" id="none" hidden><span>${notes.length === 0 ? "the store has no notes yet" : "no notes match"}</span><button type="button" id="clear">clear filters</button></div>
 </div>
 <main class="pane read" id="read">
 ${notes.map((note, n) => articleHtml(note, n, usage)).join("\n")}
 </main>
 </div>
+<dialog class="help" id="help" aria-label="Keys">
+<header><span>keys</span>${KEY("esc")}</header>
+<dl>
+${keys.map(([names, what]) => `<dt>${names.map(KEY).join(names[0] === "1" ? '<span class="num">to</span>' : "")}</dt><dd>${what}</dd>`).join("\n")}
+</dl>
+</dialog>
 <script>${SCRIPT}</script>
 </body>
 </html>
