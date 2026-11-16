@@ -308,8 +308,10 @@ export function App() {
       }
       return;
     }
-    // Other fields, such as an open select, keep their keys.
-    if ((event.target as HTMLElement).closest?.("input, textarea, select, [role=listbox], [role=dialog]")) return;
+    // Other fields, such as an open select, keep their keys. The note's drawer is a dialog too, but
+    // its note takes the page's keys, as the note's pane does on a wide screen.
+    const field = (event.target as HTMLElement).closest?.("input, textarea, select, [role=listbox], [role=dialog]");
+    if (field && !field.hasAttribute("data-note-drawer")) return;
 
     const by = key === "ArrowDown" || key === "j" ? 1 : key === "ArrowUp" || key === "k" ? -1 : 0;
     const pane = view.pane;
@@ -456,7 +458,7 @@ export function App() {
             back();
           }}
         >
-          <DrawerContent className="h-[82dvh] max-h-none bg-background shadow-[0_-10px_40px_rgba(0,0,0,0.35)]">
+          <DrawerContent data-note-drawer="" className="h-[82dvh] max-h-none bg-background shadow-[0_-10px_40px_rgba(0,0,0,0.35)]">
             <DrawerSwipeHandle className="h-auto pt-2 pb-2 after:h-[5px] after:w-9 after:bg-faint/50 group-data-[swipe-axis=y]/drawer-popup:h-auto group-data-[swipe-axis=y]/drawer-popup:after:h-[5px] group-data-[swipe-axis=y]/drawer-popup:after:w-9" />
             <DrawerTitle className="sr-only">{current?.title ?? "Note"}</DrawerTitle>
             <div ref={reader} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-1 pb-[60px] text-[15px]">
