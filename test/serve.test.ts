@@ -120,6 +120,19 @@ describe("kb serve", () => {
     expect(store.find("a")).toMatchObject({ archived: false, body: "kept" });
   });
 
+  test("a name in KB_SERVE_HOSTS is accepted, so a reverse proxy can sit in front", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    const { call } = start(store);
+    process.env.KB_SERVE_HOSTS = "kb.example.com, other.example.com";
+    try {
+      expect((await call("GET", "/api/state", undefined, { host: "kb.example.com" })).status).toBe(200);
+      expect((await call("GET", "/api/state", undefined, { host: "evil.example.com" })).status).toBe(403);
+    } finally {
+      delete process.env.KB_SERVE_HOSTS;
+    }
+  });
+
   test("the version changes when a note changes, so an open page reloads", async () => {
     const store = tempStore();
     putNote(store, { id: "a" });

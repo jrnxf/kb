@@ -22,11 +22,19 @@ const json = (value: unknown, status = 200) => Response.json(value, { status, he
 /** The fields a person may change in the page. The rest of a note belongs to the CLI. */
 const EDITABLE = ["title", "kind", "confidence", "body"] as const;
 
+/**
+ * Names a reverse proxy in front of the server may use, from KB_SERVE_HOSTS, split by commas.
+ * Everybody who can open the page under such a name can change notes.
+ */
+function extraHosts(): string[] {
+  return (process.env.KB_SERVE_HOSTS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+}
+
 async function handle(store: Store, token: string, port: number, request: Request): Promise<Response> {
   const url = new URL(request.url);
   // A page on another site can point its own name at 127.0.0.1. The Host header gives that away.
-  const host = request.headers.get("host");
-  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return json({ error: "wrong host" }, 403);
+  const host = request.headers.get("host") ?? "";
+  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}` && !extraHosts().includes(host)) return json({ error: "wrong host" }, 403);
 
   if (request.method === "GET" && url.pathname === "/") {
     return new Response(renderHtml(store, token), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
