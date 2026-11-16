@@ -74,6 +74,11 @@ reverse proxy, name the proxy's host in `KB_SERVE_HOSTS`, split by commas. A nam
 dot, such as `.example.com`, takes that domain and every name under it, so one setting covers a
 proxy that gives each port its own name. Everybody who can open that name can change notes.
 
+The page is a React app in `web/` (Vite, Tailwind and shadcn/ui on Base UI). Its build in `web/dist` is
+committed. After a change to `web/` or `cli/wire.ts`, run `bun install` and `bun run build` in `web/`, and
+commit `web/dist` with the change. A test fails while the build is older than its sources.
+`bun run dev` in `web/` serves the page with hot reload against a `kb serve` on port 4810.
+
 `kb search` finds the notes that have every word of the query, in any order, in the title or the
 body. When no note has every word, it prints the closest notes and says so. Each note is one line
 with its scope, then the body lines that matched. The notes of the current repo come first, then
@@ -89,7 +94,8 @@ Every command accepts `--json`. The CLI knows nothing about Claude Code: only `h
 
 ## Install
 
-Requirements: a recent [Bun](https://bun.sh) (tested with 1.4) and git. There is no install step and no dependency.
+Requirements: a recent [Bun](https://bun.sh) (tested with 1.4) and git. There is no install step and no dependency to install:
+the page of `kb serve` comes built in `web/dist`.
 
 ```bash
 /plugin install kb --marketplace <owner>/<repo>

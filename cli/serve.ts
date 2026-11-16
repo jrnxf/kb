@@ -1,13 +1,18 @@
 // `kb serve`: the store as a local page, where a person can read, edit and archive notes.
-// It listens on this machine only. The page is rendered again on every load.
+// It listens on this machine only. The page is the React app built into web/dist, and it reads
+// the store from /api/page.
 
 import { randomBytes } from "node:crypto";
-import { renderHtml, storeVersion } from "./html.ts";
+import { join, normalize, sep } from "node:path";
+import { pageData, storeVersion } from "./page.ts";
 import { KbError } from "./note.ts";
 import type { Store } from "./store.ts";
 import { moveNotes, requireNote, updateNote } from "./write.ts";
 
 export const DEFAULT_PORT = 4810;
+
+/** The built page. It is committed, so the plugin needs no install step. */
+export const DIST = join(import.meta.dir, "..", "web", "dist");
 
 export interface Served {
   url: string;
@@ -48,10 +53,10 @@ async function handle(store: Store, token: string, port: number, request: Reques
   const host = request.headers.get("host") ?? "";
   if (!allowedHost(host, port)) return json({ error: "wrong host" }, 403);
 
-  if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/") {
-    return new Response(renderHtml(store, token), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
-  }
   if (request.method === "GET" && url.pathname === "/api/state") return json({ kb: true, version: storeVersion(store) });
+  // Another site cannot read this answer, so it cannot learn the token.
+  if (request.method === "GET" && url.pathname === "/api/page") return json(pageData(store, token));
+  if ((request.method === "GET" || request.method === "HEAD") && !url.pathname.startsWith("/api/")) return staticFile(url.pathname);
 
   const match = url.pathname.match(/^\/api\/notes\/([a-z0-9-]+)(?:\/(archive|restore))?$/);
   if (!match) return json({ error: "not found" }, 404);
@@ -77,6 +82,21 @@ async function handle(store: Store, token: string, port: number, request: Reques
     return json(updateNote(store, input, { scope: null, head: null }));
   }
   return json({ error: "not found" }, 404);
+}
+
+/** The page at /, and the files of the built page. The page keeps its view in the hash, so it has no other paths. */
+async function staticFile(pathname: string): Promise<Response> {
+  if (pathname === "/") {
+    const page = Bun.file(join(DIST, "index.html"));
+    if (!(await page.exists())) return json({ error: "the page is not built. Run `bun run build` in web/." }, 500);
+    return new Response(page, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+  }
+  const path = normalize(join(DIST, decodeURIComponent(pathname)));
+  const file = Bun.file(path);
+  if (!path.startsWith(DIST + sep) || path.endsWith(sep + "index.html") || !(await file.exists())) return json({ error: "not found" }, 404);
+  // Vite puts a hash of the content in each asset's name, so an asset never changes.
+  const cache = pathname.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache";
+  return new Response(file, { headers: { "cache-control": cache } });
 }
 
 export function serve(store: Store, options: { port?: number } = {}): Served {
