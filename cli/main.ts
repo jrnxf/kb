@@ -31,6 +31,7 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb checkpointed <session-id>           record that this session saved its knowledge
   kb scope [--repo .]                    print the scope id of a directory
   kb serve [--port n] [--no-open]        the store as a local page: read, edit and archive notes
+                                         kb alone in a terminal does the same
   kb sync                                commit, pull and push the store
 
 Every command accepts --json. The store is ~/.kb, or KB_HOME.
@@ -339,11 +340,13 @@ async function main(): Promise<number> {
     const [command, ...rest] = process.argv.slice(2);
     const args = parseArgs(rest);
     json = args.flags.has("json");
+    const store = new Store();
+    // A person who types only `kb` in a terminal wants to see the notes. A script gets the help.
+    if (!command && process.stdout.isTTY && store.exists()) await cmdServe(store, args, json);
     if (!command || command === "help" || args.flags.has("help")) {
       console.log(USAGE);
       return 0;
     }
-    const store = new Store();
     let out: Output;
     switch (command) {
       case "context": out = cmdContext(store, args); break;

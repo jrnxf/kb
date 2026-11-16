@@ -122,7 +122,7 @@ kbd { font:11px var(--mono); border:1px solid var(--line); border-radius:4px; pa
 .row .dot { position:relative; top:-2px; }
 .row .title { flex:1; min-width:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .row:hover { background:var(--hover); }
-.row[aria-current=true] { background:var(--hover); font-weight:550; }
+.row[aria-current=true] { background:var(--hover); }
 .row.archived .title { color:var(--muted); }
 /* The pane that has the keys marks its current item a little more. */
 body[data-pane=list] .row[aria-current=true], body[data-pane=rail] .item.cur { background:var(--sel); box-shadow:inset 0 0 0 1px var(--ring); color:var(--fg); }
@@ -138,6 +138,11 @@ article { max-width:660px; }
 .acts button, .form button { padding:3px 9px; border-radius:6px; font-size:12.5px; color:var(--muted); box-shadow:inset 0 0 0 1px var(--line); }
 .acts button:hover, .form button:hover { background:var(--hover); color:var(--fg); }
 .acts kbd, .form kbd { margin-left:4px; border:0; padding:0; color:var(--faint); }
+/* The buttons of the note are brighter while their keys work, which is while the keys are in the list. */
+body[data-pane=list] .acts button { color:var(--fg); }
+body[data-pane=list] .acts kbd { color:var(--muted); }
+body[data-pane=rail] .acts button, body[data-pane=rail] .acts kbd { color:var(--faint); }
+body[data-pane] .acts button:hover { color:var(--fg); }
 .form { display:grid; gap:14px; max-width:660px; }
 .form label { display:grid; gap:5px; font-size:12px; color:var(--muted); }
 .form input, .form select, .form textarea { width:100%; padding:8px 10px; font:inherit; color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:8px; outline:0; }
@@ -146,8 +151,12 @@ article { max-width:660px; }
 .form select { appearance:none; -webkit-appearance:none; padding-right:34px; background:var(--card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238a8a84' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E") no-repeat right 12px center / 12px; }
 .form textarea { min-height:260px; font:13.5px/1.6 var(--mono); resize:vertical; }
 .form .pair { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-.form .end { display:flex; align-items:center; gap:8px; }
-.form .error { color:var(--k-gotcha); font-size:13px; }
+.form .end { display:flex; align-items:center; justify-content:flex-end; gap:8px; }
+.form .end button { padding:5px 12px; font-size:13px; }
+.form .end button[type=submit] { background:var(--fg); color:var(--bg); box-shadow:none; }
+.form .end button[type=submit]:hover { background:var(--fg); color:var(--bg); opacity:0.88; }
+.form .end kbd { margin-left:7px; font:12px ui-sans-serif, system-ui, sans-serif; letter-spacing:0.08em; color:inherit; opacity:0.55; }
+.form .error { margin-right:auto; color:var(--k-gotcha); font-size:13px; }
 .toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); display:flex; align-items:center; gap:10px; padding:8px 14px; font-size:13px; background:var(--card); border:1px solid var(--ring); border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,0.18); }
 .toast button { color:var(--muted); } .toast button:hover { color:var(--fg); }
 article h2 { font-size:24px; line-height:1.25; letter-spacing:-0.015em; margin:0 0 14px; overflow-wrap:anywhere; }
@@ -300,7 +309,7 @@ async function edit() {
     el("label", null, "Title", el("input", { name: "title", value: note.title, autocomplete: "off" })),
     el("div", { className: "pair" }, el("label", null, "Kind", select("kind", kinds, note.kind)), el("label", null, "Confidence", select("confidence", ["high", "medium", "low"], note.confidence))),
     el("label", null, "Body, in Markdown", el("textarea", { name: "body", value: note.body, spellcheck: true })),
-    el("div", { className: "end" }, el("button", { type: "submit" }, "Save", el("kbd", null, MAC ? "⌘ ↵" : "ctrl enter")), el("button", { type: "button", onclick: closeForm }, "Cancel", el("kbd", null, "esc")), error));
+    el("div", { className: "end" }, error, el("button", { type: "button", onclick: closeForm }, "Cancel", el("kbd", null, "esc")), el("button", { type: "submit" }, "Save", el("kbd", null, MAC ? "⌘↵" : "ctrl enter"))));
   form.onsubmit = async (event) => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(form));
@@ -443,7 +452,7 @@ export function renderHtml(store: Store, token: string): string {
   const item = (attrs: string, name: string, cls = "") => `<button class="item${cls}" ${attrs} aria-pressed="false" tabindex="-1">${name}<span class="num"></span></button>`;
   const rail = [
     "<h3>Scopes</h3>",
-    item('data-scope="*"', '<span class="name">All notes</span>'),
+    item('data-scope="*"', '<span class="name">all notes</span>'),
     ...scopes.map((scope) => item(`data-scope="${esc(scope)}" title="${esc(scope)}"`, `<span class="name">${esc(scopeName(scope))}</span>`)),
     "<h3>Kinds</h3>",
     ...KINDS.map((kind) => item(`data-kind="${kind}"`, `<span class="dot"></span><span class="name">${kind}</span>`, ` k-${kind}`)),

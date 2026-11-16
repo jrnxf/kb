@@ -60,7 +60,7 @@ kb scope [--repo .]          kb serve     (local page: read, edit and archive no
 kb sync                      kb checkpointed <session-id>
 ```
 
-`kb serve` opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
+`kb serve`, or `kb` alone in a terminal, opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
 list, and the open note. The arrow keys move through the sidebar and the list. `e` edits the open
 note and `a` archives it. Each change goes through the same code as the CLI, so it is validated, committed and
 synced. The server listens on this machine only, and stops with Ctrl+C. To reach it through a
