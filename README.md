@@ -127,8 +127,12 @@ git clone <your-private-repo-url> ~/.kb
 ## Develop
 
 ```bash
-bun install && bun test && bun run typecheck && claude plugin validate .
+bun install && bunx playwright install chromium-headless-shell
+bun test && bun run typecheck && claude plugin validate .
 ```
+
+`test/keys.test.ts` presses the page's keys in a headless Chromium, at desktop and phone width.
+The `playwright install` step downloads that browser once.
 
 To try a change on a store that looks like months of use (about 150 invented notes, 9 repos):
 
