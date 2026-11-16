@@ -244,8 +244,9 @@ export function App() {
       toast((error as Error).message, { id: "kb" });
       return;
     }
-    setView((v) => ({ ...v, note: id }));
+    // The list has the note again before it is selected. Else the first row is selected for a frame.
     await refresh();
+    setView((v) => ({ ...v, note: id }));
   }
 
   function edit() {
