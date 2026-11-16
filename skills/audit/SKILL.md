@@ -3,6 +3,8 @@ name: audit
 description: Check the kb notes of this repo for stale, duplicate and over-budget entries, propose changes, and apply the ones the user accepts. Run only when the user types /kb:audit.
 disable-model-invocation: true
 allowed-tools: Bash(kb *)
+model: opus
+effort: medium
 ---
 
 # kb audit
