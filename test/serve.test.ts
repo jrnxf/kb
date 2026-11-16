@@ -35,10 +35,10 @@ describe("the page", () => {
   test("an archived note is on the page, read-only, behind a toggle that only shows when there is one", () => {
     const store = tempStore();
     putNote(store, { id: "live" });
-    expect(renderHtml(store, "t")).not.toContain("data-archived");
+    expect(renderHtml(store, "t")).toContain('data-archived aria-pressed="false" tabindex="-1" hidden>');
     putNote(store, { id: "old", title: "An old note" }, true);
     const page = renderHtml(store, "t");
-    expect(page).toContain("data-archived");
+    expect(page).toContain('data-archived aria-pressed="false" tabindex="-1"><span');
     expect(page).toMatch(/class="row k-\w+ archived"[^>]*>.*An old note/);
     const article = (id: string) => page.slice(page.indexOf(`<article id="n-`, page.indexOf(`data-id="${id}" hidden`) - 60)).split("</article>")[0]!;
     expect(article("old")).toContain('data-act="restore"');

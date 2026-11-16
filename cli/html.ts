@@ -57,7 +57,7 @@ function articleHtml(note: StoredNote, n: number, usage: Map<string, Usage>): st
   const anchors = note.anchors.length > 0 ? `<p class="anchors">${note.anchors.map((a) => `<code>${esc(a)}</code>`).join(" ")}</p>` : "";
   // An archived note is read-only until it is restored.
   const acts = note.archived
-    ? `<button data-act="restore">Restore ${KEY("a")}</button>`
+    ? `<button data-act="restore">Restore ${KEY("r")}</button>`
     : `<button data-act="edit">Edit ${KEY("e")}</button><button data-act="archive">Archive ${KEY("a")}</button>`;
   return `<article id="n-${n}" class="k-${note.kind}" data-id="${esc(note.id)}" hidden>
 <p class="crumb"><span class="dot"></span><span class="kind">${note.kind}</span><span class="scope">${scopeLabel(note.scope)}</span><span class="acts">${acts}</span></p>
@@ -100,7 +100,7 @@ h1 { font-size:20px; margin:0; letter-spacing:-0.01em; }
 .item .num { font-size:12px; font-weight:400; }
 .item.zero { opacity:0.4; }
 /* The key of a kind sits next to its name, so the count at the right edge stays the only number there. */
-.item kbd { flex:none; margin-right:auto; padding:0 4px; font-weight:400; color:var(--faint); }
+.item kbd { flex:none; margin:0 auto 0 8px; }
 .item:has(kbd) .name { flex:0 1 auto; }
 .sep { height:1px; margin:6px 8px; border:0; background:var(--line); }
 .foot { display:flex; gap:2px; margin-top:auto; padding:20px 2px 0; }
@@ -109,7 +109,9 @@ h1 { font-size:20px; margin:0; letter-spacing:-0.01em; }
 .tool svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
 .theme svg { display:none; }
 :root:not([data-theme]) .theme .system, :root[data-theme=light] .theme .light, :root[data-theme=dark] .theme .dark { display:block; }
-kbd { font:11px var(--mono); border:1px solid var(--line); border-radius:4px; padding:1px 5px; color:var(--muted); }
+/* A key, as shadcn's Kbd draws it. Each key of a combination is its own kbd, side by side. */
+kbd { display:inline-flex; align-items:center; justify-content:center; height:20px; min-width:20px; padding:0 4px; border-radius:4px; font:500 12px/1 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--muted); background:var(--sel); pointer-events:none; user-select:none; -webkit-user-select:none; }
+.keys { display:inline-flex; align-items:center; gap:4px; }
 
 .list { border-right:1px solid var(--line); }
 .top { position:sticky; top:0; z-index:1; background:var(--bg); padding:24px 16px 8px; }
@@ -146,19 +148,17 @@ article { max-width:660px; }
 .crumb a { color:inherit; text-decoration:none; }
 .crumb a:hover { color:var(--fg); text-decoration:underline; }
 .acts { display:flex; gap:6px; margin-left:auto; }
-.acts button, .form button { padding:3px 9px; border-radius:6px; font-size:12.5px; color:var(--muted); box-shadow:inset 0 0 0 1px var(--line); }
+.acts button, .form button { display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border-radius:6px; font-size:12.5px; color:var(--muted); box-shadow:inset 0 0 0 1px var(--line); }
+.acts button:has(kbd), .form button:has(kbd) { padding:3px 3px 3px 9px; }
 .acts button:hover, .form button:hover { background:var(--hover); color:var(--fg); }
-.acts kbd, .form kbd { margin-left:4px; border:0; padding:0; color:var(--faint); }
 /* The buttons of the note are brighter while their keys work, which is while the keys are in the list. */
 body[data-pane=list] .acts button { color:var(--fg); }
-body[data-pane=list] .acts kbd { color:var(--muted); }
 body[data-pane=rail] .acts button, body[data-pane=rail] .acts kbd { color:var(--faint); }
 body[data-pane] .acts button:hover { color:var(--fg); }
 .form { display:grid; gap:14px; max-width:660px; }
 .form label { display:grid; gap:5px; font-size:12px; color:var(--muted); }
 .form input, .form select, .form textarea { width:100%; padding:8px 10px; font:inherit; color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:8px; outline:0; }
 .form input:focus, .form select:focus, .form textarea:focus { border-color:var(--faint); }
-.form input { font-size:17px; font-weight:600; }
 .form select { appearance:none; -webkit-appearance:none; padding-right:34px; background:var(--card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238a8a84' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E") no-repeat right 12px center / 12px; }
 .form textarea { min-height:260px; font:13.5px/1.6 var(--mono); resize:vertical; }
 .form .pair { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
@@ -166,16 +166,17 @@ body[data-pane] .acts button:hover { color:var(--fg); }
 .form .end button { padding:5px 12px; font-size:13px; }
 .form .end button[type=submit] { background:var(--fg); color:var(--bg); box-shadow:none; }
 .form .end button[type=submit]:hover { background:var(--fg); color:var(--bg); opacity:0.88; }
-.form .end kbd { margin-left:7px; font:12px ui-sans-serif, system-ui, sans-serif; letter-spacing:0.08em; color:inherit; opacity:0.55; }
+/* On the dark Save button the keys take a see-through ground, as shadcn's Kbd does in a dark tooltip. */
+.form .end button[type=submit] kbd { color:inherit; background:color-mix(in srgb, var(--bg) 22%, transparent); }
 .form .error { margin-right:auto; color:var(--k-gotcha); font-size:13px; }
 .toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); display:flex; align-items:center; gap:10px; padding:8px 14px; font-size:13px; background:var(--card); border:1px solid var(--ring); border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,0.18); }
 .toast button { color:var(--muted); } .toast button:hover { color:var(--fg); }
+.toast button { display:inline-flex; align-items:center; gap:6px; }
 .help { width:min(340px, calc(100vw - 32px)); margin:auto; outline:0; padding:18px 20px 20px; color:var(--fg); background:var(--card); border:1px solid var(--ring); border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,0.28); }
 .help::backdrop { background:rgba(0,0,0,0.4); }
 .help header { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:12px; font:600 13px var(--mono); }
-.help header kbd { font-weight:400; }
 .help dl { display:grid; grid-template-columns:auto 1fr; gap:9px 16px; margin:0; font-size:13.5px; }
-.help dt { display:flex; gap:4px; align-items:center; }
+.help dt { display:flex; gap:4px; align-items:center; color:var(--muted); font-size:12px; }
 .help dd { margin:0; color:var(--muted); }
 article h2 { font-size:24px; line-height:1.25; letter-spacing:-0.015em; margin:0 0 14px; overflow-wrap:anywhere; }
 .meta { display:flex; flex-wrap:wrap; gap:4px 14px; color:var(--muted); font-size:12.5px; margin:0 0 20px; padding-bottom:16px; border-bottom:1px solid var(--line); }
@@ -211,7 +212,8 @@ pre code { padding:0; background:none; }
   .read { --bleed:64px; position:fixed; left:0; right:0; bottom:calc(-1 * var(--bleed)); z-index:3; height:calc(82vh + var(--bleed)); height:calc(82dvh + var(--bleed)); padding:0 16px calc(60px + var(--bleed)); overflow-y:auto; overscroll-behavior:contain; background:var(--bg); border-radius:14px 14px 0 0; box-shadow:0 -1px 0 var(--line), 0 -10px 40px rgba(0,0,0,0.35); transform:translate3d(0,100%,0); visibility:hidden; will-change:transform; }
   .read.anim, .scrim.anim, .behind.anim { transition:transform 450ms cubic-bezier(0.32,0.72,0,1), opacity 450ms cubic-bezier(0.32,0.72,0,1), clip-path 450ms cubic-bezier(0.32,0.72,0,1); }
   /* Behind an open drawer the list shrinks back from the edges, as in Vaul. The script sets its scale. */
-  .behind { display:block; background:var(--bg); }
+  /* At least a screen tall: while the drawer moves the page is black, and a short list must still cover it. */
+  .behind { display:block; min-height:100dvh; background:var(--bg); }
   body[data-reading], body.closing { background:#000; }
   body[data-reading] { overflow:hidden; }
   body[data-reading] .scrim { pointer-events:auto; }
@@ -223,7 +225,7 @@ pre code { padding:0; background:none; }
 }
 /* A screen without a keyboard does not show the keys. */
 @media (hover:none) and (pointer:coarse) {
-  .acts kbd, .form kbd, .search kbd, .item kbd, #keys { display:none; }
+  .acts kbd, .form kbd, .search kbd, .item kbd, .toast kbd, .toast .keys, #keys { display:none; }
 }
 `;
 
@@ -232,7 +234,8 @@ const SCRIPT = String.raw`
 const q = document.getElementById("q"), read = document.getElementById("read"), where = document.getElementById("where"), none = document.getElementById("none"), clear = document.getElementById("clear");
 const rows = [...document.querySelectorAll(".row")], items = [...document.querySelectorAll(".item")], articles = [...document.querySelectorAll("article")];
 const kinds = items.filter((i) => i.dataset.kind).map((i) => i.dataset.kind);
-const TOKEN = document.body.dataset.token, VERSION = document.body.dataset.version;
+const TOKEN = document.body.dataset.token;
+let version = document.body.dataset.version;
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform), themeButton = document.getElementById("theme"), help = document.getElementById("help");
 const state = { scope: null, kinds: new Set(), archived: false };
 // cursor: where the keys are in the sidebar. held: the scope to go back to when the cursor walks past the scopes.
@@ -245,6 +248,8 @@ const reading = () => document.body.dataset.reading !== undefined;
 // The drawer on a phone. y is how far it is moved down from open: 0 is open, its height is closed.
 const scrim = document.getElementById("scrim"), bar = read.querySelector(".back"), behind = document.getElementById("behind");
 let drag = null, closeMs = 0;
+// The longest the drawer takes to close.
+const CLOSE_MS = 500;
 const BLEED = 64;
 /** ms sets a shorter slide, after a fast flick. */
 function place(y, animate, ms) {
@@ -286,7 +291,7 @@ function closeNote() {
   document.body.classList.add("closing");
   place(read.offsetHeight, true, closeMs);
   closeMs = 0;
-  setTimeout(() => { if (reading()) return; document.body.classList.remove("closing"); behind.classList.remove("anim"); unplace(); }, 500);
+  setTimeout(() => { if (reading()) return; document.body.classList.remove("closing"); behind.classList.remove("anim"); unplace(); }, CLOSE_MS);
   remember();
 }
 /** Close the note. When the note has its own history entry, going back closes it, as the gesture does. */
@@ -359,12 +364,13 @@ function show(row, scroll) {
   read.scrollTop = 0;
 }
 function render() {
+  if (!rows.some((r) => r.classList.contains("archived"))) state.archived = false;
   const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
   const byScope = new Map(), byKind = new Map();
   let anyScope = 0;
   shown = [];
   for (const row of rows) {
-    const base = words.every((w) => row.dataset.search.includes(w)) && (state.archived || !row.classList.contains("archived"));
+    const base = words.every((w) => row.dataset.search.includes(w)) && state.archived === row.classList.contains("archived");
     const inScope = !state.scope || row.dataset.scope === state.scope, inKind = state.kinds.size === 0 || state.kinds.has(row.dataset.kind);
     if (base && inKind) { anyScope++; byScope.set(row.dataset.scope, (byScope.get(row.dataset.scope) || 0) + 1); }
     if (base && inScope) byKind.set(row.dataset.kind, (byKind.get(row.dataset.kind) || 0) + 1);
@@ -372,7 +378,13 @@ function render() {
     if (!row.hidden) shown.push(row);
   }
   for (const item of items) {
-    if (item.dataset.archived !== undefined) { item.setAttribute("aria-pressed", state.archived); continue; }
+    if (item.dataset.archived !== undefined) {
+      const count = rows.filter((r) => r.classList.contains("archived")).length;
+      item.querySelector(".num").textContent = count;
+      item.hidden = document.getElementById("archived-sep").hidden = count === 0;
+      item.setAttribute("aria-pressed", state.archived);
+      continue;
+    }
     const count = isScope(item) ? (item.dataset.scope === "*" ? anyScope : byScope.get(item.dataset.scope) || 0) : byKind.get(item.dataset.kind) || 0;
     item.querySelector(".num").textContent = count;
     item.classList.toggle("zero", count === 0);
@@ -416,24 +428,35 @@ function step(list, from, by) { return list[Math.max(0, Math.min(list.length - 1
 
 // ---- changes: every one goes to the server, then the page loads again ----
 
-async function api(method, path, body) {
-  const response = await fetch(path, { method, headers: { "content-type": "application/json", "x-kb-token": TOKEN }, body: body ? JSON.stringify(body) : undefined });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "kb answered " + response.status);
-  return data;
+// changing: changes made in this page that are still on the way. made: a count of every change
+// this page started. The check for outside changes skips a turn when either says the page changed it.
+let changing = 0, made = 0;
+async function busy(run) {
+  changing++; made++;
+  try { return await run(); } finally { changing--; }
 }
+function api(method, path, body) {
+  return busy(async () => {
+    const response = await fetch(path, { method, headers: { "content-type": "application/json", "x-kb-token": TOKEN }, body: body ? JSON.stringify(body) : undefined });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "kb answered " + response.status);
+    return data;
+  });
+}
+/** A key combination, one kbd per key: ⌘ and Z on a Mac, ctrl and Z elsewhere. */
+const combo = (key) => el("span", { className: "keys" }, el("kbd", null, MAC ? "⌘" : "ctrl"), el("kbd", null, key));
 function el(tag, props, ...children) {
   const node = Object.assign(document.createElement(tag), props || {});
   node.append(...children);
   return node;
 }
-function toast(text, action, run) {
+function toast(text, action, run, ms = 7000) {
   const old = document.querySelector(".toast");
   if (old) old.remove();
   const node = el("div", { className: "toast" }, text);
-  if (action) node.append(el("button", { type: "button", onclick: run }, action));
+  if (action) node.append(el("button", { type: "button", onclick: run }, ...action));
   document.body.append(node);
-  setTimeout(() => node.remove(), 7000);
+  setTimeout(() => node.remove(), ms);
 }
 function closeForm() {
   if (!form) return;
@@ -451,41 +474,80 @@ async function edit() {
   form = el("form", { className: "form" },
     el("label", null, "Title", el("input", { name: "title", value: note.title, autocomplete: "off" })),
     el("div", { className: "pair" }, el("label", null, "Kind", select("kind", kinds, note.kind)), el("label", null, "Confidence", select("confidence", ["high", "medium", "low"], note.confidence))),
-    el("label", null, "Body, in Markdown", el("textarea", { name: "body", value: note.body, spellcheck: true })),
-    el("div", { className: "end" }, error, el("button", { type: "button", onclick: closeForm }, "Cancel", el("kbd", null, "esc")), el("button", { type: "submit" }, "Save", el("kbd", null, MAC ? "⌘↵" : "ctrl enter"))));
+    el("label", null, "Body", el("textarea", { name: "body", value: note.body, spellcheck: true })),
+    el("div", { className: "end" }, error, el("button", { type: "button", onclick: closeForm }, "Cancel", el("kbd", null, "esc")), el("button", { type: "submit" }, "Save", combo(MAC ? "↵" : "enter"))));
   form.onsubmit = async (event) => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(form));
     try {
       await api("PUT", "/api/notes/" + note.id, data);
-      location.reload();
+      await swapNote(note.id);
     } catch (problem) { error.textContent = problem.message; }
   };
   for (const child of host.children) child.hidden = true;
   host.append(form);
   form.elements.body.focus();
 }
-/** Archive the open note, or restore it when it is archived. An archive can be undone from the next page. */
-async function archive() {
+/**
+ * Puts a changed note into the page in place, so a change does not load the whole page again and flicker.
+ * The row and the article keep their elements, and so their place and their number.
+ * The page takes the new version, so the check for changes does not load the page again for this change.
+ */
+async function swapNote(id) {
+  const fresh = new DOMParser().parseFromString(await busy(async () => (await fetch("/")).text()), "text/html");
+  const freshRow = [...fresh.querySelectorAll(".row")].find((r) => r.dataset.id === id);
+  const freshArticle = [...fresh.querySelectorAll("article")].find((a) => a.dataset.id === id);
+  const row = rows.find((r) => r.dataset.id === id), host = row && document.getElementById("n-" + row.dataset.n);
+  if (!freshRow || !freshArticle || !row || !host) return location.reload();
+  if (form) closeForm();
+  row.className = freshRow.className;
+  for (const key of ["kind", "search"]) row.dataset[key] = freshRow.dataset[key];
+  row.innerHTML = freshRow.innerHTML;
+  host.className = freshArticle.className;
+  host.innerHTML = freshArticle.innerHTML;
+  version = fresh.body.dataset.version;
+  render();
+}
+// The note of the last archive, while its toast still offers the undo.
+let undoId = null, undoTimer = 0;
+const UNDO_MS = 5000;
+/**
+ * Archive the open note, or restore it with restore set. Each works only on a note it fits.
+ * The note leaves the list in place, and a toast offers the undo of an archive.
+ */
+async function archive(restore = false) {
   const host = article();
-  if (!host || form) return;
-  const restore = !!host.querySelector("[data-act=restore]");
+  if (!host || form || !host.querySelector(restore ? "[data-act=restore]" : "[data-act=archive]")) return;
+  const id = host.dataset.id;
   try {
-    await api("POST", "/api/notes/" + host.dataset.id + (restore ? "/restore" : "/archive"));
+    await api("POST", "/api/notes/" + id + (restore ? "/restore" : "/archive"));
   } catch (error) { return toast(error.message); }
-  if (!restore) sessionStorage.setItem("kb-undo", host.dataset.id);
-  // Land on the next note in the list, or the one before when this was the last.
-  const next = shown[shown.indexOf(current) + 1] || shown[shown.indexOf(current) - 1];
-  remember(restore || state.archived ? host.dataset.id : next ? next.dataset.id : "");
-  location.reload();
+  // The note leaves the list it is in: the live list for an archive, the archive for a restore.
+  if (restore === state.archived) {
+    // On a phone the drawer closes first, with the archived note still in it. The list changes after.
+    if (PHONE.matches && reading()) {
+      back();
+      await new Promise((done) => setTimeout(done, CLOSE_MS));
+    }
+    // Land on the next note in the list, or the one before when this was the last.
+    current = shown[shown.indexOf(current) + 1] || shown[shown.indexOf(current) - 1] || null;
+  }
+  await swapNote(id);
+  if (restore) return;
+  undoId = id;
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => (undoId = null), UNDO_MS);
+  toast("Archived.", ["Undo", combo("Z")], undo, UNDO_MS);
 }
 async function undo() {
-  const id = sessionStorage.getItem("kb-undo");
+  const id = undoId;
   if (!id) return;
-  sessionStorage.removeItem("kb-undo");
+  undoId = null;
+  clearTimeout(undoTimer);
+  document.querySelector(".toast")?.remove();
   try { await api("POST", "/api/notes/" + id + "/restore"); } catch (error) { return toast(error.message); }
-  remember(id);
-  location.reload();
+  current = rows.find((r) => r.dataset.id === id) || current;
+  await swapNote(id);
 }
 
 q.addEventListener("input", render);
@@ -510,7 +572,7 @@ document.addEventListener("click", (event) => {
   } else if (act) {
     pane = "list";
     paint();
-    if (act.dataset.act === "edit") edit(); else archive();
+    if (act.dataset.act === "edit") edit(); else archive(act.dataset.act === "restore");
   } else if (item) {
     pane = "rail"; cursor = item;
     activate(item);
@@ -526,6 +588,12 @@ document.addEventListener("keydown", (event) => {
   if (form) {
     if (key === "Escape") closeForm();
     else if (key === "Enter" && (MAC ? event.metaKey : event.ctrlKey)) form.requestSubmit();
+    return;
+  }
+  // ⌘Z undoes an archive while its toast shows. In the filter it stays the field's own undo.
+  if (key.toLowerCase() === "z" && (MAC ? event.metaKey : event.ctrlKey) && !event.shiftKey && undoId && document.activeElement !== q) {
+    event.preventDefault();
+    undo();
     return;
   }
   if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -554,13 +622,19 @@ document.addEventListener("keydown", (event) => {
     else if (isScope(was)) { state.scope = held; render(); }
     cursor.scrollIntoView({ block: "nearest" });
   } else if ((key === "Enter" || key === " ") && pane === "rail") activate(cursor);
+  // On a phone the note is in a drawer. Enter or space on a row opens it, as a tap does. In the open drawer space scrolls.
+  else if ((key === "Enter" || key === " ") && pane === "list" && PHONE.matches && current && !reading()) openNote(true);
   // The note has no keys of its own. Space pages through it from the list.
   else if (key === " ") read.scrollBy({ top: (event.shiftKey ? -0.8 : 0.8) * read.clientHeight });
-  else if (key === "e" && pane === "list") edit();
+  else if (key === "e" && pane === "list") {
+    // On a phone the form is in the drawer, so the drawer opens with it.
+    if (PHONE.matches && current && !reading()) openNote(true);
+    edit();
+  }
   else if (key === "a" && pane === "list") archive();
+  else if (key === "r" && pane === "list") archive(true);
   else if (key === "t") nextTheme();
   else if (key === "?") toggleHelp();
-  else if (key === "u" && sessionStorage.getItem("kb-undo")) undo();
   else if (kinds[Number(key) - 1]) { toggleKind(kinds[Number(key) - 1]); render(); }
   else return;
   event.preventDefault();
@@ -571,7 +645,7 @@ document.addEventListener("keydown", (event) => {
 const view = new URLSearchParams(location.hash.slice(1));
 if (items.some((i) => i.dataset.scope === view.get("scope"))) state.scope = view.get("scope");
 for (const kind of (view.get("kind") || "").split(",")) if (kinds.includes(kind)) state.kinds.add(kind);
-state.archived = view.has("archived") && items.some((i) => i.dataset.archived !== undefined);
+state.archived = view.has("archived") && rows.some((r) => r.classList.contains("archived"));
 q.value = view.get("q") || "";
 current = rows.find((r) => r.dataset.id === view.get("note")) || null;
 if (view.get("pane") === "rail") pane = "rail";
@@ -580,22 +654,21 @@ addEventListener("popstate", () => { if (!(history.state && history.state.readin
 PHONE.addEventListener("change", () => { if (!PHONE.matches) { closeNote(); unplace(); } });
 
 setTheme(document.documentElement.dataset.theme || "system");
+// The list of keys is written with the Mac key. Other systems undo with ctrl.
+if (!MAC) for (const k of help.querySelectorAll("kbd")) if (k.textContent === "⌘") k.textContent = "ctrl";
 cursor = scopeItem(); held = state.scope;
 render();
 // A reload, after an edit or a change by an agent, keeps the open note open.
 if (view.has("read") && PHONE.matches) openNote(false);
 // On a phone the scopes are one row that scrolls sideways. Start with the picked scope in view.
 cursor.parentElement.scrollLeft = cursor.offsetLeft - cursor.parentElement.offsetLeft - (cursor.parentElement.clientWidth - cursor.offsetWidth) / 2;
-if (sessionStorage.getItem("kb-undo")) {
-  toast("Archived.", "Undo (u)", undo);
-  setTimeout(() => sessionStorage.removeItem("kb-undo"), 7000);
-}
 // A note that an agent adds or changes shows without a manual reload. An open form is never thrown away.
 setInterval(async () => {
-  if (document.hidden || form) return;
+  if (document.hidden || form || changing) return;
+  const before = made;
   try {
     const now = await (await fetch("/api/state")).json();
-    if (now.version !== VERSION) location.reload();
+    if (made === before && !changing && now.version !== version) location.reload();
   } catch {}
 }, 3000);
 `;
@@ -629,7 +702,9 @@ export function renderHtml(store: Store, token: string): string {
     '</div>\n<div class="strip">\n<h3>Kinds</h3>',
     // The number is the key that turns the kind on or off.
     ...KINDS.map((kind, i) => item(`data-kind="${kind}"`, `<span class="dot"></span><span class="name">${kind}</span>${KEY(String(i + 1))}`, ` k-${kind}`)),
-    ...(archived.length > 0 ? [SEP, `<button class="item" data-archived aria-pressed="false" tabindex="-1"><span class="name">archived</span><span class="num">${archived.length}</span></button>`] : []),
+    // The archive is always in the page, so an archive made in the page can show it. It hides while it is empty.
+    `<hr class="sep" id="archived-sep"${archived.length === 0 ? " hidden" : ""}>`,
+    `<button class="item" data-archived aria-pressed="false" tabindex="-1"${archived.length === 0 ? " hidden" : ""}><span class="name">archived</span><span class="num">${archived.length}</span></button>`,
     "</div>",
   ].join("\n");
 
@@ -640,9 +715,11 @@ export function renderHtml(store: Store, token: string): string {
     [["1", String(KINDS.length)], "kinds on or off"],
     [["/"], "filter"],
     [["space"], "scroll the note"],
+    [["enter"], "open the note on a narrow screen, as space does"],
     [["e"], "edit"],
-    [["a"], "archive or restore"],
-    [["u"], "undo an archive"],
+    [["a"], "archive"],
+    [["r"], "restore an archived note"],
+    [["⌘", "Z"], "undo an archive"],
     [["t"], "theme"],
     [["?"], "this list"],
   ];
