@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && bun run --cwd web typecheck",
+    "build": "bun run --cwd web build"
   },
   "devDependencies": {
     "@types/bun": "latest",

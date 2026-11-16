@@ -1,0 +1,472 @@
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import type { NoteEdit, PageData, PageNote } from "../../cli/wire.ts";
+import { Combo } from "@/components/bits";
+import { KeysDialog } from "@/components/keys-dialog";
+import { NoteForm } from "@/components/note-form";
+import { NoteList } from "@/components/note-list";
+import { NoteView } from "@/components/note-view";
+import { Rail, type RailItem } from "@/components/rail";
+import { Drawer, DrawerContent, DrawerIndent, DrawerIndentBackground, DrawerProvider, DrawerSwipeHandle, DrawerTitle } from "@/components/ui/drawer";
+import { Toaster } from "@/components/ui/sonner";
+import { MAC, PHONE, useMedia } from "@/hooks/use-media";
+import { useTheme } from "@/hooks/use-theme";
+import * as api from "@/lib/api";
+import { cn } from "@/lib/utils";
+import { fromHash, neighbour, scopesOf, show, toHash, type View } from "@/lib/view";
+
+/** The longest the drawer takes to close. */
+const CLOSE_MS = 450;
+const UNDO_MS = 5000;
+const POLL_MS = 3000;
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+export function App() {
+  const [data, setData] = useState<PageData | null>(null);
+  const [failed, setFailed] = useState("");
+  const [view, setView] = useState<View>(() => fromHash(location.hash));
+  const [editing, setEditing] = useState(false);
+  const [help, setHelp] = useState(false);
+  const [cursor, setCursor] = useState<string | null>(null);
+  // The scope to go back to when the cursor walks on from the scopes into the kinds.
+  const held = useRef<string | null>(view.scope);
+  const undoId = useRef<string | null>(null);
+  const search = useRef<HTMLInputElement>(null);
+  const reader = useRef<HTMLDivElement>(null);
+  const indent = useRef<HTMLDivElement>(null);
+  const phone = useMedia(PHONE);
+  const { theme, resolved, next: nextTheme } = useTheme();
+
+  // changing: changes made in this page that are still on the way. made: every change this page
+  // started. The check for outside changes skips a turn when either says the page changed it.
+  const changing = useRef(0), made = useRef(0);
+  const busy = useCallback(async <T,>(run: () => Promise<T>): Promise<T> => {
+    changing.current++;
+    made.current++;
+    try {
+      return await run();
+    } finally {
+      changing.current--;
+    }
+  }, []);
+  const refresh = useCallback(() => busy(api.loadPage).then(setData), [busy]);
+
+  useEffect(() => {
+    api.loadPage().then(setData, (error: Error) => setFailed(error.message));
+  }, []);
+
+  // A note that an agent adds or changes shows without a reload.
+  const version = data?.version;
+  useEffect(() => {
+    if (!version) return;
+    const timer = setInterval(async () => {
+      if (document.hidden || changing.current) return;
+      const before = made.current;
+      try {
+        const now = await api.storeVersion();
+        if (made.current === before && !changing.current && now !== version) await refresh();
+      } catch {}
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [version, refresh]);
+
+  const notes = data?.notes ?? [];
+  const kinds = data?.kinds ?? [];
+  const scopes = useMemo(() => scopesOf(notes), [notes]);
+  const shown = useMemo(() => show(notes, view), [notes, view]);
+  const current = shown.current;
+  const reading = phone && view.read && !!current;
+
+  // A view from the address that no longer fits the store falls back to what is there.
+  useEffect(() => {
+    if (!data) return;
+    const scope = view.scope && !scopes.includes(view.scope) ? null : view.scope;
+    const kindsOk = view.kinds.filter((k) => kinds.includes(k));
+    const archived = view.archived && shown.archivedCount > 0;
+    if (scope !== view.scope || kindsOk.length !== view.kinds.length || archived !== view.archived) {
+      setView((v) => ({ ...v, scope, kinds: kindsOk, archived }));
+    }
+  }, [data, scopes, kinds, view.scope, view.kinds, view.archived, shown.archivedCount]);
+
+  // The address keeps the view, so a reload comes back to the same place.
+  useEffect(() => {
+    if (!data) return;
+    history.replaceState(history.state, "", toHash({ ...view, note: current?.id ?? null, read: reading }));
+  }, [data, view, current?.id, reading]);
+
+  // A new note starts at its top, and an edit does not carry over to another note.
+  useEffect(() => {
+    reader.current?.scrollTo({ top: 0 });
+    setEditing(false);
+  }, [current?.id]);
+
+  // ---- the sidebar ----
+
+  const items = useMemo<RailItem[]>(
+    () => [
+      ...["*", ...scopes].map((scope): RailItem => ({ key: `scope:${scope}`, type: "scope", scope })),
+      ...kinds.map((kind, i): RailItem => ({ key: `kind:${kind}`, type: "kind", kind, n: i + 1 })),
+      ...(shown.archivedCount > 0 ? [{ key: "archived", type: "archived" } as RailItem] : []),
+    ],
+    [scopes, kinds, shown.archivedCount],
+  );
+  const scopeKey = `scope:${view.scope ?? "*"}`;
+  const cursorKey = cursor && items.some((i) => i.key === cursor) ? cursor : scopeKey;
+  const pressed = (item: RailItem) =>
+    item.type === "scope" ? (view.scope ?? "*") === item.scope : item.type === "kind" ? view.kinds.includes(item.kind) : shown.archived;
+  const count = (item: RailItem) =>
+    item.type === "scope" ? (shown.byScope.get(item.scope) ?? 0) : item.type === "kind" ? (shown.byKind.get(item.kind) ?? 0) : shown.archivedCount;
+  const scopeOf = (item: RailItem) => (item.type === "scope" && item.scope !== "*" ? item.scope : null);
+  const toggleKind = (kind: string) =>
+    setView((v) => ({ ...v, kinds: v.kinds.includes(kind) ? v.kinds.filter((k) => k !== kind) : [...v.kinds, kind] }));
+
+  /** A click or Enter on a sidebar item. A scope chosen this way is held. */
+  function activate(item: RailItem) {
+    if (item.type === "scope") {
+      held.current = scopeOf(item);
+      setView((v) => ({ ...v, scope: scopeOf(item) }));
+    } else if (item.type === "kind") toggleKind(item.kind);
+    else setView((v) => ({ ...v, archived: !v.archived }));
+  }
+
+  function moveCursor(by: number) {
+    const i = items.findIndex((it) => it.key === cursorKey);
+    const was = items[i]!, to = items[Math.max(0, Math.min(items.length - 1, i + by))]!;
+    setCursor(to.key);
+    // Scopes apply as the cursor moves. Walking on into the kinds puts the held scope back.
+    if (to.type === "scope") {
+      if (was.type !== "scope") held.current = view.scope;
+      setView((v) => ({ ...v, scope: scopeOf(to) }));
+    } else if (was.type === "scope") setView((v) => ({ ...v, scope: held.current }));
+    document.querySelector(`[data-rail="${CSS.escape(to.key)}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  // On a phone the scopes are one row that scrolls sideways. Start with the picked scope in view.
+  useEffect(() => {
+    if (!data) return;
+    const chip = document.querySelector<HTMLElement>(`[data-rail="${CSS.escape(scopeKey)}"]`), strip = chip?.parentElement;
+    if (chip && strip) strip.scrollLeft = chip.offsetLeft - strip.offsetLeft - (strip.clientWidth - chip.offsetWidth) / 2;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!data]);
+
+  // ---- the drawer on a phone ----
+
+  /** The open note gets a history entry, so the back gesture closes it. */
+  function openNote() {
+    if (!current) return;
+    // The list behind the drawer shrinks toward the top of the screen, and only the part on screen
+    // shows, with round corners.
+    const el = indent.current;
+    if (el) {
+      const top = scrollY - el.offsetTop;
+      el.style.setProperty("--indent-top", `${top}px`);
+      el.style.setProperty("--indent-bottom", `${Math.max(0, el.offsetHeight - top - innerHeight)}px`);
+    }
+    history.pushState({ reading: true }, "", location.href);
+    setView((v) => ({ ...v, note: current.id, read: true }));
+  }
+  function closeNote() {
+    setView((v) => ({ ...v, read: false }));
+    setEditing(false);
+  }
+  /** When the note has its own history entry, going back closes it, as the gesture does. */
+  function back() {
+    if (history.state?.reading) history.back();
+    else closeNote();
+  }
+  useEffect(() => {
+    const pop = () => {
+      if (!history.state?.reading) closeNote();
+    };
+    addEventListener("popstate", pop);
+    return () => removeEventListener("popstate", pop);
+  }, []);
+  // A reload after a change keeps the drawer open, but with no history entry of its own.
+  // A phone that turns wide shows the note in its pane.
+  useEffect(() => {
+    if (!phone && view.read) setView((v) => ({ ...v, read: false }));
+  }, [phone, view.read]);
+
+  // ---- changes ----
+
+  async function save(edit: NoteEdit) {
+    if (!current) return;
+    await busy(() => api.saveNote(current.id, edit));
+    await refresh();
+    setEditing(false);
+  }
+
+  /** Archive the open note, or restore it. Each works only on a note it fits. */
+  async function archive(restore: boolean) {
+    if (!current || editing || current.archived !== restore) return;
+    const id = current.id, after = neighbour(shown.notes, id);
+    try {
+      await busy(() => (restore ? api.restoreNote(id) : api.archiveNote(id)));
+    } catch (error) {
+      toast((error as Error).message, { id: "kb" });
+      return;
+    }
+    // The note leaves the list it is in. On a phone the drawer closes first, with the note still in it.
+    if (reading) {
+      back();
+      await sleep(CLOSE_MS);
+    }
+    setView((v) => ({ ...v, note: after }));
+    await refresh();
+    if (restore) return;
+    undoId.current = id;
+    toast("Archived.", {
+      id: "kb",
+      duration: UNDO_MS,
+      action: {
+        label: (
+          <span className="inline-flex items-center gap-1.5">
+            Undo <Combo keyName="Z" />
+          </span>
+        ),
+        onClick: () => void undo(),
+      },
+      onAutoClose: () => {
+        if (undoId.current === id) undoId.current = null;
+      },
+    });
+  }
+  async function undo() {
+    const id = undoId.current;
+    if (!id) return;
+    undoId.current = null;
+    toast.dismiss("kb");
+    try {
+      await busy(() => api.restoreNote(id));
+    } catch (error) {
+      toast((error as Error).message, { id: "kb" });
+      return;
+    }
+    setView((v) => ({ ...v, note: id }));
+    await refresh();
+  }
+
+  function edit() {
+    if (!current || current.archived) return;
+    // On a phone the form is in the drawer, so the drawer opens with it.
+    if (phone && !reading) openNote();
+    setEditing(true);
+  }
+
+  function pickRow(note: PageNote) {
+    blur();
+    setView((v) => ({ ...v, note: note.id, pane: "list" }));
+    if (phone) {
+      // openNote reads the current note, which is this one after the render. Set it here directly.
+      const el = indent.current;
+      if (el) {
+        const top = scrollY - el.offsetTop;
+        el.style.setProperty("--indent-top", `${top}px`);
+        el.style.setProperty("--indent-bottom", `${Math.max(0, el.offsetHeight - top - innerHeight)}px`);
+      }
+      history.pushState({ reading: true }, "", location.href);
+      setView((v) => ({ ...v, read: true }));
+    }
+  }
+
+  /** The keys belong to the page, not to the button that took the click. */
+  function blur() {
+    if (document.activeElement !== search.current) (document.activeElement as HTMLElement | null)?.blur();
+  }
+
+  // ---- keys ----
+
+  const onKey = useEffectEvent((event: KeyboardEvent) => {
+    const key = event.key;
+    if (!data || editing) return;
+    const mod = MAC ? event.metaKey : event.ctrlKey;
+    // ⌘Z undoes an archive while its toast shows. In the filter it stays the field's own undo.
+    if (key.toLowerCase() === "z" && mod && !event.shiftKey && undoId.current && document.activeElement !== search.current) {
+      event.preventDefault();
+      void undo();
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    // The open list of keys takes every key. It closes itself on Escape.
+    if (help) {
+      if (key === "?") {
+        event.preventDefault();
+        setHelp(false);
+      }
+      return;
+    }
+    // The drawer closes itself on Escape.
+    if (key === "Escape" && reading) return;
+    if (document.activeElement === search.current) {
+      if (key === "Escape") {
+        setView((v) => ({ ...v, q: "" }));
+        search.current?.blur();
+      } else if (key === "ArrowDown" || key === "Enter") {
+        event.preventDefault();
+        search.current?.blur();
+        setView((v) => ({ ...v, pane: "list" }));
+      }
+      return;
+    }
+    // Other fields, such as an open select, keep their keys.
+    if ((event.target as HTMLElement).closest?.("input, textarea, select, [role=listbox], [role=dialog]")) return;
+
+    const by = key === "ArrowDown" || key === "j" ? 1 : key === "ArrowUp" || key === "k" ? -1 : 0;
+    const pane = view.pane;
+    if (key === "/") {
+      search.current?.focus();
+      search.current?.select();
+    } else if (key === "ArrowLeft" || key === "h") {
+      if (pane === "list") {
+        setCursor(scopeKey);
+        held.current = view.scope;
+        setView((v) => ({ ...v, pane: "rail" }));
+      }
+    } else if (key === "ArrowRight" || key === "l") setView((v) => ({ ...v, pane: "list" }));
+    else if (by && pane === "list") {
+      const list = shown.notes;
+      if (list.length) {
+        const i = current ? list.indexOf(current) : 0;
+        setView((v) => ({ ...v, note: list[Math.max(0, Math.min(list.length - 1, i + by))]!.id }));
+      }
+    } else if (by) moveCursor(by);
+    else if ((key === "Enter" || key === " ") && pane === "rail") {
+      const item = items.find((i) => i.key === cursorKey);
+      if (item) activate(item);
+    }
+    // On a phone the note is in a drawer. Enter or space on a row opens it, as a tap does. In the open drawer space scrolls.
+    else if ((key === "Enter" || key === " ") && pane === "list" && phone && current && !reading) openNote();
+    // The note has no keys of its own. Space pages through it from the list.
+    else if (key === " ") reader.current?.scrollBy({ top: (event.shiftKey ? -0.8 : 0.8) * reader.current.clientHeight });
+    else if (key === "e" && pane === "list") edit();
+    else if (key === "a" && pane === "list") void archive(false);
+    else if (key === "r" && pane === "list") void archive(true);
+    else if (key === "t") nextTheme();
+    else if (key === "?") setHelp(true);
+    else if (kinds[Number(key) - 1]) toggleKind(kinds[Number(key) - 1]!);
+    else return;
+    event.preventDefault();
+  });
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => onKey(event);
+    document.addEventListener("keydown", listener);
+    return () => document.removeEventListener("keydown", listener);
+  }, []);
+
+  if (!data) return failed ? <p className="p-8 text-sm text-muted-foreground">kb: {failed}</p> : null;
+
+  // An empty list says so once, and offers the shortest way to notes: the other scopes when the
+  // same search finds notes there, otherwise the list without the search and the kinds.
+  const elsewhere = view.scope ? (shown.byScope.get("*") ?? 0) : 0;
+  const empty =
+    notes.length === 0
+      ? { text: "the store has no notes yet" }
+      : elsewhere
+        ? {
+            text: "no notes match in this scope",
+            action: {
+              label: `show ${elsewhere} in all scopes`,
+              run: () => {
+                held.current = null;
+                setCursor("scope:*");
+                setView((v) => ({ ...v, scope: null }));
+              },
+            },
+          }
+        : {
+            text: "no notes match",
+            action: view.q || view.kinds.length ? { label: "clear filters", run: () => setView((v) => ({ ...v, q: "", kinds: [] })) } : undefined,
+          };
+
+  const page = current && (
+    editing ? (
+      <NoteForm key={current.id} note={current} kinds={kinds} onCancel={() => setEditing(false)} onSave={save} />
+    ) : (
+      <NoteView
+        note={current}
+        onEdit={() => {
+          setView((v) => ({ ...v, pane: "list" }));
+          edit();
+        }}
+        onArchive={() => {
+          setView((v) => ({ ...v, pane: "list" }));
+          void archive(false);
+        }}
+        onRestore={() => {
+          setView((v) => ({ ...v, pane: "list" }));
+          void archive(true);
+        }}
+      />
+    )
+  );
+
+  return (
+    <DrawerProvider>
+      <div
+        data-pane={view.pane}
+        className="group/page wide:grid wide:h-screen wide:grid-cols-[248px_380px_minmax(0,1fr)]"
+        onClickCapture={(event) => {
+          if ((event.target as HTMLElement).closest("[data-rail], [data-id], [data-slot=button]")) blur();
+        }}
+      >
+        {/* Behind an open drawer the list shrinks back from the edges and is black around it, as in Vaul. */}
+        <DrawerIndentBackground className="fixed inset-0 bg-black wide:hidden" />
+        <DrawerIndent
+          ref={indent}
+          className={cn(
+            "contents",
+            "max-wide:relative max-wide:block max-wide:min-h-dvh max-wide:bg-background",
+            "[--indent-transition:calc(1-clamp(0,calc(var(--drawer-swipe-progress)*100000),1))] origin-[50%_var(--indent-top,0px)] transition-[transform,clip-path] duration-[calc(450ms*var(--indent-transition))] ease-[cubic-bezier(0.32,0.72,0,1)]",
+            "max-wide:data-active:[transform:translateY(calc((env(safe-area-inset-top)+14px)*(1-var(--drawer-swipe-progress))))_scale(calc(0.96+0.04*var(--drawer-swipe-progress)))]",
+            "max-wide:data-active:[clip-path:inset(var(--indent-top,0px)_0_var(--indent-bottom,0px)_0_round_calc(8px*(1-var(--drawer-swipe-progress))))]",
+          )}
+        >
+          <Rail
+            items={items}
+            pressed={pressed}
+            count={count}
+            cursor={cursorKey}
+            onPick={(item) => {
+              setCursor(item.key);
+              setView((v) => ({ ...v, pane: "rail" }));
+              activate(item);
+            }}
+            theme={theme}
+            onTheme={nextTheme}
+            onKeys={() => setHelp(true)}
+          />
+          <NoteList notes={shown.notes} current={current} q={view.q} onQ={(q) => setView((v) => ({ ...v, q }))} searchRef={search} onOpen={pickRow} empty={empty} />
+        </DrawerIndent>
+        {!phone && (
+          <main ref={reader} className="min-w-0 overflow-y-auto px-12 pt-12 pb-20">
+            {page}
+          </main>
+        )}
+      </div>
+      {phone && (
+        <Drawer
+          open={reading}
+          onOpenChange={(open, details) => {
+            if (open) return;
+            // In the form Escape cancels the edit, and the drawer stays.
+            if (editing && details.reason === "escape-key") {
+              details.cancel();
+              return;
+            }
+            back();
+          }}
+        >
+          <DrawerContent className="h-[82dvh] max-h-none bg-background shadow-[0_-10px_40px_rgba(0,0,0,0.35)]">
+            <DrawerSwipeHandle className="h-auto pt-2 pb-2 after:h-[5px] after:w-9 after:bg-faint/50 group-data-[swipe-axis=y]/drawer-popup:h-auto group-data-[swipe-axis=y]/drawer-popup:after:h-[5px] group-data-[swipe-axis=y]/drawer-popup:after:w-9" />
+            <DrawerTitle className="sr-only">{current?.title ?? "Note"}</DrawerTitle>
+            <div ref={reader} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-1 pb-[60px] text-[15px]">
+              {page}
+            </div>
+          </DrawerContent>
+        </Drawer>
+      )}
+      <KeysDialog open={help} onOpenChange={setHelp} kinds={kinds.length} />
+      <Toaster theme={resolved} position="bottom-center" />
+    </DrawerProvider>
+  );
+}

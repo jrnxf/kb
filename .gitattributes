@@ -1,0 +1,2 @@
+# The built page of `kb serve`. It is committed so the plugin needs no install step.
+web/dist/** linguist-generated=true -diff

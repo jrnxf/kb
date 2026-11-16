@@ -1,51 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { renderHtml } from "../cli/html.ts";
 import { type Served, serve } from "../cli/serve.ts";
 import type { Store } from "../cli/store.ts";
 import { MAIN, kb, plain, putNote, sh, tempDir, tempStore } from "./helpers.ts";
-
-describe("the page", () => {
-  test("is self-contained and shows raw HTML in a note as text", () => {
-    const store = tempStore();
-    putNote(store, { id: "xss", title: "A <b>bold</b> title", body: "Use `x`.\n\n<script>alert(1)</script>" });
-    const page = renderHtml(store, "t");
-    expect(page).toContain("A &lt;b&gt;bold&lt;/b&gt; title");
-    expect(page).not.toContain("<script>alert(1)</script>");
-    expect(page).toContain("<code>x</code>");
-    // No script, style, font or picture from the network.
-    // A picture inside the page itself, as a data: address, is not from the network.
-    expect(page).not.toMatch(/src="http|<link|@import|url\((?!"data:)/);
-  });
-
-  test("a repo scope shows as owner/name and links to the repo", () => {
-    const store = tempStore();
-    putNote(store, { id: "a", scope: "github.com/acme/web" });
-    putNote(store, { id: "b", scope: "gitlab.com/acme/api" });
-    putNote(store, { id: "c", scope: "local-project" });
-    putNote(store, { id: "d" });
-    const page = renderHtml(store, "t");
-    expect(page).toContain('<span class="scope"><a href="https://github.com/acme/web" target="_blank" rel="noopener noreferrer">acme/web</a></span>');
-    expect(page).toContain('<span class="scope"><a href="https://gitlab.com/acme/api" target="_blank" rel="noopener noreferrer">gitlab.com/acme/api</a></span>');
-    expect(page).toContain('<span class="scope">local-project</span>');
-    expect(page).toContain('<span class="scope">global</span>');
-  });
-
-  test("an archived note is on the page, read-only, behind a toggle that only shows when there is one", () => {
-    const store = tempStore();
-    putNote(store, { id: "live" });
-    expect(renderHtml(store, "t")).toContain('data-archived aria-pressed="false" tabindex="-1" hidden>');
-    putNote(store, { id: "old", title: "An old note" }, true);
-    const page = renderHtml(store, "t");
-    expect(page).toContain('data-archived aria-pressed="false" tabindex="-1"><span');
-    expect(page).toMatch(/class="row k-\w+ archived"[^>]*>.*An old note/);
-    const article = (id: string) => page.slice(page.indexOf(`<article id="n-`, page.indexOf(`data-id="${id}" hidden`) - 60)).split("</article>")[0]!;
-    expect(article("old")).toContain('data-act="restore"');
-    expect(article("old")).not.toContain('data-act="edit"');
-    expect(article("live")).toContain('data-act="edit"');
-  });
-});
 
 describe("kb serve", () => {
   let served: Served | undefined;
@@ -62,13 +20,32 @@ describe("kb serve", () => {
     };
   }
 
-  test("serves the page with the current notes on every load", async () => {
+  test("serves the built page, and the current notes on every load", async () => {
     const store = tempStore();
     putNote(store, { id: "a", title: "First note" });
-    start(store);
-    expect(await (await fetch(served!.url)).text()).toContain("First note");
+    const { call } = start(store);
+    const page = await fetch(served!.url);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    const html = await page.text();
+    expect(html).toContain('<div id="root">');
+    // Every script and style of the page comes from the server itself.
+    for (const [, src] of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
+      expect(src!.startsWith("/assets/")).toBe(true);
+      const asset = await fetch(new URL(src!, served!.url));
+      expect(asset.status).toBe(200);
+      expect(asset.headers.get("cache-control")).toContain("immutable");
+    }
+    expect((await call("GET", "/api/page")).json.notes.map((n: { title: string }) => n.title)).toEqual(["First note"]);
     putNote(store, { id: "b", title: "Added while the server runs" });
-    expect(await (await fetch(served!.url)).text()).toContain("Added while the server runs");
+    expect((await call("GET", "/api/page")).json.notes.map((n: { title: string }) => n.title)).toContain("Added while the server runs");
+  });
+
+  test("serves no file from outside the built page, and no other path", async () => {
+    start(tempStore());
+    // fetch() resolves "/../" itself, so hide the slash, as an attacker can.
+    for (const path of ["/..%2fpackage.json", "/assets/..%2f..%2f..%2fcli%2fserve.ts", "/index.html", "/notes/a"]) {
+      expect((await fetch(new URL(path, served!.url))).status).toBe(404);
+    }
   });
 
   test("an edit changes the note, counts as a verification and is committed", async () => {
@@ -172,7 +149,8 @@ describe("kb serve", () => {
       while (!text.includes("}")) text += new TextDecoder().decode((await reader.read()).value);
       const { url, started } = JSON.parse(text);
       expect(started).toBe(true);
-      expect(await (await fetch(url)).text()).toContain("Served by the command");
+      const page = (await (await fetch(new URL("/api/page", url))).json()) as { notes: { title: string }[] };
+      expect(page.notes.map((n) => n.title)).toEqual(["Served by the command"]);
       const second = kb(store, ["serve", "--port", new URL(url).port, "--json"]);
       expect(second.code).toBe(0);
       expect(second.json).toEqual({ url, started: false });
