@@ -36,7 +36,7 @@ async function handle(store: Store, token: string, port: number, request: Reques
   const host = request.headers.get("host") ?? "";
   if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}` && !extraHosts().includes(host)) return json({ error: "wrong host" }, 403);
 
-  if (request.method === "GET" && url.pathname === "/") {
+  if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/") {
     return new Response(renderHtml(store, token), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
   }
   if (request.method === "GET" && url.pathname === "/api/state") return json({ kb: true, version: storeVersion(store) });
