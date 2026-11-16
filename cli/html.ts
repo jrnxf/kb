@@ -67,12 +67,12 @@ function articleHtml(note: StoredNote, n: number, usage: Map<string, Usage>): st
 </article>`;
 }
 
-const DARK = `--bg:#151514; --fg:#ececea; --muted:#96968f; --faint:#6b6b65; --line:#262624; --card:#1c1c1b; --hover:#1c1c1b; --sel:#262625; --ring:#3b3b38; --accent:#8aa6ff;
+const DARK = `--bg:#151514; --fg:#ececea; --muted:#96968f; --faint:#6b6b65; --line:#262624; --card:#1c1c1b; --hover:#1c1c1b; --sel:#262625; --ring:#3b3b38; --accent:#8aa6ff; --scrim:rgba(0,0,0,0.7);
   --k-open-work:#fb923c; --k-gotcha:#f87171; --k-convention:#4ade80; --k-decision:#c4b5fd; --k-how-to:#7dd3fc;`;
 
 // The theme follows the system until the person picks one. The pick sits in data-theme on the root.
 const STYLE = `
-:root { --bg:#fbfbfa; --fg:#1c1c1a; --muted:#6f6f6a; --faint:#a3a39c; --line:#e7e7e2; --card:#fff; --hover:#f3f3f0; --sel:#eaeae6; --ring:#d3d3cd; --accent:#2f5bd8;
+:root { --bg:#fbfbfa; --fg:#1c1c1a; --muted:#6f6f6a; --faint:#a3a39c; --line:#e7e7e2; --card:#fff; --hover:#f3f3f0; --sel:#eaeae6; --ring:#d3d3cd; --accent:#2f5bd8; --scrim:rgba(0,0,0,0.2);
   --k-open-work:#c2410c; --k-gotcha:#b91c1c; --k-convention:#15803d; --k-decision:#6d28d9; --k-how-to:#0369a1;
   --mono:ui-monospace, SFMono-Regular, Menlo, monospace; color-scheme: light dark; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme=light]) { ${DARK} } }
@@ -139,6 +139,7 @@ body[data-pane=list] .row[aria-current=true], body[data-pane=rail] .item.cur { b
 
 .read { padding:48px 48px 80px; }
 .back, .scrim { display:none; }
+.behind { display:contents; }
 article { max-width:660px; }
 .crumb { display:flex; gap:10px; align-items:center; font-size:12.5px; color:var(--muted); margin:0 0 10px; }
 .crumb .kind { color:var(--k); font-weight:550; }
@@ -204,16 +205,19 @@ pre code { padding:0; background:none; }
   .top { padding-top:14px; }
   /* A note opens only from a tap on its row, in a drawer that slides up over the list and stops
      short of the top. A pull down closes it. The script moves it while a finger drags it. */
-  .scrim { display:block; position:fixed; inset:0; z-index:2; background:rgba(0,0,0,0.5); opacity:0; pointer-events:none; }
-  .read { position:fixed; left:0; right:0; bottom:0; z-index:3; height:82vh; height:82dvh; padding:0 16px 60px; overflow-y:auto; overscroll-behavior:contain; background:var(--bg); border-radius:14px 14px 0 0; box-shadow:0 -1px 0 var(--line), 0 -10px 40px rgba(0,0,0,0.35); transform:translate3d(0,100%,0); visibility:hidden; will-change:transform; }
-  .read.anim, .scrim.anim { transition:transform 500ms cubic-bezier(0.32,0.72,0,1), opacity 500ms cubic-bezier(0.32,0.72,0,1); }
+  .scrim { display:block; position:fixed; inset:0; z-index:2; background:var(--scrim); opacity:0; pointer-events:none; }
+  /* The drawer runs on below the bottom of the screen by the bleed, as in Base UI, so a pull up shows
+     more drawer and never the list under it. Its content keeps clear of the part below the screen. */
+  .read { --bleed:64px; position:fixed; left:0; right:0; bottom:calc(-1 * var(--bleed)); z-index:3; height:calc(82vh + var(--bleed)); height:calc(82dvh + var(--bleed)); padding:0 16px calc(60px + var(--bleed)); overflow-y:auto; overscroll-behavior:contain; background:var(--bg); border-radius:14px 14px 0 0; box-shadow:0 -1px 0 var(--line), 0 -10px 40px rgba(0,0,0,0.35); transform:translate3d(0,100%,0); visibility:hidden; will-change:transform; }
+  .read.anim, .scrim.anim, .behind.anim { transition:transform 450ms cubic-bezier(0.32,0.72,0,1), opacity 450ms cubic-bezier(0.32,0.72,0,1), clip-path 450ms cubic-bezier(0.32,0.72,0,1); }
+  /* Behind an open drawer the list shrinks back from the edges, as in Vaul. The script sets its scale. */
+  .behind { display:block; background:var(--bg); }
+  body[data-reading], body.closing { background:#000; }
   body[data-reading] { overflow:hidden; }
   body[data-reading] .scrim { pointer-events:auto; }
   body[data-reading] .read, body.closing .read { visibility:visible; }
-  .back { display:block; position:sticky; top:0; z-index:1; margin:0 -16px 16px; padding:8px 16px 10px; background:var(--bg); border-bottom:1px solid var(--line); border-radius:14px 14px 0 0; touch-action:none; cursor:grab; user-select:none; -webkit-user-select:none; }
-  .back::before { content:""; display:block; width:36px; height:5px; margin:0 auto 6px; border-radius:3px; background:var(--faint); opacity:0.5; }
-  .back button { display:flex; align-items:center; gap:6px; padding:4px 0; font-size:14px; color:var(--muted); }
-  .back svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+  .back { display:block; position:sticky; top:0; z-index:1; margin:0 -16px 4px; padding:8px 16px; background:var(--bg); border-radius:14px 14px 0 0; touch-action:none; cursor:grab; user-select:none; -webkit-user-select:none; }
+  .back::before { content:""; display:block; width:36px; height:5px; margin:0 auto; border-radius:3px; background:var(--faint); opacity:0.5; }
   /* Safari on a phone zooms into a field with smaller text, and does not zoom back. */
   .search input, .form input, .form select, .form textarea { font-size:16px; }
 }
@@ -239,18 +243,34 @@ const article = () => (current ? document.getElementById("n-" + current.dataset.
 const PHONE = matchMedia("(max-width: 900px)");
 const reading = () => document.body.dataset.reading !== undefined;
 // The drawer on a phone. y is how far it is moved down from open: 0 is open, its height is closed.
-const scrim = document.getElementById("scrim"), bar = read.querySelector(".back");
-let drag = null;
-function place(y, animate) {
+const scrim = document.getElementById("scrim"), bar = read.querySelector(".back"), behind = document.getElementById("behind");
+let drag = null, closeMs = 0;
+const BLEED = 64;
+/** ms sets a shorter slide, after a fast flick. */
+function place(y, animate, ms) {
   read.classList.toggle("anim", animate); scrim.classList.toggle("anim", animate);
+  read.style.transitionDuration = scrim.style.transitionDuration = behind.style.transitionDuration = ms ? ms + "ms" : "";
   read.style.transform = "translate3d(0," + y + "px,0)";
   // The dim fades out as the drawer goes down.
-  scrim.style.opacity = Math.min(1, Math.max(0, 1 - y / read.offsetHeight));
+  const p = Math.min(1, Math.max(0, 1 - y / read.offsetHeight));
+  scrim.style.opacity = p;
+  // The list shrinks toward the top of the screen, and only the part on screen shows, with round corners.
+  behind.classList.toggle("anim", animate);
+  const top = scrollY - behind.offsetTop, bottom = Math.max(0, behind.offsetHeight - top - innerHeight);
+  behind.style.transformOrigin = "50% " + top + "px";
+  behind.style.transform = "translate3d(0,calc((env(safe-area-inset-top) + 14px) * " + p + "),0) scale(" + (1 - (p * 16) / innerWidth) + ")";
+  behind.style.clipPath = "inset(" + top + "px 0 " + bottom + "px 0 round " + 8 * p + "px)";
+}
+function unplace() {
+  for (const el of [read, behind]) el.style.transform = "";
+  behind.style.transformOrigin = behind.style.clipPath = "";
 }
 /** The open note gets a history entry, so the back gesture closes it. */
 function openNote(push) {
   if (!current) return;
   document.body.dataset.reading = "";
+  // What is behind the drawer takes no taps and no focus, and screen readers skip it.
+  behind.inert = true;
   read.scrollTop = 0;
   place(read.offsetHeight, false);
   read.getBoundingClientRect();
@@ -262,12 +282,14 @@ function closeNote() {
   if (!reading()) return;
   if (form) closeForm();
   delete document.body.dataset.reading;
+  behind.inert = false;
   document.body.classList.add("closing");
-  place(read.offsetHeight, true);
-  setTimeout(() => document.body.classList.remove("closing"), 500);
+  place(read.offsetHeight, true, closeMs);
+  closeMs = 0;
+  setTimeout(() => { if (reading()) return; document.body.classList.remove("closing"); behind.classList.remove("anim"); unplace(); }, 500);
   remember();
 }
-/** The back button. When the note has its own history entry, going back closes it, as the gesture does. */
+/** Close the note. When the note has its own history entry, going back closes it, as the gesture does. */
 function back() {
   if (history.state && history.state.reading) history.back();
   else closeNote();
@@ -280,8 +302,8 @@ function dragMove(y) {
   drag.v = 0.7 * ((y - drag.y) / Math.max(1, now - drag.t)) + 0.3 * drag.v;
   drag.y = y; drag.t = now;
   let pos = y - drag.y0;
-  // Up past open it resists, as a rubber band.
-  if (pos < 0) pos = -Math.sqrt(-pos) * 2;
+  // Up past open it resists, as a rubber band, and stops before the bleed runs out.
+  if (pos < 0) pos = -Math.min(BLEED * 0.75, Math.sqrt(-pos) * 2);
   drag.pos = pos;
   place(pos, false);
 }
@@ -289,15 +311,13 @@ function dragEnd() {
   if (!drag) return;
   const { pos, v } = drag;
   drag = null;
-  if (pos > read.offsetHeight * 0.25 || (v > 0.4 && pos > 10)) back(); else place(0, true);
+  // A faster flick slides the rest of the way faster, as in Base UI: from 450 ms down to 150 ms.
+  const ms = Math.round(450 * Math.min(1, Math.max(1 / 3, 0.5 / Math.abs(v || 0.01))));
+  if (pos > read.offsetHeight * 0.25 || (v > 0.4 && pos > 10)) { closeMs = ms; back(); } else place(0, true, ms);
 }
-// The bar takes the pointer only once it moves, so a tap on "Notes" stays a click.
-bar.addEventListener("pointerdown", (e) => { if (reading()) dragStart(e.clientY); });
-bar.addEventListener("pointermove", (e) => {
-  if (!drag) return;
-  if (!bar.hasPointerCapture(e.pointerId) && Math.abs(e.clientY - drag.y0) > 4) bar.setPointerCapture(e.pointerId);
-  if (bar.hasPointerCapture(e.pointerId)) dragMove(e.clientY);
-});
+// The bar is only a handle, so it takes the pointer at once.
+bar.addEventListener("pointerdown", (e) => { if (reading()) { bar.setPointerCapture(e.pointerId); dragStart(e.clientY); } });
+bar.addEventListener("pointermove", (e) => { if (drag) dragMove(e.clientY); });
 bar.addEventListener("pointerup", dragEnd);
 bar.addEventListener("pointercancel", dragEnd);
 // In the note, a pull down at its start moves the drawer. Every other swipe scrolls the note.
@@ -494,8 +514,7 @@ document.addEventListener("click", (event) => {
   } else if (item) {
     pane = "rail"; cursor = item;
     activate(item);
-  } else if (event.target.closest("#back")) back();
-  else if (row) {
+  } else if (row) {
     pane = "list";
     show(row);
     paint();
@@ -558,7 +577,7 @@ current = rows.find((r) => r.dataset.id === view.get("note")) || null;
 if (view.get("pane") === "rail") pane = "rail";
 addEventListener("popstate", () => { if (!(history.state && history.state.reading)) closeNote(); });
 // A phone that turns wide shows the note in its pane, so the cover goes away.
-PHONE.addEventListener("change", () => { if (!PHONE.matches) { closeNote(); read.style.transform = ""; } });
+PHONE.addEventListener("change", () => { if (!PHONE.matches) { closeNote(); unplace(); } });
 
 setTheme(document.documentElement.dataset.theme || "system");
 cursor = scopeItem(); held = state.scope;
@@ -639,6 +658,7 @@ export function renderHtml(store: Store, token: string): string {
 </head>
 <body data-pane="list" data-token="${esc(token)}" data-version="${storeVersion(store)}">
 <div class="page">
+<div class="behind" id="behind">
 <aside class="pane rail">
 <header><h1>kb</h1></header>
 <nav>
@@ -653,9 +673,10 @@ ${notes.map(rowHtml).join("\n")}
 </div>
 <div class="empty" id="none" hidden><span>${notes.length === 0 ? "the store has no notes yet" : "no notes match"}</span><button type="button" id="clear">clear filters</button></div>
 </div>
+</div>
 <div class="scrim" id="scrim"></div>
 <main class="pane read" id="read">
-<div class="back"><button type="button" id="back"><svg viewBox="0 0 16 16"><path d="M3.5 6 8 10.5 12.5 6"/></svg>Notes</button></div>
+<div class="back" aria-hidden="true"></div>
 ${notes.map((note, n) => articleHtml(note, n, usage)).join("\n")}
 </main>
 </div>
