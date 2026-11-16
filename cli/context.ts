@@ -141,19 +141,23 @@ export interface BudgetResult {
   scope: string | null;
   index: { lines: number; budget: number; hidden: number };
   context: { chars: number; budget: number; bodies: number; dropped: number };
+  /** True only when a note reaches no session: it has no body and no index line. Bodies that drop to an index line are the normal state. */
   over: boolean;
   /** Every note a session of this scope can see, in rank order. */
   notes: { id: string; kind: string; scope: string; uses: number; last_used: string | null; chars: number; shown: "body" | "index" | "hidden" }[];
-  /** Notes to take out of the index first: fewest uses, then longest unused. Empty when nothing is over budget. */
+  /** As many notes as are hidden, to take out of the index first: fewest uses, longest unused, lowest rank. Empty when no note is hidden. */
   demote: { id: string; reason: string }[];
+  /** Notes of this scope that were demoted (`indexed: false`): no session loads them. */
+  demoted: string[];
 }
 
-/** `kb budget`: sizes against both budgets, and which notes to demote when one is exceeded. */
+/** `kb budget`: what a session loads, which notes reach no session, and what to demote for them. */
 export function buildBudget(store: Store, repoPath: string): BudgetResult {
   const context = buildContext(store, repoPath);
   const config = store.config();
   const usage = store.usage();
-  const byId = new Map(store.notes().map((n) => [n.id, n]));
+  const all = store.notes();
+  const byId = new Map(all.map((n) => [n.id, n]));
   const ranked = [...context.bodies, ...context.dropped].map((id) => byId.get(id)!).filter(Boolean);
   const bodies = new Set(context.bodies);
   const index = new Set(context.index);
@@ -166,21 +170,27 @@ export function buildBudget(store: Store, repoPath: string): BudgetResult {
     chars: bodyBlock(n).length,
     shown: bodies.has(n.id) ? ("body" as const) : index.has(n.id) ? ("index" as const) : ("hidden" as const),
   }));
-  const over = context.dropped.length > 0 || context.hiddenIndexLines > 0;
-  // Open work is never a demotion candidate: it leaves the index when it is done.
+  // A body that did not fit still reaches the session as an index line: that is how the store
+  // stays small, not a fault. Only a note with neither is a reason to demote something.
+  const over = context.hiddenIndexLines > 0;
+  const position = new Map(notes.map((n, i) => [n.id, i]));
+  // Open work is never a demotion candidate: it leaves the index when it is done. Among notes
+  // that nobody used, the lowest rank goes first, so a gotcha is the last to be named.
   const demote = over
     ? notes
         .filter((n) => n.kind !== "open-work")
-        .sort((a, b) => a.uses - b.uses || (a.last_used ?? "").localeCompare(b.last_used ?? "") || b.chars - a.chars)
-        .slice(0, Math.max(context.dropped.length, context.hiddenIndexLines))
+        .sort((a, b) => a.uses - b.uses || (a.last_used ?? "").localeCompare(b.last_used ?? "") || position.get(b.id)! - position.get(a.id)!)
+        .slice(0, context.hiddenIndexLines)
         .map((n) => ({ id: n.id, reason: n.uses === 0 ? "never used" : `${n.uses} ${n.uses === 1 ? "use" : "uses"}, last ${n.last_used?.slice(0, 10)}` }))
     : [];
+  const demoted = all.filter((n) => !n.indexed && !n.promoted_to && (n.scope === "global" || n.scope === context.scope)).map((n) => n.id);
   return {
     scope: context.scope,
-    index: { lines: context.dropped.length, budget: config.budgets.indexLines, hidden: context.hiddenIndexLines },
+    index: { lines: context.index.length, budget: config.budgets.indexLines, hidden: context.hiddenIndexLines },
     context: { chars: context.chars, budget: Math.min(config.budgets.contextChars, HARD_CONTEXT_CAP), bodies: context.bodies.length, dropped: context.dropped.length },
     over,
     notes,
     demote,
+    demoted,
   };
 }

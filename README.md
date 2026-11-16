@@ -30,7 +30,9 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
   anchored file changed since the note was verified, an anchor is gone, the verified commit left
   the history, nobody verified the note for `decayDays` (180), or two titles are close.
   `/kb:audit` reads the code for each candidate, checks both budgets, proposes verify, rewrite,
-  merge, shorten, demote or archive, and applies what you accept. A session start says so in one
+  merge, shorten, demote or archive, and applies what you accept. `kb budget` asks for a
+  demotion only when the index is full and a note reaches no session. A body that became an
+  index line is the normal state. It also lists the demoted notes, which no session loads. A session start says so in one
   line when more than 5 notes are candidates.
 - **Proven notes move to the repo.** `/kb:promote` proposes notes with high confidence and many
   uses for the repo's `CLAUDE.md` or `AGENTS.md`, shows the exact text, and writes after you

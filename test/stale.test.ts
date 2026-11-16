@@ -149,24 +149,50 @@ describe("kb budget", () => {
     expect(b.notes[0]).toMatchObject({ id: "a", shown: "body", uses: 0 });
   });
 
-  test("over budget it suggests the least used notes first, and never open work", () => {
+  test("bodies that drop to an index line are not a reason to demote", () => {
     const { repo, store } = fixture();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 60, contextChars: 1500 } }));
     const body = "word ".repeat(80);
+    for (const id of ["a", "b", "c", "d", "e"]) putNote(store, { id, scope: SCOPE, body });
+    const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
+    expect(b.context.dropped).toBeGreaterThan(0);
+    expect(b.index.hidden).toBe(0);
+    expect(b.index.lines).toBe(b.context.dropped);
+    expect(b).toMatchObject({ over: false, demote: [] });
+    const text = kb(store, ["budget"], { cwd: repo }).stdout;
+    expect(text).not.toContain("Demote");
+    expect(text).toContain("every note reaches a session");
+    expect(text).toContain("longest  ");
+  });
+
+  test("when notes reach no session it names as many as are hidden: least used, lowest rank, never open work", () => {
+    const { repo, store } = fixture();
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 2, contextChars: 1500 } }));
+    const body = "word ".repeat(80);
     putNote(store, { id: "work", scope: SCOPE, kind: "open-work", body });
-    for (const id of ["used", "unused-1", "unused-2", "unused-3"]) putNote(store, { id, scope: SCOPE, body });
+    putNote(store, { id: "trap", scope: SCOPE, kind: "gotcha", body });
+    putNote(store, { id: "used", scope: SCOPE, kind: "how-to", body });
+    for (const id of ["howto-1", "howto-2", "howto-3"]) putNote(store, { id, scope: SCOPE, kind: "how-to", body });
     kb(store, ["use", "used"]);
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
     expect(b.over).toBe(true);
-    expect(b.context.dropped).toBeGreaterThan(0);
-    expect(b.context.chars).toBeLessThanOrEqual(1500);
+    expect(b.index.hidden).toBeGreaterThan(0);
+    expect(b.index.lines).toBe(2);
     const ids = b.demote.map((d: any) => d.id);
-    expect(ids).toHaveLength(b.context.dropped);
-    expect(ids).not.toContain("work");
-    expect(ids[0]).toMatch(/^unused-/);
-    expect(ids.indexOf("used")).toBe(ids.includes("used") ? ids.length - 1 : -1);
+    expect(ids).toHaveLength(b.index.hidden);
+    for (const id of ids) expect(id).toMatch(/^howto-/);
     expect(b.demote[0].reason).toBe("never used");
-    expect(kb(store, ["budget"], { cwd: repo }).stdout).toContain("demote first: unused-");
+    expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is full\. Demote first: howto-/);
+  });
+
+  test("a demoted note stays visible in kb budget and kb list", () => {
+    const { repo, store } = fixture();
+    putNote(store, { id: "kept", scope: SCOPE });
+    putNote(store, { id: "gone", scope: SCOPE, indexed: false });
+    putNote(store, { id: "elsewhere", scope: "github.com/acme/other", indexed: false });
+    expect(kb(store, ["budget", "--json"], { cwd: repo }).json.demoted).toEqual(["gone"]);
+    expect(kb(store, ["budget"], { cwd: repo }).stdout).toContain("demoted  1 note, in no session: gone");
+    expect(kb(store, ["list", "--scope", "repo"], { cwd: repo }).stdout).toMatch(/Title of gone \(demoted\)/);
   });
 });
 

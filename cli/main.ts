@@ -27,7 +27,7 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb archive <id>... | kb restore <id>...
   kb stale [--repo .]                    notes that may no longer be true, each with a reason
   kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
-  kb budget [--repo .]                   sizes against both budgets, and what to demote
+  kb budget [--repo .]                   what a session loads, and what reaches no session
   kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run] [--repo .]
                                          append a note to the repo's own file
   kb checkpointed <session-id>           record that this session saved its knowledge
@@ -252,7 +252,7 @@ function cmdList(store: Store, args: Args): Output {
   const text =
     rows.length === 0
       ? "no notes"
-      : [line("id", "kind", "scope", "uses", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, String(r.uses), r.last_verified.slice(0, 10), r.title))].join("\n");
+      : [line("id", "kind", "scope", "uses", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, String(r.uses), r.last_verified.slice(0, 10), `${r.title}${r.indexed ? "" : " (demoted)"}`))].join("\n");
   return { json: rows, text };
 }
 
@@ -304,12 +304,23 @@ function cmdVerify(store: Store, args: Args): Output {
 
 function cmdBudget(store: Store, args: Args): Output {
   const b = buildBudget(store, String(args.flags.get("repo") ?? "."));
+  const count = (n: number) => `${n} ${n === 1 ? "note" : "notes"}`;
   const lines = [
     `scope    ${b.scope ?? "global only"}`,
-    `index    ${b.index.lines} of ${b.index.budget} lines${b.index.hidden > 0 ? `, ${b.index.hidden} hidden` : ""}`,
-    `context  ${b.context.chars} of ${b.context.budget} characters, ${b.context.bodies} bodies shown, ${b.context.dropped} in the index only`,
-    b.over ? `demote first: ${b.demote.map((d) => `${d.id} (${d.reason})`).join(", ") || "nothing but open work is left"}` : "within both budgets",
+    `index    ${b.index.lines} of ${b.index.budget} lines`,
+    `context  ${b.context.chars} of ${b.context.budget} characters, ${b.context.bodies} bodies shown, ${b.index.lines} in the index only`,
   ];
+  // One long body ends the list of bodies, so the longest ones are the first to shorten.
+  const longest = b.notes.filter((n) => n.shown === "body").sort((x, y) => y.chars - x.chars).slice(0, 3);
+  if (b.context.dropped > 0 && longest.length > 0) lines.push(`longest  ${longest.map((n) => `${n.id} (${n.chars})`).join(", ")}`);
+  if (b.demoted.length > 0) lines.push(`demoted  ${count(b.demoted.length)}, in no session: ${b.demoted.join(", ")}`);
+  lines.push(
+    b.over
+      ? `${count(b.index.hidden)} ${b.index.hidden === 1 ? "reaches" : "reach"} no session, because the index is full. Demote first: ${b.demote.map((d) => `${d.id} (${d.reason})`).join(", ") || "nothing but open work is left"}`
+      : b.notes.length === 0
+        ? "no notes load here"
+        : "every note reaches a session, as a body or as an index line",
+  );
   return { json: b, text: lines.join("\n") };
 }
 
