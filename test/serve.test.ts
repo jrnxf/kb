@@ -134,6 +134,24 @@ describe("kb serve", () => {
     }
   });
 
+  test("a KB_SERVE_HOSTS name with a leading dot takes that domain and every name under it", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    const { call } = start(store);
+    process.env.KB_SERVE_HOSTS = ".proxy.example.com";
+    try {
+      for (const host of ["4810.proxy.example.com", "a.b.proxy.example.com", "proxy.example.com", "4810.Proxy.Example.com:443"]) {
+        expect((await call("GET", "/api/state", undefined, { host })).status).toBe(200);
+      }
+      // A name that only ends in the same letters is another domain.
+      for (const host of ["evilproxy.example.com", "proxy.example.com.evil.com", "example.com"]) {
+        expect((await call("GET", "/api/state", undefined, { host })).status).toBe(403);
+      }
+    } finally {
+      delete process.env.KB_SERVE_HOSTS;
+    }
+  });
+
   test("the version changes when a note changes, so an open page reloads", async () => {
     const store = tempStore();
     putNote(store, { id: "a" });

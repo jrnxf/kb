@@ -24,17 +24,29 @@ const EDITABLE = ["title", "kind", "confidence", "body"] as const;
 
 /**
  * Names a reverse proxy in front of the server may use, from KB_SERVE_HOSTS, split by commas.
- * Everybody who can open the page under such a name can change notes.
+ * A name that starts with a dot, such as `.example.com`, takes that domain and every name under
+ * it, the same as Vite's allowedHosts. Everybody who can open the page under such a name can
+ * change notes.
  */
 function extraHosts(): string[] {
   return (process.env.KB_SERVE_HOSTS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+}
+
+function allowedHost(host: string, port: number): boolean {
+  if (host === `127.0.0.1:${port}` || host === `localhost:${port}`) return true;
+  const name = host.replace(/:\d+$/, "").toLowerCase();
+  return extraHosts().some((entry) => {
+    entry = entry.toLowerCase();
+    if (!entry.startsWith(".")) return host.toLowerCase() === entry;
+    return name === entry.slice(1) || name.endsWith(entry);
+  });
 }
 
 async function handle(store: Store, token: string, port: number, request: Request): Promise<Response> {
   const url = new URL(request.url);
   // A page on another site can point its own name at 127.0.0.1. The Host header gives that away.
   const host = request.headers.get("host") ?? "";
-  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}` && !extraHosts().includes(host)) return json({ error: "wrong host" }, 403);
+  if (!allowedHost(host, port)) return json({ error: "wrong host" }, 403);
 
   if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/") {
     return new Response(renderHtml(store, token), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
