@@ -2,7 +2,6 @@
 
 import { mkdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { writeHtml } from "./html.ts";
 import { clearStaleCache } from "./stale.ts";
 import type { Store } from "./store.ts";
 
@@ -91,7 +90,6 @@ export function syncNow(store: Store): SyncResult {
     store.clearSyncError();
     // Notes may have arrived from another machine, so rebuild the generated files.
     store.writeIndex();
-    writeHtml(store);
     clearStaleCache(store);
     return { status: "ok", detail: "the store matches the remote" };
   } finally {

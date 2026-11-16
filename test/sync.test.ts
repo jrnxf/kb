@@ -51,7 +51,6 @@ describe("kb sync", () => {
     expect(b.find("from-a")?.title).toBe("Written on machine A");
     // Generated files are rebuilt on the machine that received the note.
     expect(readFileSync(join(b.home, "INDEX.md"), "utf8")).toContain("from-a");
-    expect(readFileSync(join(b.home, "index.html"), "utf8")).toContain("Written on machine A");
   });
 
   test("usage on two machines never conflicts and the counters add up", () => {

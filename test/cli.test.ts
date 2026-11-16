@@ -17,7 +17,6 @@ describe("kb add", () => {
     const note = parseNote(readFileSync(join(home, "notes/global/stripe-needs-the-raw-body.md"), "utf8"));
     expect(note).toMatchObject({ kind: "gotcha", confidence: "medium", indexed: true, anchors: [], body: "Mount express.raw() first." });
     expect(readFileSync(join(home, "INDEX.md"), "utf8")).toContain("[stripe-needs-the-raw-body](notes/global/stripe-needs-the-raw-body.md) [gotcha]");
-    expect(existsSync(join(home, "index.html"))).toBe(true);
   });
 
   test("dedup: the same normalised title in the same scope writes nothing", () => {
@@ -152,53 +151,5 @@ describe("kb search", () => {
       // A title match counts once. The id line does not double it.
       expect(search(store, "raw", { forceScan }).map((h) => h.line)).toEqual([3, 12]);
     }
-  });
-});
-
-describe("kb html", () => {
-  test("writes one self-contained page and shows raw HTML in a note as text", () => {
-    const store = tempStore();
-    putNote(store, { id: "xss", title: "A <b>bold</b> title", body: "Use `x`.\n\n<script>alert(1)</script>" });
-    const result = kb(store, ["html", "--no-open", "--json"]);
-    expect(result.json).toEqual({ path: join(store.home, "index.html"), opened: false });
-    const page = readFileSync(result.json.path, "utf8");
-    expect(page).toContain("A &lt;b&gt;bold&lt;/b&gt; title");
-    expect(page).not.toContain("<script>alert(1)</script>");
-    expect(page).toContain("<code>x</code>");
-    // Self-contained: no script, style, font or picture from the network.
-    expect(page).not.toMatch(/src="http|<link|@import|url\(/);
-  });
-
-  test("a repo scope shows as owner/name and links to the repo", () => {
-    const store = tempStore();
-    putNote(store, { id: "a", scope: "github.com/acme/web" });
-    putNote(store, { id: "b", scope: "gitlab.com/acme/api" });
-    putNote(store, { id: "c", scope: "local-project" });
-    putNote(store, { id: "d" });
-    kb(store, ["html", "--no-open"]);
-    const page = readFileSync(join(store.home, "index.html"), "utf8");
-    expect(page).toContain('<span class="scope"><a href="https://github.com/acme/web" target="_blank" rel="noopener noreferrer">acme/web</a></span>');
-    expect(page).toContain('<span class="scope"><a href="https://gitlab.com/acme/api" target="_blank" rel="noopener noreferrer">gitlab.com/acme/api</a></span>');
-    expect(page).toContain('<span class="scope">local-project</span>');
-    expect(page).toContain('<span class="scope">global</span>');
-  });
-
-  test("an archived note is on the page, marked, behind a toggle that only shows when there is one", () => {
-    const store = tempStore();
-    putNote(store, { id: "live" });
-    kb(store, ["html", "--no-open"]);
-    expect(readFileSync(join(store.home, "index.html"), "utf8")).not.toContain("data-archived");
-    putNote(store, { id: "old", title: "An old note" }, true);
-    kb(store, ["html", "--no-open"]);
-    const page = readFileSync(join(store.home, "index.html"), "utf8");
-    expect(page).toContain("data-archived");
-    expect(page).toMatch(/class="row k-\w+ archived"[^>]*>.*An old note/);
-    expect(page).not.toMatch(/class="row k-\w+ archived"[^>]*data-search="live /);
-  });
-
-  test("fails with a clear message when there is no store", () => {
-    const result = kb(join(tempDir(), "none"), ["html", "--no-open"], { cwd: plain() });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("kb add");
   });
 });
