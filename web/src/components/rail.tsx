@@ -41,7 +41,7 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
         title={it.type === "scope" && it.scope !== "*" ? it.scope : undefined}
         onClick={() => onPick(it)}
         className={cn(
-          "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13.5px] text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:font-[550] aria-pressed:text-foreground",
+          "group/item flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13.5px] text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:font-[550] aria-pressed:text-foreground",
           "max-wide:w-auto max-wide:flex-none max-wide:scroll-mx-4 max-wide:rounded-full max-wide:border max-wide:px-3",
           it.type === "kind" && `k-${it.kind}`,
           it.type !== "archived" && n === 0 && "opacity-40",
@@ -50,8 +50,8 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
       >
         {it.type === "kind" && <Dot />}
         <span className={cn("min-w-0 truncate", it.type === "kind" ? "flex-initial" : "flex-1", "max-wide:overflow-visible")}>{name}</span>
-        {/* The key of a kind sits next to its name, so the count at the right edge stays the only number there. */}
-        {it.type === "kind" && <Kbd className="mr-auto ml-2">{it.n}</Kbd>}
+        {/* The key of a kind shows on hover, next to its name, so the count at the right edge is the only number at rest. */}
+        {it.type === "kind" && <Kbd className="mr-auto ml-2 transition-opacity wide:opacity-0 wide:group-hover/item:opacity-100 group-hover/item:bg-background group-aria-pressed/item:bg-background">{it.n}</Kbd>}
         <span className="text-xs font-normal text-faint tabular-nums">{n}</span>
       </button>
     );
@@ -65,9 +65,9 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
   const kinds = rest.filter((i) => i.type === "kind");
   const archived = rest.find((i) => i.type === "archived");
   return (
-    <aside className="flex min-w-0 flex-col overflow-y-auto border-r pt-7 pr-3 pb-4 pl-4 max-wide:relative max-wide:block max-wide:border-r-0 max-wide:border-b max-wide:px-4 max-wide:pt-5 max-wide:pb-3">
-      <header className="px-2">
-        <h1 className="text-xl/[1.55] font-bold tracking-[-0.01em]">kb</h1>
+    <aside className="flex min-w-0 flex-col overflow-y-auto border-r pt-6 pr-3 pb-4 pl-4 max-wide:relative max-wide:block max-wide:border-r-0 max-wide:border-b max-wide:px-4 max-wide:pt-5 max-wide:pb-3">
+      <header className="flex h-9 items-center px-2 max-wide:h-auto">
+        <h1 className="text-xl/none font-bold tracking-[-0.01em]">kb</h1>
       </header>
       <nav>
         {heading("Scopes")}

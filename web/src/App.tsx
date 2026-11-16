@@ -199,7 +199,7 @@ export function App() {
   /** Archive the open note, or restore it. Each works only on a note it fits. */
   async function archive(restore: boolean) {
     if (!current || editing || current.archived !== restore) return;
-    const id = current.id, after = neighbour(shown.notes, id);
+    const id = current.id, title = current.title, after = neighbour(shown.notes, id);
     try {
       await busy(() => (restore ? api.restoreNote(id) : api.archiveNote(id)));
     } catch (error) {
@@ -215,8 +215,10 @@ export function App() {
     await refresh();
     if (restore) return;
     undoId.current = id;
-    toast("Archived.", {
+    // The toast names the note, as the note it archived is gone from the screen.
+    toast("Archived", {
       id: "kb",
+      description: title,
       duration: UNDO_MS,
       action: {
         label: (
@@ -440,7 +442,7 @@ export function App() {
           <NoteList notes={shown.notes} current={current} q={view.q} onQ={(q) => setView((v) => ({ ...v, q }))} searchRef={search} onOpen={pickRow} empty={empty} />
         </DrawerIndent>
         {!phone && (
-          <main ref={reader} className="min-w-0 overflow-y-auto px-12 pt-12 pb-20">
+          <main ref={reader} className="min-w-0 overflow-y-auto px-12 pt-6 pb-20">
             {page}
           </main>
         )}
