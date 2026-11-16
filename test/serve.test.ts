@@ -80,10 +80,14 @@ describe("kb serve", () => {
     const { call } = start(store);
     expect((await call("POST", "/api/notes/a/archive")).status).toBe(200);
     expect(store.notes()).toHaveLength(0);
-    expect(store.notes({ archived: true }).map((n) => n.body)).toEqual([note.body]);
+    const [archived] = store.notes({ archived: true });
+    expect(archived!.body).toBe(note.body);
+    // The time of the archive is kept, so the archive can list the newest first.
+    expect(Date.now() - Date.parse(archived!.archived_at!)).toBeLessThan(60_000);
     expect((await call("POST", "/api/notes/a/archive")).status).toBe(400);
     expect((await call("POST", "/api/notes/a/restore")).status).toBe(200);
     expect(store.notes().map((n) => n.id)).toEqual(["a"]);
+    expect(store.find("a")!.archived_at).toBeUndefined();
   });
 
   test("a change without the page's token, or under another host name, is refused", async () => {

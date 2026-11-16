@@ -168,12 +168,14 @@ export class Store {
     return path;
   }
 
-  /** Move a note between notes/ and archive/. Nothing is ever deleted. */
-  move(note: StoredNote, archived: boolean): string {
+  /** Move a note between notes/ and archive/, and record when it was archived. Nothing is ever deleted. */
+  move(note: StoredNote, archived: boolean, at: string): string {
     const target = this.notePath(note, archived);
     if (existsSync(target)) throw new KbError(`cannot move ${note.id}: ${relative(this.home, target)} already exists`);
     mkdirSync(dirname(target), { recursive: true });
     renameSync(note.path, target);
+    const { path: _path, archived: _archived, archived_at: _at, ...rest } = note;
+    writeAtomic(target, serializeNote(archived ? { ...rest, archived_at: at } : rest));
     return target;
   }
 

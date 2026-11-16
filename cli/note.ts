@@ -18,6 +18,8 @@ export interface Note {
   indexed: boolean;
   promoted_to?: string;
   supersedes?: string[];
+  /** When the note moved to archive/. Older archived notes have none. */
+  archived_at?: string;
   body: string;
 }
 
@@ -80,9 +82,11 @@ export function validateNote(raw: Record<string, unknown>): Note {
 
   let created = "";
   let lastVerified = "";
+  let archivedAt: string | undefined;
   try {
     created = toIso(raw.created, "created");
     lastVerified = toIso(raw.last_verified, "last_verified");
+    if (raw.archived_at !== undefined) archivedAt = toIso(raw.archived_at, "archived_at");
   } catch (error) {
     problems.push((error as Error).message);
   }
@@ -104,6 +108,7 @@ export function validateNote(raw: Record<string, unknown>): Note {
   if (raw.verified_at_commit !== undefined) note.verified_at_commit = raw.verified_at_commit as string;
   if (raw.promoted_to !== undefined) note.promoted_to = raw.promoted_to as string;
   if (raw.supersedes !== undefined && (raw.supersedes as string[]).length > 0) note.supersedes = raw.supersedes as string[];
+  if (archivedAt) note.archived_at = archivedAt;
   return note;
 }
 
@@ -113,6 +118,11 @@ export function parseNote(text: string): Note {
   const front = Bun.YAML.parse(match[1]!) as Record<string, unknown> | null;
   if (front === null || typeof front !== "object" || Array.isArray(front)) throw new KbError("invalid note: frontmatter is not a map");
   return validateNote({ ...front, body: match[2] });
+}
+
+/** Most recently archived first. A note archived before archived_at existed goes by its last verification. */
+export function byArchivedAt(a: Pick<Note, "archived_at" | "last_verified">, b: Pick<Note, "archived_at" | "last_verified">): number {
+  return (b.archived_at ?? b.last_verified).localeCompare(a.archived_at ?? a.last_verified);
 }
 
 export function serializeNote(note: Note): string {
@@ -131,5 +141,6 @@ export function serializeNote(note: Note): string {
   front.indexed = note.indexed;
   if (note.promoted_to) front.promoted_to = note.promoted_to;
   if (note.supersedes?.length) front.supersedes = note.supersedes;
+  if (note.archived_at) front.archived_at = note.archived_at;
   return `---\n${Bun.YAML.stringify(front, null, 2).trimEnd()}\n---\n${note.body.trim()}\n`;
 }

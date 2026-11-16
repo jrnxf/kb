@@ -127,6 +127,15 @@ describe("kb use, archive, show, list", () => {
     expect(kb(store, ["archive", "nope"]).code).toBe(1);
   });
 
+  test("kb list --archive lists the most recently archived note first", () => {
+    const store = tempStore();
+    putNote(store, { id: "older", archived_at: "2026-05-01T00:00:00Z" }, true);
+    putNote(store, { id: "untimed", last_verified: "2026-02-01T00:00:00Z" }, true);
+    putNote(store, { id: "fresh" });
+    expect(kb(store, ["archive", "fresh"]).code).toBe(0);
+    expect(kb(store, ["list", "--archive", "--json"]).json.map((n: { id: string }) => n.id)).toEqual(["fresh", "older", "untimed"]);
+  });
+
   test("every command gives JSON with --json, also on an error", () => {
     const store = tempStore();
     putNote(store, { id: "a" });
