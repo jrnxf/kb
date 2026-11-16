@@ -138,6 +138,7 @@ body[data-pane=list] .row[aria-current=true], body[data-pane=rail] .item.cur { b
 .empty button:hover { background:var(--hover); color:var(--fg); }
 
 .read { padding:48px 48px 80px; }
+.back, .scrim { display:none; }
 article { max-width:660px; }
 .crumb { display:flex; gap:10px; align-items:center; font-size:12.5px; color:var(--muted); margin:0 0 10px; }
 .crumb .kind { color:var(--k); font-weight:550; }
@@ -199,10 +200,20 @@ pre code { padding:0; background:none; }
   .rail h3, .sep { display:none; }
   .item { flex:none; width:auto; border:1px solid var(--line); border-radius:999px; padding:4px 12px; scroll-margin:0 16px; }
   .item .name { overflow:visible; }
-  .list { max-height:46vh; border-right:0; border-bottom:1px solid var(--line); }
+  .list { border-right:0; }
   .top { padding-top:14px; }
-  /* A short note also fills the screen, so a tap on a row can bring it to the top. */
-  .read { padding:24px 16px 60px; min-height:100vh; min-height:100dvh; }
+  /* A note opens only from a tap on its row, in a drawer that slides up over the list and stops
+     short of the top. A pull down closes it. The script moves it while a finger drags it. */
+  .scrim { display:block; position:fixed; inset:0; z-index:2; background:rgba(0,0,0,0.5); opacity:0; pointer-events:none; }
+  .read { position:fixed; left:0; right:0; bottom:0; z-index:3; height:82vh; height:82dvh; padding:0 16px 60px; overflow-y:auto; overscroll-behavior:contain; background:var(--bg); border-radius:14px 14px 0 0; box-shadow:0 -1px 0 var(--line), 0 -10px 40px rgba(0,0,0,0.35); transform:translate3d(0,100%,0); visibility:hidden; will-change:transform; }
+  .read.anim, .scrim.anim { transition:transform 500ms cubic-bezier(0.32,0.72,0,1), opacity 500ms cubic-bezier(0.32,0.72,0,1); }
+  body[data-reading] { overflow:hidden; }
+  body[data-reading] .scrim { pointer-events:auto; }
+  body[data-reading] .read, body.closing .read { visibility:visible; }
+  .back { display:block; position:sticky; top:0; z-index:1; margin:0 -16px 16px; padding:8px 16px 10px; background:var(--bg); border-bottom:1px solid var(--line); border-radius:14px 14px 0 0; touch-action:none; cursor:grab; user-select:none; -webkit-user-select:none; }
+  .back::before { content:""; display:block; width:36px; height:5px; margin:0 auto 6px; border-radius:3px; background:var(--faint); opacity:0.5; }
+  .back button { display:flex; align-items:center; gap:6px; padding:4px 0; font-size:14px; color:var(--muted); }
+  .back svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
   /* Safari on a phone zooms into a field with smaller text, and does not zoom back. */
   .search input, .form input, .form select, .form textarea { font-size:16px; }
 }
@@ -225,6 +236,81 @@ let pane = "list", current = null, shown = [], cursor = items[0], held = null, f
 const isScope = (item) => item.dataset.scope !== undefined;
 const scopeItem = () => items.find((i) => isScope(i) && (state.scope || "*") === i.dataset.scope) || items[0];
 const article = () => (current ? document.getElementById("n-" + current.dataset.n) : null);
+const PHONE = matchMedia("(max-width: 900px)");
+const reading = () => document.body.dataset.reading !== undefined;
+// The drawer on a phone. y is how far it is moved down from open: 0 is open, its height is closed.
+const scrim = document.getElementById("scrim"), bar = read.querySelector(".back");
+let drag = null;
+function place(y, animate) {
+  read.classList.toggle("anim", animate); scrim.classList.toggle("anim", animate);
+  read.style.transform = "translate3d(0," + y + "px,0)";
+  // The dim fades out as the drawer goes down.
+  scrim.style.opacity = Math.min(1, Math.max(0, 1 - y / read.offsetHeight));
+}
+/** The open note gets a history entry, so the back gesture closes it. */
+function openNote(push) {
+  if (!current) return;
+  document.body.dataset.reading = "";
+  read.scrollTop = 0;
+  place(read.offsetHeight, false);
+  read.getBoundingClientRect();
+  place(0, push);
+  if (push) history.pushState({ reading: true }, "", location.href);
+  remember();
+}
+function closeNote() {
+  if (!reading()) return;
+  if (form) closeForm();
+  delete document.body.dataset.reading;
+  document.body.classList.add("closing");
+  place(read.offsetHeight, true);
+  setTimeout(() => document.body.classList.remove("closing"), 500);
+  remember();
+}
+/** The back button. When the note has its own history entry, going back closes it, as the gesture does. */
+function back() {
+  if (history.state && history.state.reading) history.back();
+  else closeNote();
+}
+// A drag moves the drawer with the finger. On release it closes after a pull a quarter of its
+// height or a flick down, as in Vaul. Otherwise it springs back.
+function dragStart(y) { drag = { y0: y, y, t: performance.now(), v: 0, pos: 0 }; }
+function dragMove(y) {
+  const now = performance.now();
+  drag.v = 0.7 * ((y - drag.y) / Math.max(1, now - drag.t)) + 0.3 * drag.v;
+  drag.y = y; drag.t = now;
+  let pos = y - drag.y0;
+  // Up past open it resists, as a rubber band.
+  if (pos < 0) pos = -Math.sqrt(-pos) * 2;
+  drag.pos = pos;
+  place(pos, false);
+}
+function dragEnd() {
+  if (!drag) return;
+  const { pos, v } = drag;
+  drag = null;
+  if (pos > read.offsetHeight * 0.25 || (v > 0.4 && pos > 10)) back(); else place(0, true);
+}
+// The bar takes the pointer only once it moves, so a tap on "Notes" stays a click.
+bar.addEventListener("pointerdown", (e) => { if (reading()) dragStart(e.clientY); });
+bar.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  if (!bar.hasPointerCapture(e.pointerId) && Math.abs(e.clientY - drag.y0) > 4) bar.setPointerCapture(e.pointerId);
+  if (bar.hasPointerCapture(e.pointerId)) dragMove(e.clientY);
+});
+bar.addEventListener("pointerup", dragEnd);
+bar.addEventListener("pointercancel", dragEnd);
+// In the note, a pull down at its start moves the drawer. Every other swipe scrolls the note.
+// An open form keeps its own touches.
+let touchY = null;
+read.addEventListener("touchstart", (e) => { touchY = reading() && !form && !bar.contains(e.target) ? e.touches[0].clientY : null; }, { passive: true });
+read.addEventListener("touchmove", (e) => {
+  const y = e.touches[0].clientY;
+  if (!drag && touchY !== null && Math.abs(y - touchY) > 4 && read.scrollTop <= 0 && y > touchY) dragStart(touchY);
+  if (drag && touchY !== null) { e.preventDefault(); dragMove(y); }
+}, { passive: false });
+for (const type of ["touchend", "touchcancel"]) read.addEventListener(type, () => { if (touchY !== null) dragEnd(); touchY = null; });
+scrim.addEventListener("click", back);
 
 // The address keeps the view, so a reload after a change comes back to the same place.
 function remember(noteId) {
@@ -236,7 +322,8 @@ function remember(noteId) {
   const id = noteId !== undefined ? noteId : current && current.dataset.id;
   if (id) view.set("note", id);
   if (pane === "rail") view.set("pane", pane);
-  history.replaceState(null, "", "#" + view);
+  if (reading()) view.set("read", "1");
+  history.replaceState(history.state, "", "#" + view);
 }
 function paint() {
   document.body.dataset.pane = pane;
@@ -407,11 +494,12 @@ document.addEventListener("click", (event) => {
   } else if (item) {
     pane = "rail"; cursor = item;
     activate(item);
-  } else if (row) {
+  } else if (event.target.closest("#back")) back();
+  else if (row) {
     pane = "list";
     show(row);
     paint();
-    if (matchMedia("(max-width: 900px)").matches) read.scrollIntoView({ block: "start" });
+    if (PHONE.matches) openNote(true);
   }
 });
 document.addEventListener("keydown", (event) => {
@@ -427,6 +515,7 @@ document.addEventListener("keydown", (event) => {
     if (key === "?") { event.preventDefault(); help.close(); }
     return;
   }
+  if (key === "Escape" && reading()) { event.preventDefault(); back(); return; }
   if (document.activeElement === q) {
     if (key === "Escape") { q.value = ""; q.blur(); render(); }
     else if (key === "ArrowDown" || key === "Enter") { event.preventDefault(); q.blur(); pane = "list"; paint(); }
@@ -467,9 +556,15 @@ state.archived = view.has("archived") && items.some((i) => i.dataset.archived !=
 q.value = view.get("q") || "";
 current = rows.find((r) => r.dataset.id === view.get("note")) || null;
 if (view.get("pane") === "rail") pane = "rail";
+addEventListener("popstate", () => { if (!(history.state && history.state.reading)) closeNote(); });
+// A phone that turns wide shows the note in its pane, so the cover goes away.
+PHONE.addEventListener("change", () => { if (!PHONE.matches) { closeNote(); read.style.transform = ""; } });
+
 setTheme(document.documentElement.dataset.theme || "system");
 cursor = scopeItem(); held = state.scope;
 render();
+// A reload, after an edit or a change by an agent, keeps the open note open.
+if (view.has("read") && PHONE.matches) openNote(false);
 // On a phone the scopes are one row that scrolls sideways. Start with the picked scope in view.
 cursor.parentElement.scrollLeft = cursor.offsetLeft - cursor.parentElement.offsetLeft - (cursor.parentElement.clientWidth - cursor.offsetWidth) / 2;
 if (sessionStorage.getItem("kb-undo")) {
@@ -558,7 +653,9 @@ ${notes.map(rowHtml).join("\n")}
 </div>
 <div class="empty" id="none" hidden><span>${notes.length === 0 ? "the store has no notes yet" : "no notes match"}</span><button type="button" id="clear">clear filters</button></div>
 </div>
+<div class="scrim" id="scrim"></div>
 <main class="pane read" id="read">
+<div class="back"><button type="button" id="back"><svg viewBox="0 0 16 16"><path d="M3.5 6 8 10.5 12.5 6"/></svg>Notes</button></div>
 ${notes.map((note, n) => articleHtml(note, n, usage)).join("\n")}
 </main>
 </div>
