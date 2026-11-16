@@ -430,7 +430,6 @@ async function main(): Promise<number> {
       case "promote": out = cmdPromote(store, args); break;
       case "checkpointed": out = cmdCheckpointed(store, args); break;
       case "serve": out = await cmdServe(store, args, json); break;
-      case "html": throw new KbError("kb html is gone. Run `kb serve`: the same page, and it can edit and archive notes.");
       case "sync": out = cmdSync(store); break;
       default: throw new KbError(`unknown command "${command}". Run \`kb help\`.`);
     }
