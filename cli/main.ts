@@ -4,7 +4,7 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { buildBudget, buildContext, rank } from "./context.ts";
-import { CONFIDENCES, KINDS, KbError, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
+import { CONFIDENCES, KINDS, KbError, byArchivedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { searchNotes } from "./search.ts";
 import { DEFAULT_PORT, isKbServer, serve } from "./serve.ts";
@@ -230,10 +230,10 @@ function cmdSearch(store: Store, args: Args): Output {
 function cmdList(store: Store, args: Args): Output {
   const scope = scopeFilter(store, args);
   const usage = store.usage();
-  const notes = rank(
-    store.notes({ archived: args.flags.has("archive") }).filter((n) => scope === undefined || n.scope === scope),
-    usage,
-  );
+  const archive = args.flags.has("archive");
+  const found = store.notes({ archived: archive }).filter((n) => scope === undefined || n.scope === scope);
+  // The archive lists the most recently archived note first.
+  const notes = archive ? found.sort(byArchivedAt) : rank(found, usage);
   const rows = notes.map((n) => ({
     id: n.id,
     kind: n.kind,

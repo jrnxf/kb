@@ -20,14 +20,16 @@ describe("the data behind the page", () => {
     expect(note!.title).toBe("A <b>bold</b> title");
   });
 
-  test("puts global first, then the scopes in order, and the archive after the live notes of each", () => {
+  test("puts global first, then the scopes in order, then the archive with the most recently archived first", () => {
     const store = tempStore();
     putNote(store, { id: "z", scope: "github.com/acme/zed" });
-    putNote(store, { id: "old", scope: "github.com/acme/api" }, true);
+    putNote(store, { id: "before", scope: "github.com/acme/api", last_verified: "2026-03-01T00:00:00Z" }, true);
+    putNote(store, { id: "older", scope: "github.com/acme/api", archived_at: "2026-05-01T00:00:00Z" }, true);
+    putNote(store, { id: "newer", scope: "github.com/acme/zed", archived_at: "2026-06-01T00:00:00Z" }, true);
     putNote(store, { id: "a", scope: "github.com/acme/api" });
     putNote(store, { id: "g" });
     const data = pageData(store, "the-token");
-    expect(data.notes.map((n) => [n.id, n.archived])).toEqual([["g", false], ["a", false], ["old", true], ["z", false]]);
+    expect(data.notes.map((n) => [n.id, n.archived])).toEqual([["g", false], ["a", false], ["z", false], ["newer", true], ["older", true], ["before", true]]);
     expect(data.token).toBe("the-token");
     expect(data.kinds).toEqual(["open-work", "gotcha", "convention", "decision", "how-to"]);
   });

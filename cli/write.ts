@@ -56,7 +56,7 @@ export function moveNotes(store: Store, ids: string[], toArchive: boolean): stri
   for (const id of ids) {
     const note = requireNote(store, id);
     if (note.archived === toArchive) throw new KbError(`${id} is already ${toArchive ? "archived" : "active"}`);
-    store.move(note, toArchive);
+    store.move(note, toArchive, nowIso());
     moved.push(id);
   }
   afterWrite(store, `kb: ${toArchive ? "archive" : "restore"} ${moved.join(" ")}`);

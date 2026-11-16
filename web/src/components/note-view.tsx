@@ -22,7 +22,7 @@ export function NoteView({ note, onEdit, onArchive, onRestore }: Props) {
     `verified ${day(note.last_verified)}${note.verified_at_commit ? ` at ${note.verified_at_commit}` : ""}`,
     `confidence ${note.confidence}`,
     `${note.uses} ${note.uses === 1 ? "use" : "uses"}${note.last_used ? `, last ${day(note.last_used)}` : ""}`,
-    note.archived && "archived",
+    note.archived && (note.archived_at ? `archived ${day(note.archived_at)}` : "archived"),
     !note.indexed && "not indexed",
     note.promoted_to && `promoted to ${note.promoted_to}`,
   ].filter(Boolean);

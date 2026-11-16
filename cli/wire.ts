@@ -9,6 +9,8 @@ export interface PageNote {
   archived: boolean;
   indexed: boolean;
   last_verified: string;
+  /** When the note was archived. Notes archived before this was recorded have none. */
+  archived_at?: string;
   verified_at_commit?: string;
   promoted_to?: string;
   anchors: string[];
@@ -26,7 +28,7 @@ export interface PageData {
   /** Every request that changes the store must carry this. */
   token: string;
   kinds: string[];
-  /** Scope by scope (global first), live notes before archived ones, each in rank order. */
+  /** Live notes scope by scope (global first) in rank order, then archived notes, most recently archived first. */
   notes: PageNote[];
 }
 

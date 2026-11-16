@@ -1,7 +1,7 @@
 // The data behind the page that `kb serve` shows. The page itself is a React app in web/.
 
 import { rank } from "./context.ts";
-import { KINDS } from "./note.ts";
+import { KINDS, byArchivedAt } from "./note.ts";
 import type { Store, StoredNote } from "./store.ts";
 import type { PageData, PageNote } from "./wire.ts";
 
@@ -27,7 +27,8 @@ export function pageData(store: Store, token: string): PageData {
   const active = store.notes();
   const archived = store.notes({ archived: true });
   const scopes = [...new Set([...active, ...archived].map((n) => n.scope))].sort((a, b) => (a === "global" ? -1 : b === "global" ? 1 : a.localeCompare(b)));
-  const ordered = scopes.flatMap((scope) => [...rank(active.filter((n) => n.scope === scope), usage), ...rank(archived.filter((n) => n.scope === scope), usage)]);
+  // Live notes scope by scope in rank order, then the archive, most recently archived first.
+  const ordered = [...scopes.flatMap((scope) => rank(active.filter((n) => n.scope === scope), usage)), ...archived.sort(byArchivedAt)];
   const notes = ordered.map((note): PageNote => {
     const used = usage.get(note.id);
     return {
@@ -39,6 +40,7 @@ export function pageData(store: Store, token: string): PageData {
       archived: note.archived,
       indexed: note.indexed,
       last_verified: note.last_verified,
+      archived_at: note.archived_at,
       verified_at_commit: note.verified_at_commit,
       promoted_to: note.promoted_to,
       anchors: note.anchors,
