@@ -177,10 +177,23 @@ describe("kb html", () => {
     putNote(store, { id: "d" });
     kb(store, ["html", "--no-open"]);
     const page = readFileSync(join(store.home, "index.html"), "utf8");
-    expect(page).toContain('<h2><a href="https://github.com/acme/web" target="_blank" rel="noopener noreferrer">acme/web</a> ');
-    expect(page).toContain('<h2><a href="https://gitlab.com/acme/api" target="_blank" rel="noopener noreferrer">gitlab.com/acme/api</a> ');
-    expect(page).toContain("<h2>local-project ");
-    expect(page).toContain("<h2>global ");
+    expect(page).toContain('<span class="scope"><a href="https://github.com/acme/web" target="_blank" rel="noopener noreferrer">acme/web</a></span>');
+    expect(page).toContain('<span class="scope"><a href="https://gitlab.com/acme/api" target="_blank" rel="noopener noreferrer">gitlab.com/acme/api</a></span>');
+    expect(page).toContain('<span class="scope">local-project</span>');
+    expect(page).toContain('<span class="scope">global</span>');
+  });
+
+  test("an archived note is on the page, marked, behind a toggle that only shows when there is one", () => {
+    const store = tempStore();
+    putNote(store, { id: "live" });
+    kb(store, ["html", "--no-open"]);
+    expect(readFileSync(join(store.home, "index.html"), "utf8")).not.toContain("data-archived");
+    putNote(store, { id: "old", title: "An old note" }, true);
+    kb(store, ["html", "--no-open"]);
+    const page = readFileSync(join(store.home, "index.html"), "utf8");
+    expect(page).toContain("data-archived");
+    expect(page).toMatch(/class="row k-\w+ archived"[^>]*>.*An old note/);
+    expect(page).not.toMatch(/class="row k-\w+ archived"[^>]*data-search="live /);
   });
 
   test("fails with a clear message when there is no store", () => {
