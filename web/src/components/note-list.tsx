@@ -25,7 +25,8 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty }: P
   }, [current?.id]);
   return (
     <div className="min-w-0 overflow-y-auto border-r max-wide:border-r-0">
-      <div className="sticky top-0 z-10 bg-background px-4 pt-6 pb-2 max-wide:pt-3.5">
+      {/* Rows fade out under the filter, so a cut row does not show the tails of its letters. */}
+      <div className="sticky top-0 z-10 bg-background px-4 pt-6 pb-2 max-wide:pt-3.5 after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-5 after:bg-linear-to-b after:from-background after:to-transparent">
         <InputGroup className="group/search h-9 bg-card dark:bg-card">
           <InputGroupInput
             ref={searchRef}
@@ -41,7 +42,7 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty }: P
             <Kbd>/</Kbd>
           </InputGroupAddon>
         </InputGroup>
-        {notes.length > 0 && <div className="mt-3.5 font-mono text-xs/[normal] text-faint">{notes.length === 1 ? "1 note" : `${notes.length} notes`}</div>}
+        {notes.length > 0 && <div className="mt-3.5 text-xs/[normal] text-faint tabular-nums">{notes.length === 1 ? "1 note" : `${notes.length} notes`}</div>}
       </div>
       {notes.length === 0 ? (
         <Empty className="items-start gap-2.5 rounded-none border-0 px-4 pt-0.5 pb-6 text-left md:p-0 md:px-4">

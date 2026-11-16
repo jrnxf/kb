@@ -27,8 +27,8 @@ export function NoteView({ note, onEdit, onArchive, onRestore }: Props) {
     note.promoted_to && `promoted to ${note.promoted_to}`,
   ].filter(Boolean);
   return (
-    <article className={`k-${note.kind} max-w-[660px]`}>
-      <div className="mb-2.5 flex items-center gap-2.5 text-[12.5px] text-muted-foreground">
+    <article className={`k-${note.kind}`}>
+      <div className="mb-2.5 flex min-h-9 items-center gap-2.5 text-[12.5px] text-muted-foreground">
         <Dot />
         <span className="font-[550] text-(--k)">{note.kind}</span>
         <span>

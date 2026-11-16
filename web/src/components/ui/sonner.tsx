@@ -24,6 +24,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
       toastOptions={{
         classNames: {
           toast: "cn-toast",
+          description: "!text-muted-foreground truncate max-w-full",
+          // An action looks like the note's own outline buttons, not a light block on a dark toast.
+          actionButton:
+            "!h-auto !gap-1.5 !rounded-md !border !border-input !bg-transparent !py-[3px] !pr-[3px] !pl-[9px] !text-[12.5px] !font-normal !text-foreground hover:!bg-muted",
         },
       }}
       {...props}

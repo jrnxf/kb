@@ -63,7 +63,6 @@ export function NoteForm({ note, kinds, onCancel, onSave }: Props) {
           form.current?.requestSubmit();
         }
       }}
-      className="max-w-[660px]"
     >
       <FieldGroup className="gap-3.5">
         <Field>

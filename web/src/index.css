@@ -72,27 +72,28 @@
   --k-how-to: #0369a1;
 }
 
+/* shadcn's neutral greys. kb's own tokens are steps of the same scale. */
 .dark {
-  --background: #151514;
-  --foreground: #ececea;
-  --card: #1c1c1b;
-  --card-foreground: #ececea;
-  --popover: #1c1c1b;
-  --popover-foreground: #ececea;
-  --primary: #ececea;
-  --primary-foreground: #151514;
-  --secondary: #262625;
-  --secondary-foreground: #ececea;
-  --muted: #1c1c1b;
-  --muted-foreground: #96968f;
-  --accent: #1c1c1b;
-  --accent-foreground: #ececea;
-  --destructive: #f87171;
-  --border: #262624;
-  --input: #2c2c2a;
-  --ring: #6b6b65;
-  --faint: #6b6b65;
-  --edge: #3b3b38;
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --faint: oklch(0.556 0 0);
+  --edge: oklch(0.371 0 0);
   --link: #8aa6ff;
   --k-open-work: #fb923c;
   --k-gotcha: #f87171;
@@ -127,6 +128,8 @@
 
 /* A note's body, from markdown. */
 .prose-kb {
+  /* A line of about 75 characters, however wide the column is. */
+  max-width: 75ch;
   font-size: 15.5px;
   line-height: 1.65;
   overflow-wrap: anywhere;
