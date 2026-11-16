@@ -70,8 +70,9 @@ kb sync                      kb checkpointed <session-id>
 list, and the open note. The arrow keys move through the sidebar and the list. `e` edits the open
 note and `a` archives it. `1` to `5` turn kinds on and off, and several can be on at once. `?` lists every key. On a phone the scopes and the kinds are two rows that scroll sideways, and a tap on a note brings it to the top of the screen. Each change goes through the same code as the CLI, so it is validated, committed and
 synced. The server listens on this machine only, and stops with Ctrl+C. To reach it through a
-reverse proxy, name the proxy's host in `KB_SERVE_HOSTS`. Everybody who can open that name can
-change notes.
+reverse proxy, name the proxy's host in `KB_SERVE_HOSTS`, split by commas. A name that starts with a
+dot, such as `.example.com`, takes that domain and every name under it, so one setting covers a
+proxy that gives each port its own name. Everybody who can open that name can change notes.
 
 `kb search` finds the notes that have every word of the query, in any order, in the title or the
 body. When no note has every word, it prints the closest notes and says so. Each note is one line
