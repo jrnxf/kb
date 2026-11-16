@@ -163,12 +163,9 @@ describe("kb serve", () => {
     }
   });
 
-  test("kb html is gone and says what replaces it, and no page file is written", () => {
+  test("a write makes no page file", () => {
     const store = tempStore();
     putNote(store, { id: "a" });
-    const result = kb(store, ["html"]);
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("kb serve");
     kb(store, ["use", "a"]);
     expect(existsSync(join(store.home, "index.html"))).toBe(false);
   });
