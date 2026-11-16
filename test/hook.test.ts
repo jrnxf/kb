@@ -171,12 +171,22 @@ describe("session notices", () => {
     const cache = join(store.home, ".state", "stale.json");
     for (let i = 0; i < 100 && !existsSync(cache); i++) await Bun.sleep(50);
     expect(JSON.parse(readFileSync(cache, "utf8"))["github.com/acme/billing"].notes).toBe(6);
-    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain("6 kb notes for this scope may be stale. The user can run /kb:audit to check them.");
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain("6 kb notes for this scope may be stale. Tell the user in one line, in your first reply, that /kb:audit checks them.");
     // 5 or fewer: no line. A write clears the cache.
     kb(store, ["archive", "old-0"]);
     expect(existsSync(cache)).toBe(false);
     kb(store, ["stale"], { cwd: repo });
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain("may be stale");
+  });
+
+  test("a store over its index budget gives one line, and a store within it gives none", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    for (let i = 0; i < 4; i++) putNote(store, { id: `n-${i}` });
+    const line = "The kb store is over its index budget here";
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain(line);
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 3, contextChars: 8000 } }));
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(`${line}: 1 note is hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
   });
 
   test("the state directory stays out of git, also in a store made by an older version", () => {

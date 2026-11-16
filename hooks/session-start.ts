@@ -21,7 +21,7 @@ try {
     // no stdin or not JSON: use the process directory
   }
   const store = new Store();
-  const { text } = buildContext(store, cwd);
+  const { text, hiddenIndexLines } = buildContext(store, cwd);
   const notices: string[] = [];
 
   if (store.exists()) {
@@ -38,7 +38,10 @@ try {
     // count and, when it is out of date, starts the checks in the background for next time.
     const repo = resolveRepo(cwd, store);
     const stale = cachedStaleCount(store, repo.scope, repo.head);
-    if (stale && stale.notes > STALE_NOTICE_ABOVE) notices.push(`${stale.notes} kb notes for this scope may be stale. The user can run /kb:audit to check them.`);
+    // Hook output reaches the agent only, so each line asks it to pass the message on.
+    if (stale && stale.notes > STALE_NOTICE_ABOVE) notices.push(`${stale.notes} kb notes for this scope may be stale. Tell the user in one line, in your first reply, that /kb:audit checks them.`);
+    // Bodies that do not fit are normal in a large store. Index lines that do not fit mean notes are invisible.
+    if (hiddenIndexLines > 0) notices.push(`The kb store is over its index budget here: ${hiddenIndexLines} ${hiddenIndexLines === 1 ? "note is" : "notes are"} hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
     if (text && !stale?.fresh) detached(store, ["stale", "--repo", cwd, "--quiet"]);
   }
 
