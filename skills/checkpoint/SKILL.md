@@ -1,6 +1,7 @@
 ---
 name: checkpoint
-description: Save the durable knowledge of this session to the kb store before /clear. Run only when the user types /kb:checkpoint.
+description: Save the durable knowledge of this session to the kb store before /clear, and move Claude Code's auto memory into kb. Run only when the user types /kb:checkpoint.
+argument-hint: "[auto memory folder]"
 disable-model-invocation: true
 allowed-tools: Bash(kb *), Bash(rm *), Bash(echo *), Read, Glob, Edit
 ---
@@ -41,18 +42,22 @@ When the answer starts with `no note has every word. Closest:`, read those notes
 
 ### Move Claude Code's auto memory into kb
 
-kb replaces Claude Code's auto memory. Its folders are `<config>/projects/*/memory/`, where `<config>` is `$CLAUDE_CONFIG_DIR`, or `~/.claude` when that is not set.
-Run `echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"` to get the absolute path. List the files with Glob `<that path>/projects/*/memory/*.md`, and read each one except `MEMORY.md`.
-The folder of this session's project has the project path as its name, with each `/` and `.` changed to `-`.
+kb replaces Claude Code's auto memory. Read one memory folder:
 
-For each fact in it:
+- With an argument (`/kb:checkpoint <folder>`), read that folder only: $ARGUMENTS
+- Without one, read the folder of this session's project: `<config>/projects/<name>/memory/`. `<config>` is `$CLAUDE_CONFIG_DIR`, or `~/.claude` when that is not set (run `echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"` for the absolute path). `<name>` is the absolute path of the session's directory, with each `/` and `.` changed to `-`.
+
+Read each `*.md` file in the folder except `MEMORY.md`. A folder that does not exist or has no files: skip this step.
+The folder belongs to this session's project when its name is the session's directory as above, or the same path under an older home folder (`-Users-olduser-dev-app` for `/Users/user/dev/app`). Else its project is gone or elsewhere.
+
+For each fact in it, apply the skip rules of step 1 first: a dated status, a finished plan or a one-time state is not worth a note. Then:
 
 - It holds in every repo (a user preference, a feedback rule, a tool): treat it as a candidate with the scope `"global"`, and search as above.
-- It is about this session's project: treat it as a candidate with the scope `"repo"`.
-- It is about another project: leave it, and list it under **Skipped** with the folder name.
+- It is about this session's project, and the folder belongs to it: treat it as a candidate with the scope `"repo"`.
+- It is about another project: leave it, and list it under **Skipped**.
 
 When kb holds the fact, after a write or because a note already covered it, remove the memory file with `rm` and remove its line from that folder's `MEMORY.md`.
-Remove nothing when the `kb` write failed. Never leave the same fact in both stores.
+Remove nothing when the `kb` write failed, and leave the files you skipped. Never leave the same fact in both stores.
 
 ## 3. Write
 
