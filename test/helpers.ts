@@ -43,8 +43,11 @@ export function tempRepo(options: { remote?: string; name?: string } = {}): stri
 
 let counter = 0;
 
+/** A time this many days ago, as kb writes it. */
+export const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+
 /** Write a note straight to the store, with defaults for every field. */
-export function putNote(store: Store, fields: Partial<Note> & { id: string }, archived = false): Note {
+export function putNote(store: Store, fields: Partial<Note> & { id: string }, trashed = false): Note {
   counter++;
   const note: Note = {
     title: `Title of ${fields.id}`,
@@ -58,7 +61,7 @@ export function putNote(store: Store, fields: Partial<Note> & { id: string }, ar
     body: `Body of ${fields.id}, note number ${counter}.`,
     ...fields,
   };
-  store.writeNote(note, archived);
+  store.writeNote(note, trashed);
   return note;
 }
 

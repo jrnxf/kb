@@ -106,7 +106,7 @@ describe("kb context visibility", () => {
     expect(outside.bodies).toEqual(["global-note"]);
   });
 
-  test("excludes promoted, unindexed and archived notes", () => {
+  test("excludes promoted, unindexed and trashed notes", () => {
     const store = tempStore();
     putNote(store, { id: "promoted", promoted_to: "CLAUDE.md" });
     putNote(store, { id: "hidden", indexed: false });

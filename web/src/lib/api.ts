@@ -24,5 +24,7 @@ export async function storeVersion(): Promise<string> {
 }
 
 export const saveNote = (id: string, edit: NoteEdit) => call("PUT", `/api/notes/${id}`, edit);
-export const archiveNote = (id: string) => call("POST", `/api/notes/${id}/archive`);
+export const trashNote = (id: string) => call("POST", `/api/notes/${id}/trash`);
+export const deleteNote = (id: string) => call("DELETE", `/api/notes/${id}`);
+export const emptyTrash = () => call<{ deleted: string[] }>("POST", "/api/trash/empty");
 export const restoreNote = (id: string) => call("POST", `/api/notes/${id}/restore`);

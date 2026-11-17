@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { scopeName } from "@/lib/view";
 import { Dot } from "./bits";
 
-export type RailItem = { key: string } & ({ type: "scope"; scope: string } | { type: "kind"; kind: string; n: number } | { type: "archived" });
+export type RailItem = { key: string } & ({ type: "scope"; scope: string } | { type: "kind"; kind: string; n: number } | { type: "trash" });
 
 interface Props {
   items: RailItem[];
@@ -24,14 +24,14 @@ interface Props {
 
 const THEME_ICON = { system: MonitorIcon, light: SunIcon, dark: MoonIcon };
 
-/** The sidebar: scopes, kinds and the archive. On a phone the scopes and the kinds are two rows that scroll sideways. */
+/** The sidebar: scopes, kinds and the trash. On a phone the scopes and the kinds are two rows that scroll sideways. */
 export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, onKeys }: Props) {
   const ThemeIcon = THEME_ICON[theme];
   const scopes = items.filter((i) => i.type === "scope");
   const rest = items.filter((i) => i.type !== "scope");
   const item = (it: RailItem) => {
     const n = count(it);
-    const name = it.type === "scope" ? (it.scope === "*" ? "all" : scopeName(it.scope)) : it.type === "kind" ? it.kind : "archived";
+    const name = it.type === "scope" ? (it.scope === "*" ? "all" : scopeName(it.scope)) : it.type === "kind" ? it.kind : "trash";
     return (
       <button
         key={it.key}
@@ -45,7 +45,7 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
           "group/item flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13.5px] text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:font-[550] aria-pressed:text-foreground",
           "wide:scroll-my-(--scroll-fade) max-wide:w-auto max-wide:flex-none max-wide:scroll-mx-4 max-wide:rounded-full max-wide:border max-wide:px-3",
           it.type === "kind" && `k-${it.kind}`,
-          it.type !== "archived" && n === 0 && "opacity-40",
+          it.type !== "trash" && n === 0 && "opacity-40",
           cursor === it.key && "group-data-[pane=rail]/page:bg-secondary group-data-[pane=rail]/page:text-foreground group-data-[pane=rail]/page:ring-1 group-data-[pane=rail]/page:ring-edge group-data-[pane=rail]/page:ring-inset",
         )}
       >
@@ -64,7 +64,7 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
   const global = scopes.filter((s) => s.scope === "*" || s.scope === "global");
   const repos = scopes.filter((s) => s.scope !== "*" && s.scope !== "global");
   const kinds = rest.filter((i) => i.type === "kind");
-  const archived = rest.find((i) => i.type === "archived");
+  const trash = rest.find((i) => i.type === "trash");
   return (
     <aside className="flex min-h-0 min-w-0 flex-col border-r pt-6 pb-4 pl-4 max-wide:relative max-wide:block max-wide:border-r-0 max-wide:border-b max-wide:px-4 max-wide:pt-5 max-wide:pb-3">
       <header className="flex h-9 items-center px-2 max-wide:h-auto">
@@ -82,8 +82,8 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
           <div className={strip}>
             {heading("Kinds")}
             {kinds.map(item)}
-            {archived && sep}
-            {archived && item(archived)}
+            {trash && sep}
+            {trash && item(trash)}
           </div>
         </nav>
       </ScrollArea>

@@ -1,4 +1,4 @@
-// `kb serve`: the store as a local page, where a person can read, edit and archive notes.
+// `kb serve`: the store as a local page, where a person can read, edit, trash and delete notes.
 // It listens on this machine only. The page is the React app built into web/dist, and it reads
 // the store from /api/page.
 
@@ -7,9 +7,12 @@ import { join, normalize, sep } from "node:path";
 import { pageData, storeVersion } from "./page.ts";
 import { KbError } from "./note.ts";
 import type { Store } from "./store.ts";
-import { moveNotes, requireNote, updateNote } from "./write.ts";
+import { deleteNotes, emptyTrash, moveNotes, requireNote, tidyTrash, updateNote } from "./write.ts";
 
 export const DEFAULT_PORT = 4810;
+
+/** How often a running server clears the notes whose time in the trash is up. */
+const TIDY_MS = 3_600_000;
 
 /** The built page. It is committed, so the plugin needs no install step. */
 export const DIST = join(import.meta.dir, "..", "web", "dist");
@@ -55,12 +58,22 @@ async function handle(store: Store, token: string, port: number, request: Reques
 
   if (request.method === "GET" && url.pathname === "/api/state") return json({ kb: true, version: storeVersion(store) });
   // Another site cannot read this answer, so it cannot learn the token.
-  if (request.method === "GET" && url.pathname === "/api/page") return json(pageData(store, token));
+  if (request.method === "GET" && url.pathname === "/api/page") {
+    // A note whose time in the trash is up goes before the page shows it.
+    tidy(store);
+    return json(pageData(store, token));
+  }
   if ((request.method === "GET" || request.method === "HEAD") && !url.pathname.startsWith("/api/")) return staticFile(url.pathname);
 
-  const match = url.pathname.match(/^\/api\/notes\/([a-z0-9-]+)(?:\/(archive|restore))?$/);
+  if (url.pathname === "/api/trash/empty") {
+    if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
+    if (request.method !== "POST") return json({ error: "not found" }, 404);
+    return json({ deleted: emptyTrash(store) });
+  }
+
+  const match = url.pathname.match(/^\/api\/notes\/([a-z0-9-]+)(?:\/(trash|restore))?$/);
   if (!match) return json({ error: "not found" }, 404);
-  const [, id, action] = match as unknown as [string, string, "archive" | "restore" | undefined];
+  const [, id, action] = match as unknown as [string, string, "trash" | "restore" | undefined];
 
   if (request.method === "GET" && !action) {
     const { path: _path, ...note } = requireNote(store, id);
@@ -70,8 +83,13 @@ async function handle(store: Store, token: string, port: number, request: Reques
   if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
 
   if (request.method === "POST" && action) {
-    moveNotes(store, [id], action === "archive");
-    return json({ id, archived: action === "archive" });
+    moveNotes(store, [id], action === "trash");
+    return json({ id, trashed: action === "trash" });
+  }
+  if (request.method === "DELETE" && !action) {
+    // The page deletes only from the trash. An active note goes to the trash first.
+    if (!requireNote(store, id).trashed) return json({ error: `${id} is not in the trash` }, 400);
+    return json({ deleted: deleteNotes(store, [id]) });
   }
   if (request.method === "PUT" && !action) {
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
@@ -99,8 +117,19 @@ async function staticFile(pathname: string): Promise<Response> {
   return new Response(file, { headers: { "cache-control": cache } });
 }
 
+/** Clear the trash. An error waits for the next turn, and never stops the page. */
+function tidy(store: Store): void {
+  try {
+    tidyTrash(store);
+  } catch {
+    // the next turn tries again
+  }
+}
+
 export function serve(store: Store, options: { port?: number } = {}): Served {
   const token = randomBytes(16).toString("hex");
+  tidy(store);
+  const timer = setInterval(() => tidy(store), TIDY_MS);
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: options.port ?? DEFAULT_PORT,
@@ -113,7 +142,10 @@ export function serve(store: Store, options: { port?: number } = {}): Served {
       }
     },
   });
-  return { url: `http://127.0.0.1:${server.port}/`, port: server.port!, token, stop: () => server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}/`, port: server.port!, token, stop: () => {
+    clearInterval(timer);
+    server.stop(true);
+  } };
 }
 
 /** True when a kb server already answers on this port. */

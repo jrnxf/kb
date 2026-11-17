@@ -40,8 +40,8 @@ Read the note with `kb show <id>`. For an anchor reason, read the anchored code 
 |---|---|
 | verify | The note is still true as written. |
 | rewrite | The fact drifted. The note needs a new body, title or anchors. |
-| archive | The fact is obsolete, or the work is done. |
-| merge | Two or more notes cover one idea. One note keeps everything, the others are archived. |
+| trash | The fact is obsolete, or the work is done. The trash deletes it after 30 days. |
+| merge | Two or more notes cover one idea. One note keeps everything, the others go to the trash. |
 | shorten | The note is true but long. Cut it to the fact, the reason and how to apply it. |
 | demote | The note is true but rarely used, and `over` is true. No session loads it again. It stays searchable. |
 | keep | Nothing to do. Use this for a `duplicate` candidate that is in fact a different idea. |
@@ -49,7 +49,7 @@ Read the note with `kb show <id>`. For an anchor reason, read the anchored code 
 Rules:
 
 - Do not verify a note you did not check against the code or a source. For a `global` note with no anchor, verify only when you know the fact still holds. If you cannot tell, propose `keep` and say what is unknown.
-- Demote only when `over` is true, and at most as many notes as `demote` lists. Prefer merge, archive and shorten before demote. Never demote `open-work`.
+- Demote only when `over` is true, and at most as many notes as `demote` lists. Prefer merge, trash and shorten before demote. Never demote `open-work`.
 - A demoted note leaves every session without a trace there. So never demote a `gotcha` or a `convention` because it has no uses: a rule that works leaves no use count. Demote one only when the user names it.
 - If `demoted` has ids, list them below the table, so the user can take one back.
 - For a rewrite, a merge or a shorten, write the new text now, so the user sees it before they accept.
@@ -70,8 +70,8 @@ Then ask the user which rows to apply: all, none, or a list of row numbers. Stop
 
 - verify: `kb verify <id>...`
 - rewrite, shorten: `kb add --json` with `"id"` and the fields that change. This also records the note as verified.
-- merge: update the note that stays, with `"supersedes": ["<other id>", ...]`, then `kb archive <other id>...`
-- archive: `kb archive <id>...`
+- merge: update the note that stays, with `"supersedes": ["<other id>", ...]`, then `kb trash <other id>...`
+- trash: `kb trash <id>...`
 - demote: `kb add --json` with `{"id": "<id>", "indexed": false}`. To take a demotion back: `{"id": "<id>", "indexed": true}`
 
 Use a quoted heredoc for JSON, so the shell changes nothing:
@@ -91,8 +91,8 @@ Run `kb budget` again, then end with this and nothing after it:
 ```
 verified: <ids>
 rewritten: <ids>
-merged: <kept id> <- <archived ids>
-archived: <ids>
+merged: <kept id> <- <trashed ids>
+trashed: <ids>
 demoted: <ids>
 declined: <row numbers>
 budget: <chars> of <budget> characters, <bodies> bodies, <lines> notes in the index only, <hidden> in no session

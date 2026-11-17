@@ -7,7 +7,8 @@ export interface View {
   scope: string | null;
   /** Kinds add up: none picked shows every kind, and each picked kind adds its notes. */
   kinds: string[];
-  archived: boolean;
+  /** The list shows the trash. */
+  trash: boolean;
   q: string;
   /** The open note. When it is not in the list, the first note of the list is open. */
   note: string | null;
@@ -16,19 +17,19 @@ export interface View {
   read: boolean;
 }
 
-export const EMPTY_VIEW: View = { scope: null, kinds: [], archived: false, q: "", note: null, pane: "list", read: false };
+export const EMPTY_VIEW: View = { scope: null, kinds: [], trash: false, q: "", note: null, pane: "list", read: false };
 
 export interface Shown {
   /** The notes in the list. */
   notes: PageNote[];
   current: PageNote | undefined;
-  /** Notes per scope, with the search, the kinds and the archive applied. "*" is every scope. */
+  /** Notes per scope, with the search, the kinds and the trash applied. "*" is every scope. */
   byScope: Map<string, number>;
-  /** Notes per kind, with the search, the scope and the archive applied. */
+  /** Notes per kind, with the search, the scope and the trash applied. */
   byKind: Map<string, number>;
-  archivedCount: number;
-  /** The list shows the archive. False once the archive is empty. */
-  archived: boolean;
+  trashCount: number;
+  /** The list shows the trash. False once the trash is empty. */
+  trash: boolean;
 }
 
 const haystacks = new WeakMap<PageNote, string>();
@@ -43,15 +44,15 @@ export function scopesOf(notes: PageNote[]): string[] {
 }
 
 export function show(notes: PageNote[], view: View): Shown {
-  const archivedCount = notes.filter((n) => n.archived).length;
-  // The archive view is gone once the archive is empty.
-  const archived = view.archived && archivedCount > 0;
+  const trashCount = notes.filter((n) => n.trashed).length;
+  // The trash view is gone once the trash is empty.
+  const trash = view.trash && trashCount > 0;
   const words = view.q.toLowerCase().split(/\s+/).filter(Boolean);
   const byScope = new Map<string, number>(), byKind = new Map<string, number>();
   const shown: PageNote[] = [];
   let all = 0;
   for (const note of notes) {
-    const base = note.archived === archived && words.every((w) => haystack(note).includes(w));
+    const base = note.trashed === trash && words.every((w) => haystack(note).includes(w));
     if (!base) continue;
     const inScope = !view.scope || note.scope === view.scope;
     const inKind = view.kinds.length === 0 || view.kinds.includes(note.kind);
@@ -61,7 +62,7 @@ export function show(notes: PageNote[], view: View): Shown {
   }
   byScope.set("*", all);
   const current = shown.find((n) => n.id === view.note) ?? shown[0];
-  return { notes: shown, current, byScope, byKind, archivedCount, archived };
+  return { notes: shown, current, byScope, byKind, trashCount, trash };
 }
 
 /** The note to land on when `id` leaves the list: the next one, or the one before when it was the last. */
@@ -76,7 +77,7 @@ export function toHash(view: View): string {
   const params = new URLSearchParams();
   if (view.scope) params.set("scope", view.scope);
   if (view.kinds.length) params.set("kind", view.kinds.join(","));
-  if (view.archived) params.set("archived", "1");
+  if (view.trash) params.set("trash", "1");
   if (view.q) params.set("q", view.q);
   if (view.note) params.set("note", view.note);
   if (view.pane === "rail") params.set("pane", "rail");
@@ -89,7 +90,7 @@ export function fromHash(hash: string): View {
   return {
     scope: params.get("scope") || null,
     kinds: (params.get("kind") ?? "").split(",").filter(Boolean),
-    archived: params.has("archived"),
+    trash: params.has("trash"),
     q: params.get("q") ?? "",
     note: params.get("note") || null,
     pane: params.get("pane") === "rail" ? "rail" : "list",
@@ -109,6 +110,14 @@ export function scopeHref(scope: string): string | undefined {
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+const DAY_MS = 86_400_000;
+
+/** How long until the trash deletes a note: "today", "in 1 day", "in 12 days". */
+export function clearsIn(iso: string, now = new Date()): string {
+  const days = Math.ceil((Date.parse(iso) - now.getTime()) / DAY_MS);
+  return days <= 0 ? "today" : days === 1 ? "in 1 day" : `in ${days} days`;
+}
 
 /** A short date in the zone of this machine: "16 Nov", with the year when it is not this year. Browsers spell some months differently, so the names are fixed here. */
 export function day(iso: string, now = new Date()): string {

@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseNote } from "../cli/note.ts";
+import { parseNote, serializeNote } from "../cli/note.ts";
 import { search } from "../cli/search.ts";
 import { Store } from "../cli/store.ts";
-import { kb, plain, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { daysAgo, kb, plain, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const add = (store: Store | string, note: object, cwd?: string) => kb(store, ["add", "--json"], { stdin: JSON.stringify(note), cwd });
 
@@ -100,7 +100,7 @@ describe("kb add", () => {
   });
 });
 
-describe("kb use, archive, show, list", () => {
+describe("kb use, trash, show, list", () => {
   test("use sums counters across machines and never edits the note", () => {
     const store = tempStore();
     putNote(store, { id: "a" });
@@ -115,30 +115,106 @@ describe("kb use, archive, show, list", () => {
     expect(kb(store, ["use", "ghost"]).code).toBe(1);
   });
 
-  test("archive moves the file and restore moves it back", () => {
+  test("trash moves the file and restore moves it back", () => {
     const store = tempStore();
     putNote(store, { id: "done", kind: "open-work", scope: "github.com/acme/web" });
-    expect(kb(store, ["archive", "done"]).code).toBe(0);
-    expect(existsSync(join(store.home, "archive/github.com/acme/web/done.md"))).toBe(true);
+    expect(kb(store, ["trash", "done"]).code).toBe(0);
+    expect(existsSync(join(store.home, "trash/github.com/acme/web/done.md"))).toBe(true);
     expect(store.notes()).toHaveLength(0);
-    expect(kb(store, ["list", "--archive", "--json"]).json[0].id).toBe("done");
+    const [listed] = kb(store, ["list", "--trash", "--json"]).json;
+    expect(listed.id).toBe("done");
+    expect(Date.parse(listed.clears_at) - Date.parse(listed.trashed_at)).toBe(30 * 86_400_000);
     expect(kb(store, ["restore", "done"]).code).toBe(0);
     expect(store.notes().map((n) => n.id)).toEqual(["done"]);
-    expect(kb(store, ["archive", "nope"]).code).toBe(1);
+    expect(store.find("done")!.trashed_at).toBeUndefined();
+    expect(kb(store, ["trash", "nope"]).code).toBe(1);
+    // archive is the name from before the trash. It still works, and says what it now means.
+    const archived = kb(store, ["archive", "done"]);
+    expect(archived.code).toBe(0);
+    expect(archived.stderr).toContain("archive is now trash");
+    expect(kb(store, ["list", "--archive", "--json"]).json[0].id).toBe("done");
   });
 
-  test("delete removes active and archived notes for good, and checks every id first", () => {
+  test("a note in the trash for more than trashDays is deleted before the next command", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    putNote(store, { id: "expired", trashed_at: daysAgo(31) }, true);
+    putNote(store, { id: "recent", trashed_at: daysAgo(29) }, true);
+    putNote(store, { id: "live" });
+    kb(store, ["use", "expired"]);
+    expect(kb(store, ["list", "--trash", "--json"]).json.map((n: { id: string }) => n.id)).toEqual(["recent"]);
+    expect(store.find("expired")).toBeUndefined();
+    expect(store.usage().has("expired")).toBe(false);
+    expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe("kb: clear 1 from the trash after 30 days: expired");
+    // trashDays in the config sets the time.
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ trashDays: 7 }));
+    expect(kb(store, ["list", "--trash", "--json"]).json).toEqual([]);
+    expect(store.find("live")).toBeDefined();
+  });
+
+  test("a store from before the trash moves archive/ to trash/, and every note gets a full 30 days, even one archived long ago", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    const old = join(store.home, "archive", "global");
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "timed.md"), serializeNote(putNote(store, { id: "timed" })).replace("indexed: true", `indexed: true\narchived_at: "${daysAgo(100)}"`));
+    writeFileSync(join(old, "untimed.md"), serializeNote(putNote(store, { id: "untimed" })));
+    rmSync(join(store.home, "notes", "global", "timed.md"));
+    rmSync(join(store.home, "notes", "global", "untimed.md"));
+    const listed = kb(store, ["list", "--trash", "--json"]).json;
+    expect(listed.map((n: { id: string }) => n.id).sort()).toEqual(["timed", "untimed"]);
+    for (const n of listed) expect(Date.now() - Date.parse(n.trashed_at)).toBeLessThan(60_000);
+    expect(existsSync(join(store.home, "archive"))).toBe(false);
+    expect(readFileSync(join(store.home, "trash", "global", "timed.md"), "utf8")).toContain("trashed_at:");
+    expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe("kb: move the archive to the trash");
+  });
+
+  test("in the archive move, a copy already in the trash goes, and a different note stays and says so", () => {
+    const store = tempStore();
+    const same = putNote(store, { id: "same", trashed_at: daysAgo(1) }, true);
+    putNote(store, { id: "other", body: "the trash copy", trashed_at: daysAgo(1) }, true);
+    const old = join(store.home, "archive", "global");
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "same.md"), serializeNote({ ...same, trashed_at: undefined }));
+    writeFileSync(join(old, "other.md"), serializeNote({ ...same, id: "other", body: "the archive copy", trashed_at: undefined }));
+    const result = kb(store, ["list", "--trash"]);
+    expect(result.stderr).toContain("archive/global/other.md was not moved");
+    expect(existsSync(join(old, "same.md"))).toBe(false);
+    expect(readFileSync(join(old, "other.md"), "utf8")).toContain("the archive copy");
+  });
+
+  test("a wrong trashDays falls back to 30 days, so it never empties the trash or stops a command", () => {
+    for (const trashDays of ["thirty", null, 0, -5]) {
+      const store = tempStore();
+      writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ trashDays }));
+      putNote(store, { id: "recent", trashed_at: daysAgo(2) }, true);
+      expect(kb(store, ["list", "--trash", "--json"]).json.map((n: { id: string }) => n.id)).toEqual(["recent"]);
+    }
+  });
+
+  test("empty-trash deletes every note in the trash, and nothing else", () => {
+    const store = tempStore();
+    putNote(store, { id: "a", trashed_at: daysAgo(1) }, true);
+    putNote(store, { id: "b", trashed_at: daysAgo(2) }, true);
+    putNote(store, { id: "live" });
+    expect(kb(store, ["empty-trash", "--json"]).json.deleted.sort()).toEqual(["a", "b"]);
+    expect(store.notes({ trashed: true })).toEqual([]);
+    expect(store.notes().map((n) => n.id)).toEqual(["live"]);
+    expect(kb(store, ["empty-trash"]).stdout.trim()).toBe("the trash is empty");
+  });
+
+  test("delete removes active and trashed notes for good, and checks every id first", () => {
     const store = tempStore();
     sh(store.home, "git", "init", "-q", "-b", "main");
     putNote(store, { id: "wrong" });
-    putNote(store, { id: "old" }, true);
+    putNote(store, { id: "old", trashed_at: daysAgo(1) }, true);
     putNote(store, { id: "keep" });
     kb(store, ["use", "wrong"]);
     // One unknown id stops the whole command, so nothing is half done.
     expect(kb(store, ["delete", "wrong", "ghost"]).code).toBe(1);
     expect(store.find("wrong")).toBeDefined();
     expect(kb(store, ["delete", "wrong", "old", "--json"]).json).toEqual({ deleted: ["wrong", "old"] });
-    expect([...store.notes(), ...store.notes({ archived: true })].map((n) => n.id)).toEqual(["keep"]);
+    expect([...store.notes(), ...store.notes({ trashed: true })].map((n) => n.id)).toEqual(["keep"]);
     expect(store.usage().has("wrong")).toBe(false);
     expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe("kb: delete wrong old");
     // Another machine still counts uses of "wrong", so a new note with that title must not inherit them.
@@ -146,19 +222,19 @@ describe("kb use, archive, show, list", () => {
     expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Wrong", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("wrong-2");
   });
 
-  test("kb list --archive lists the most recently archived note first", () => {
+  test("kb list --trash lists the most recently trashed note first", () => {
     const store = tempStore();
-    putNote(store, { id: "older", archived_at: "2026-05-01T00:00:00Z" }, true);
-    putNote(store, { id: "untimed", last_verified: "2026-02-01T00:00:00Z" }, true);
+    putNote(store, { id: "oldest", trashed_at: daysAgo(20) }, true);
+    putNote(store, { id: "older", trashed_at: daysAgo(10) }, true);
     putNote(store, { id: "fresh" });
-    expect(kb(store, ["archive", "fresh"]).code).toBe(0);
-    expect(kb(store, ["list", "--archive", "--json"]).json.map((n: { id: string }) => n.id)).toEqual(["fresh", "older", "untimed"]);
+    expect(kb(store, ["trash", "fresh"]).code).toBe(0);
+    expect(kb(store, ["list", "--trash", "--json"]).json.map((n: { id: string }) => n.id)).toEqual(["fresh", "older", "oldest"]);
   });
 
   test("every command gives JSON with --json, also on an error", () => {
     const store = tempStore();
     putNote(store, { id: "a" });
-    for (const args of [["context"], ["scope"], ["show", "a"], ["search", "body"], ["list"], ["use", "a"], ["archive", "a"], ["restore", "a"], ["html"], ["sync"], ["stale"], ["verify", "a"], ["budget"], ["promote", "a", "--to", "CLAUDE.md"], ["checkpointed", "s"], ["show", "zzz"], ["bogus"]]) {
+    for (const args of [["context"], ["scope"], ["show", "a"], ["search", "body"], ["list"], ["use", "a"], ["trash", "a"], ["restore", "a"], ["empty-trash"], ["html"], ["sync"], ["stale"], ["verify", "a"], ["budget"], ["promote", "a", "--to", "CLAUDE.md"], ["checkpointed", "s"], ["show", "zzz"], ["bogus"]]) {
       const result = kb(store, [...args, "--json"]);
       expect(result.json, args.join(" ")).toBeDefined();
     }
@@ -211,7 +287,7 @@ describe("kb show", () => {
     expect(several.code).toBe(1);
     expect(several.stderr).toContain("atlas-amounts-are-integer-cents, ferry-amounts-are-integer-cents");
     // A command that changes a note never guesses.
-    expect(kb(store, ["archive", "atlas-amounts"]).code).toBe(1);
+    expect(kb(store, ["trash", "atlas-amounts"]).code).toBe(1);
     expect(store.notes()).toHaveLength(2);
   });
 });
@@ -237,15 +313,15 @@ describe("kb search", () => {
   });
 
 
-  test("finds a line in the title or the body, once, and honors scope and archive", () => {
+  test("finds a line in the title or the body, once, and honors scope and the trash", () => {
     const store = tempStore();
     putNote(store, { id: "raw-body", title: "Stripe needs the raw body", body: "Mount express.raw() first.\nThe JSON parser breaks the Signature." });
     putNote(store, { id: "other", scope: "github.com/acme/web", body: "Nothing here." });
-    putNote(store, { id: "old", body: "signature rotation, archived" }, true);
+    putNote(store, { id: "old", body: "signature rotation, trashed" }, true);
 
     const hits = search(store, "signature");
-    expect(hits).toEqual([{ id: "raw-body", title: "Stripe needs the raw body", scope: "global", archived: false, line: 13, text: "The JSON parser breaks the Signature." }]);
-    expect(search(store, "signature", { archive: true }).map((h) => h.id)).toEqual(["raw-body", "old"]);
+    expect(hits).toEqual([{ id: "raw-body", title: "Stripe needs the raw body", scope: "global", trashed: false, line: 13, text: "The JSON parser breaks the Signature." }]);
+    expect(search(store, "signature", { trash: true }).map((h) => h.id)).toEqual(["raw-body", "old"]);
     expect(search(store, "nothing", { scope: "global" })).toEqual([]);
     // A title match counts once. The id line does not double it.
     expect(search(store, "raw").map((h) => h.line)).toEqual([3, 12]);

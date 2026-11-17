@@ -2,18 +2,19 @@ import { useState } from "react";
 import type { PageNote } from "../../../cli/wire.ts";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
-import { day, scopeHref, scopeName } from "@/lib/view";
+import { clearsIn, day, scopeHref, scopeName } from "@/lib/view";
 import { Dot } from "./bits";
 
 interface Props {
   note: PageNote;
   onEdit: () => void;
-  onArchive: () => void;
+  onTrash: () => void;
   onRestore: () => void;
+  onDelete: () => void;
 }
 
-/** The whole note. An archived note is read-only until it is restored. */
-export function NoteView({ note, onEdit, onArchive, onRestore }: Props) {
+/** The whole note. A note in the trash is read-only until it is restored. */
+export function NoteView({ note, onEdit, onTrash, onRestore, onDelete }: Props) {
   const [copied, setCopied] = useState(false);
   const href = scopeHref(note.scope);
   // The drawer on a phone sits outside the page element, so its buttons stay bright there.
@@ -22,7 +23,8 @@ export function NoteView({ note, onEdit, onArchive, onRestore }: Props) {
     `verified ${day(note.last_verified)}${note.verified_at_commit ? ` at ${note.verified_at_commit}` : ""}`,
     `confidence ${note.confidence}`,
     `${note.uses} ${note.uses === 1 ? "use" : "uses"}${note.last_used ? `, last ${day(note.last_used)}` : ""}`,
-    note.archived && (note.archived_at ? `archived ${day(note.archived_at)}` : "archived"),
+    note.trashed && (note.trashed_at ? `trashed ${day(note.trashed_at)}` : "in the trash"),
+    note.clears_at && `deleted ${clearsIn(note.clears_at)}`,
     !note.indexed && "not indexed",
     note.promoted_to && `promoted to ${note.promoted_to}`,
   ].filter(Boolean);
@@ -41,17 +43,22 @@ export function NoteView({ note, onEdit, onArchive, onRestore }: Props) {
           )}
         </span>
         <span className="ml-auto flex gap-1.5">
-          {note.archived ? (
-            <Button variant="outline" size="xs" className={act} onClick={onRestore}>
-              Restore <Kbd>r</Kbd>
-            </Button>
+          {note.trashed ? (
+            <>
+              <Button variant="outline" size="xs" className={act} onClick={onRestore}>
+                Restore <Kbd>r</Kbd>
+              </Button>
+              <Button variant="outline" size="xs" className={act} onClick={onDelete}>
+                Delete <Kbd>⌫</Kbd>
+              </Button>
+            </>
           ) : (
             <>
               <Button variant="outline" size="xs" className={act} onClick={onEdit}>
                 Edit <Kbd>e</Kbd>
               </Button>
-              <Button variant="outline" size="xs" className={act} onClick={onArchive}>
-                Archive <Kbd>a</Kbd>
+              <Button variant="outline" size="xs" className={act} onClick={onTrash}>
+                Trash <Kbd>⌫</Kbd>
               </Button>
             </>
           )}

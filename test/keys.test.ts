@@ -61,27 +61,56 @@ describe("keys on a wide screen", () => {
     await until(async () => (await selected(page)) === first, "the selection moves back");
   });
 
-  test("e opens the form, and a archives the note", async () => {
+  test("e opens the form, and Backspace moves the note to the trash", async () => {
     await page.keyboard.press("e");
     await page.locator("main textarea").waitFor();
     await page.keyboard.press("Escape");
     await page.locator("main textarea").waitFor({ state: "detached" });
     const id = (await selected(page))!;
-    await page.keyboard.press("a");
-    await until(() => store.find(id)?.archived ?? false, "the note is archived");
+    await page.keyboard.press("Backspace");
+    await until(() => store.find(id)?.trashed ?? false, "the note is in the trash");
+  });
+
+  test("in the trash, Backspace asks first, then deletes the note for good, and Empty trash clears the rest", async () => {
+    const [one, two] = await page.locator("button[data-id]").evaluateAll((rows) => rows.slice(0, 2).map((r) => r.getAttribute("data-id")!));
+    for (const id of [one!, two!]) {
+      await page.locator(`[data-id="${id}"]`).click();
+      await page.keyboard.press("Backspace");
+      await until(() => store.find(id)?.trashed ?? false, "the note is in the trash");
+    }
+    await page.locator('[data-rail="trash"]').click();
+    await page.keyboard.press("ArrowRight");
+    const id = (await selected(page))!;
+    await page.keyboard.press("Backspace");
+    const dialog = page.getByRole("dialog");
+    await dialog.getByText("Delete this note for good?").waitFor();
+    // Escape keeps the note.
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+    expect(store.find(id)).toBeDefined();
+    await page.keyboard.press("Backspace");
+    await dialog.waitFor();
+    // At once, before the dialog moves the focus to its button, as a quick hand does.
+    await page.keyboard.press("Enter");
+    await until(() => store.find(id) === undefined, "the note is deleted");
+    await page.getByRole("button", { name: "Empty trash" }).click();
+    await dialog.getByText("Empty the trash?").waitFor();
+    await dialog.getByRole("button", { name: /Empty trash/ }).click();
+    await until(() => store.notes({ trashed: true }).length === 0, "the trash is empty");
+    await page.locator('[data-rail="trash"]').waitFor({ state: "detached" });
   });
 
   test("Undo selects the restored note, and no other row on the way", async () => {
-    // The last row, so the row selected after the archive is not the first row.
+    // The last row, so the row selected after the move is not the first row.
     const last = await page.locator("[data-id]").last().getAttribute("data-id");
     await page.keyboard.press("j");
     await page.keyboard.press("j");
     await until(async () => (await selected(page)) === last, "the last row is selected");
     const id = last!;
-    await page.keyboard.press("a");
-    await until(() => store.find(id)?.archived ?? false, "the note is archived");
+    await page.keyboard.press("Backspace");
+    await until(() => store.find(id)?.trashed ?? false, "the note is in the trash");
     // The page takes Undo once its toast shows, as a person does. The file moves before that.
-    await page.getByText("Archived", { exact: true }).waitFor();
+    await page.getByText("Moved to the trash", { exact: true }).waitFor();
     const before = (await selected(page))!;
     expect(await page.locator("[data-id]").first().getAttribute("data-id")).not.toBe(before);
     // Every row that is the current one at any moment, from here on.
@@ -119,10 +148,10 @@ describe("keys on a phone", () => {
     expect(await drawer().isVisible()).toBe(true);
   });
 
-  test("in the open drawer, a archives the note and closes the drawer", async () => {
+  test("in the open drawer, Backspace moves the note to the trash and closes the drawer", async () => {
     const id = (await selected(page))!;
-    await page.keyboard.press("a");
-    await until(() => store.find(id)?.archived ?? false, "the note is archived");
+    await page.keyboard.press("Backspace");
+    await until(() => store.find(id)?.trashed ?? false, "the note is in the trash");
     await drawer().waitFor({ state: "detached" });
   });
 

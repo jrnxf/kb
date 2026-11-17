@@ -4,7 +4,7 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { buildBudget, buildContext, rank } from "./context.ts";
-import { CONFIDENCES, KINDS, KbError, byArchivedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
+import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { searchNotes } from "./search.ts";
 import { DEFAULT_PORT, isKbServer, serve } from "./serve.ts";
@@ -12,22 +12,23 @@ import { markSaved } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
-import { afterWrite, closeIds, deleteNotes, moveNotes, nowIso, requireNote, updateNote } from "./write.ts";
+import { afterWrite, clearsAt, closeIds, deleteNotes, emptyTrash, moveNotes, nowIso, requireNote, tidyTrash, updateNote } from "./write.ts";
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
   kb context [--repo .]                  text for a session start: index, top notes, pointer
   kb add [--repo .]                      create or update a note from JSON on stdin
   kb show <id>                           print one note. A part of the id is enough when one note has it
-  kb search <words> [--scope s] [--archive]
+  kb search <words> [--scope s] [--trash]
                                          notes that have every word, in any order, this repo first
-  kb list [--scope s] [--archive]        every note with kind, uses and verified date
+  kb list [--scope s] [--trash]          every note with kind, uses and verified date
                                          --scope takes "repo", "global" or a repo id
   kb use <id>...                         record that these notes changed what you did
-  kb archive <id>... | kb restore <id>...
-                                         archive retires a note and keeps it: restore brings it back
-  kb delete <id>...                      remove notes for good, active or archived. Only when the user
-                                         wants a note gone. In a git store, the history keeps the file
+  kb trash <id>... | kb restore <id>...  trash retires a note: restore brings it back. A note in the
+                                         trash for more than trashDays (30) is deleted for good
+  kb delete <id>...                      remove notes for good, active or in the trash. When the user
+                                         wants a note gone now. In a git store, the history keeps the file
+  kb empty-trash                         remove every note in the trash for good
   kb stale [--repo .]                    notes that may no longer be true, each with a reason
   kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
   kb budget [--repo .]                   what a session loads, and what reaches no session
@@ -35,7 +36,7 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          append a note to the repo's own file
   kb checkpointed <session-id>           record that this session saved its knowledge
   kb scope [--repo .]                    print the scope id of a directory
-  kb serve [--port n] [--no-open]        the store as a local page: read, edit and archive notes
+  kb serve [--port n] [--no-open]        the store as a local page: read, edit and trash notes
                                          kb alone in a terminal does the same. Behind a proxy, name it in
                                          KB_SERVE_HOSTS: kb.example.com, or .example.com for every name under it
   kb sync                                commit, pull and push the store
@@ -113,14 +114,14 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
   const now = nowIso();
   const active = store.notes();
-  const archived = store.notes({ archived: true });
+  const trashed = store.notes({ trashed: true });
 
   // Update: merge the given fields over the stored note.
   if (typeof input.id === "string") {
     const existing = active.find((n) => n.id === input.id);
     if (!existing) throw new KbError(`no active note with id "${input.id}"`);
     if (input.scope !== undefined && resolveScopeInput(input.scope, repo.scope) !== existing.scope) {
-      throw new KbError("a note cannot change scope. Archive it and add a new one.");
+      throw new KbError("a note cannot change scope. Trash it and add a new one.");
     }
     const updated = updateNote(store, input as Record<string, unknown> & { id: string }, repo);
     return { json: { status: "updated", ...updated }, text: `updated ${updated.id}` };
@@ -146,7 +147,7 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     anchors: [],
     ...input,
     // An id with counters on any machine belongs to a deleted note: a new note must not inherit its uses.
-    id: uniqueId(slug, new Set([...active, ...archived].map((n) => n.id).concat([...store.usage().keys()]))),
+    id: uniqueId(slug, new Set([...active, ...trashed].map((n) => n.id).concat([...store.usage().keys()]))),
     scope,
     created: now,
     last_verified: now,
@@ -168,9 +169,9 @@ function resolveScopeInput(value: unknown, repoScope: string | null): string {
   return value;
 }
 
-/** "global" and each scope that has a note, active or archived. */
+/** "global" and each scope that has a note, active or in the trash. */
 function knownScopes(store: Store): string[] {
-  const scopes = new Set([...store.notes(), ...store.notes({ archived: true })].map((n) => n.scope));
+  const scopes = new Set([...store.notes(), ...store.notes({ trashed: true })].map((n) => n.scope));
   scopes.delete("global");
   return ["global", ...[...scopes].sort()];
 }
@@ -207,18 +208,18 @@ function cmdShow(store: Store, args: Args): Output {
 
 function cmdSearch(store: Store, args: Args): Output {
   const query = args.positional.join(" ");
-  if (!query) throw new KbError("usage: kb search <words> [--scope s] [--archive]");
+  if (!query) throw new KbError("usage: kb search <words> [--scope s] [--trash]");
   const scope = scopeFilter(store, args);
   const first = resolveRepo(String(args.flags.get("repo") ?? "."), store).scope ?? undefined;
-  const { hits, complete } = searchNotes(store, query, { scope, archive: args.flags.has("archive"), first });
+  const { hits, complete } = searchNotes(store, query, { scope, trash: inTrash(args), first });
   // One line per note. The body lines that matched follow it, because the title is already there.
   const rows: string[] = [];
   let last = "";
   let shown = 0;
   for (const h of hits) {
-    const key = `${h.archived} ${h.id}`;
+    const key = `${h.trashed} ${h.id}`;
     if (key !== last) {
-      rows.push(`${h.id}${h.archived ? " (archived)" : ""} | ${h.scope} | ${h.title}`);
+      rows.push(`${h.id}${h.trashed ? " (in the trash)" : ""} | ${h.scope} | ${h.title}`);
       last = key;
       shown = 0;
     }
@@ -231,13 +232,17 @@ function cmdSearch(store: Store, args: Args): Output {
   return { json: hits, text };
 }
 
+/** --trash, or --archive from before the archive became the trash. */
+const inTrash = (args: Args) => args.flags.has("trash") || args.flags.has("archive");
+
 function cmdList(store: Store, args: Args): Output {
   const scope = scopeFilter(store, args);
   const usage = store.usage();
-  const archive = args.flags.has("archive");
-  const found = store.notes({ archived: archive }).filter((n) => scope === undefined || n.scope === scope);
-  // The archive lists the most recently archived note first.
-  const notes = archive ? found.sort(byArchivedAt) : rank(found, usage);
+  const trash = inTrash(args);
+  const days = store.config().trashDays;
+  const found = store.notes({ trashed: trash }).filter((n) => scope === undefined || n.scope === scope);
+  // The trash lists the most recently trashed note first.
+  const notes = trash ? found.sort(byTrashedAt) : rank(found, usage);
   const rows = notes.map((n) => ({
     id: n.id,
     kind: n.kind,
@@ -249,6 +254,7 @@ function cmdList(store: Store, args: Args): Output {
     confidence: n.confidence,
     indexed: n.indexed,
     promoted_to: n.promoted_to ?? null,
+    ...(trash ? { trashed_at: n.trashed_at ?? null, clears_at: n.trashed_at ? clearsAt(n.trashed_at, days) : null } : {}),
   }));
   const width = (key: "id" | "kind" | "scope") => Math.max(key.length, ...rows.map((r) => r[key].length));
   const [wId, wKind, wScope] = [width("id"), width("kind"), width("scope")];
@@ -256,8 +262,8 @@ function cmdList(store: Store, args: Args): Output {
     `${id.padEnd(wId)}  ${kind.padEnd(wKind)}  ${scope.padEnd(wScope)}  ${uses.padStart(4)}  ${verified.padEnd(10)}  ${title}`;
   const text =
     rows.length === 0
-      ? "no notes"
-      : [line("id", "kind", "scope", "uses", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, String(r.uses), r.last_verified.slice(0, 10), `${r.title}${r.indexed ? "" : " (demoted)"}`))].join("\n");
+      ? trash ? "the trash is empty" : "no notes"
+      : [line("id", "kind", "scope", "uses", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, String(r.uses), r.last_verified.slice(0, 10), `${r.title}${r.indexed ? "" : " (demoted)"}${r.clears_at ? ` (deleted ${r.clears_at.slice(0, 10)})` : ""}`))].join("\n");
   return { json: rows, text };
 }
 
@@ -273,11 +279,16 @@ function cmdUse(store: Store, args: Args): Output {
   return { json: { used, unknown }, text };
 }
 
-function cmdMove(store: Store, args: Args, toArchive: boolean): Output {
-  const verb = toArchive ? "archive" : "restore";
+function cmdMove(store: Store, args: Args, toTrash: boolean): Output {
+  const verb = toTrash ? "trash" : "restore";
   if (args.positional.length === 0) throw new KbError(`usage: kb ${verb} <id>...`);
-  const moved = moveNotes(store, args.positional, toArchive);
-  return { json: { [toArchive ? "archived" : "restored"]: moved }, text: `${toArchive ? "archived" : "restored"} ${moved.join(", ")}` };
+  const moved = moveNotes(store, args.positional, toTrash);
+  return { json: { [toTrash ? "trashed" : "restored"]: moved }, text: `${toTrash ? "moved to the trash:" : "restored"} ${moved.join(", ")}` };
+}
+
+function cmdEmptyTrash(store: Store): Output {
+  const deleted = emptyTrash(store);
+  return { json: { deleted }, text: deleted.length === 0 ? "the trash is empty" : `deleted ${deleted.join(", ")}` };
 }
 
 function cmdDelete(store: Store, args: Args): Output {
@@ -298,12 +309,12 @@ function cmdVerify(store: Store, args: Args): Output {
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
   const notes = args.positional.map((id) => {
     const note = requireNote(store, id);
-    if (note.archived) throw new KbError(`${id} is archived. Restore it first.`);
+    if (note.trashed) throw new KbError(`${id} is in the trash. Restore it first.`);
     if (note.scope !== "global" && note.scope !== repo.scope) throw new KbError(`${id} belongs to ${note.scope}. Run kb verify inside that repo, so the commit is recorded.`);
     return note;
   });
   const now = nowIso();
-  for (const { path: _path, archived: _archived, ...note } of notes) {
+  for (const { path: _path, trashed: _trashed, ...note } of notes) {
     note.last_verified = now;
     if (note.scope !== "global" && repo.head) note.verified_at_commit = repo.head;
     store.writeNote(note);
@@ -342,8 +353,8 @@ function cmdPromote(store: Store, args: Args): Output {
   const to = args.flags.get("to");
   if (!id || typeof to !== "string" || !PROMOTE_FILES.includes(to)) throw new KbError("usage: kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run] [--repo .]");
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
-  const { path: _path, archived, ...note } = requireNote(store, id);
-  if (archived) throw new KbError(`${id} is archived. Restore it first.`);
+  const { path: _path, trashed, ...note } = requireNote(store, id);
+  if (trashed) throw new KbError(`${id} is in the trash. Restore it first.`);
   if (note.promoted_to) throw new KbError(`${id} is already in ${note.promoted_to}`);
   if (!repo.root || note.scope !== repo.scope) throw new KbError(`${id} belongs to ${note.scope}. Run kb promote inside that repo.`);
 
@@ -417,6 +428,15 @@ async function main(): Promise<number> {
     const args = parseArgs(rest);
     json = args.flags.has("json");
     const store = new Store();
+    // A note whose time in the trash is up is gone before any command reads the store.
+    if (command && store.exists() && !["help", "--help", "-h"].includes(command) && !args.flags.has("help")) {
+      // Housekeeping must never stop the command, above all a restore or a delete.
+      try {
+        tidyTrash(store);
+      } catch (error) {
+        console.error(`kb: the trash was not cleared: ${(error as Error).message}`);
+      }
+    }
     // A person who types only `kb` in a terminal wants to see the notes. A script gets the help.
     if (!command && process.stdout.isTTY && store.exists()) await cmdServe(store, args, json);
     if (!command || command === "help" || command === "--help" || command === "-h" || args.flags.has("help")) {
@@ -432,9 +452,15 @@ async function main(): Promise<number> {
       case "search": out = cmdSearch(store, args); break;
       case "list": out = cmdList(store, args); break;
       case "use": out = cmdUse(store, args); break;
-      case "archive": out = cmdMove(store, args, true); break;
+      // archive is the name from before the archive became the trash.
+      case "archive":
+        console.error("kb: archive is now trash. The trash deletes a note for good after its time there.");
+        out = cmdMove(store, args, true);
+        break;
+      case "trash": out = cmdMove(store, args, true); break;
       case "restore": out = cmdMove(store, args, false); break;
       case "delete": out = cmdDelete(store, args); break;
+      case "empty-trash": out = cmdEmptyTrash(store); break;
       case "stale": out = cmdStale(store, args); break;
       case "verify": out = cmdVerify(store, args); break;
       case "budget": out = cmdBudget(store, args); break;

@@ -5,7 +5,7 @@ import { pageData } from "../cli/page.ts";
 import { DIST } from "../cli/serve.ts";
 import type { PageNote } from "../cli/wire.ts";
 import { sourceHash } from "../web/source-hash.ts";
-import { EMPTY_VIEW, day, fromHash, neighbour, scopeHref, scopeName, show, toHash } from "../web/src/lib/view.ts";
+import { EMPTY_VIEW, clearsIn, day, fromHash, neighbour, scopeHref, scopeName, show, toHash } from "../web/src/lib/view.ts";
 import { putNote, tempStore } from "./helpers.ts";
 
 describe("the data behind the page", () => {
@@ -20,16 +20,19 @@ describe("the data behind the page", () => {
     expect(note!.title).toBe("A <b>bold</b> title");
   });
 
-  test("puts global first, then the scopes in order, then the archive with the most recently archived first", () => {
+  test("puts global first, then the scopes in order, then the trash with the most recently trashed first", () => {
     const store = tempStore();
     putNote(store, { id: "z", scope: "github.com/acme/zed" });
     putNote(store, { id: "before", scope: "github.com/acme/api", last_verified: "2026-03-01T00:00:00Z" }, true);
-    putNote(store, { id: "older", scope: "github.com/acme/api", archived_at: "2026-05-01T00:00:00Z" }, true);
-    putNote(store, { id: "newer", scope: "github.com/acme/zed", archived_at: "2026-06-01T00:00:00Z" }, true);
+    putNote(store, { id: "older", scope: "github.com/acme/api", trashed_at: "2026-05-01T00:00:00Z" }, true);
+    putNote(store, { id: "newer", scope: "github.com/acme/zed", trashed_at: "2026-06-01T00:00:00Z" }, true);
     putNote(store, { id: "a", scope: "github.com/acme/api" });
     putNote(store, { id: "g" });
     const data = pageData(store, "the-token");
-    expect(data.notes.map((n) => [n.id, n.archived])).toEqual([["g", false], ["a", false], ["z", false], ["newer", true], ["older", true], ["before", true]]);
+    expect(data.notes.map((n) => [n.id, n.trashed])).toEqual([["g", false], ["a", false], ["z", false], ["newer", true], ["older", true], ["before", true]]);
+    // Each note in the trash says when the trash deletes it.
+    expect(data.notes.find((n) => n.id === "newer")!.clears_at).toBe("2026-07-01T00:00:00Z");
+    expect(data.trashDays).toBe(30);
     expect(data.token).toBe("the-token");
     expect(data.kinds).toEqual(["open-work", "gotcha", "convention", "decision", "how-to"]);
   });
@@ -41,14 +44,14 @@ test("the built page is up to date with its sources: run `bun run build` in web/
 
 describe("what the page shows", () => {
   const note = (id: string, fields: Partial<PageNote> = {}): PageNote => ({
-    id, title: `Title of ${id}`, scope: "global", kind: "gotcha", confidence: "high", archived: false, indexed: true,
+    id, title: `Title of ${id}`, scope: "global", kind: "gotcha", confidence: "high", trashed: false, indexed: true,
     last_verified: "2026-01-01T00:00:00Z", anchors: [], body: "body", html: "", uses: 0, ...fields,
   });
   const notes = [
     note("a", { kind: "decision", body: "the cache key" }),
     note("b", { scope: "github.com/acme/web" }),
     note("c", { scope: "github.com/acme/web", kind: "decision" }),
-    note("old", { archived: true }),
+    note("old", { trashed: true }),
   ];
 
   test("filters by scope, by kinds that add up, and by every word of the search", () => {
@@ -64,13 +67,20 @@ describe("what the page shows", () => {
     expect(shown.byScope.get("*")).toBe(2);
     expect(shown.byScope.get("global")).toBe(1);
     expect(shown.byKind.get("gotcha")).toBe(1);
-    expect(shown.archivedCount).toBe(1);
+    expect(shown.trashCount).toBe(1);
   });
 
-  test("the archive view shows only archived notes, and is off once the archive is empty", () => {
-    expect(show(notes, { ...EMPTY_VIEW, archived: true }).notes.map((n) => n.id)).toEqual(["old"]);
-    const live = notes.filter((n) => !n.archived);
-    expect(show(live, { ...EMPTY_VIEW, archived: true })).toMatchObject({ archived: false, notes: live });
+  test("the trash view shows only notes in the trash, and is off once the trash is empty", () => {
+    expect(show(notes, { ...EMPTY_VIEW, trash: true }).notes.map((n) => n.id)).toEqual(["old"]);
+    const live = notes.filter((n) => !n.trashed);
+    expect(show(live, { ...EMPTY_VIEW, trash: true })).toMatchObject({ trash: false, notes: live });
+  });
+
+  test("a note in the trash says in how many days it is deleted", () => {
+    const now = new Date("2026-11-17T12:00:00Z");
+    expect(clearsIn("2026-12-17T12:00:00Z", now)).toBe("in 30 days");
+    expect(clearsIn("2026-11-18T06:00:00Z", now)).toBe("in 1 day");
+    expect(clearsIn("2026-11-17T11:00:00Z", now)).toBe("today");
   });
 
   test("the open note is the one asked for while it is in the list, else the first", () => {
@@ -85,7 +95,7 @@ describe("what the page shows", () => {
   });
 
   test("the address keeps the whole view", () => {
-    const view = { scope: "github.com/acme/web", kinds: ["gotcha", "how-to"], archived: true, q: "a b&c", note: "x", pane: "rail" as const, read: true };
+    const view = { scope: "github.com/acme/web", kinds: ["gotcha", "how-to"], trash: true, q: "a b&c", note: "x", pane: "rail" as const, read: true };
     expect(fromHash(toHash(view))).toEqual(view);
     expect(toHash(EMPTY_VIEW)).toBe("#");
     expect(fromHash("")).toEqual(EMPTY_VIEW);

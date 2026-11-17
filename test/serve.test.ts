@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { type Served, serve } from "../cli/serve.ts";
 import type { Store } from "../cli/store.ts";
-import { MAIN, kb, plain, putNote, sh, tempDir, tempStore } from "./helpers.ts";
+import { MAIN, daysAgo, kb, plain, putNote, sh, tempDir, tempStore } from "./helpers.ts";
 
 describe("kb serve", () => {
   let served: Served | undefined;
@@ -74,32 +74,58 @@ describe("kb serve", () => {
     expect((await call("PUT", "/api/notes/ghost", { body: "x" })).status).toBe(400);
   });
 
-  test("archive and restore move the note and never delete it", async () => {
+  test("trash and restore move the note and keep it", async () => {
     const store = tempStore();
     const note = putNote(store, { id: "a" });
     const { call } = start(store);
-    expect((await call("POST", "/api/notes/a/archive")).status).toBe(200);
+    expect((await call("POST", "/api/notes/a/trash")).status).toBe(200);
     expect(store.notes()).toHaveLength(0);
-    const [archived] = store.notes({ archived: true });
-    expect(archived!.body).toBe(note.body);
-    // The time of the archive is kept, so the archive can list the newest first.
-    expect(Date.now() - Date.parse(archived!.archived_at!)).toBeLessThan(60_000);
-    expect((await call("POST", "/api/notes/a/archive")).status).toBe(400);
+    const [trashed] = store.notes({ trashed: true });
+    expect(trashed!.body).toBe(note.body);
+    // The time is kept: the trash lists the newest first, and deletes a note 30 days after it.
+    expect(Date.now() - Date.parse(trashed!.trashed_at!)).toBeLessThan(60_000);
+    expect((await call("POST", "/api/notes/a/trash")).status).toBe(400);
     expect((await call("POST", "/api/notes/a/restore")).status).toBe(200);
     expect(store.notes().map((n) => n.id)).toEqual(["a"]);
-    expect(store.find("a")!.archived_at).toBeUndefined();
+    expect(store.find("a")!.trashed_at).toBeUndefined();
+  });
+
+  test("delete removes one note for good, and empty removes the whole trash", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a", trashed_at: daysAgo(1) }, true);
+    putNote(store, { id: "b", trashed_at: daysAgo(1) }, true);
+    putNote(store, { id: "live" });
+    const { call } = start(store);
+    expect((await call("DELETE", "/api/notes/a")).json).toEqual({ deleted: ["a"] });
+    expect(store.find("a")).toBeUndefined();
+    expect((await call("POST", "/api/trash/empty")).json).toEqual({ deleted: ["b"] });
+    expect(store.notes({ trashed: true })).toEqual([]);
+    expect(store.notes().map((n) => n.id)).toEqual(["live"]);
+    expect((await call("POST", "/api/trash/empty", undefined, {})).status).toBe(403);
+    expect((await call("DELETE", "/api/notes/live", undefined, {})).status).toBe(403);
+    // The page deletes only from the trash.
+    expect((await call("DELETE", "/api/notes/live")).status).toBe(400);
+    expect(store.find("live")).toBeDefined();
+  });
+
+  test("a server that starts clears the notes whose time in the trash is up", () => {
+    const store = tempStore();
+    putNote(store, { id: "expired", trashed_at: daysAgo(31) }, true);
+    putNote(store, { id: "recent", trashed_at: daysAgo(2) }, true);
+    start(store);
+    expect(store.notes({ trashed: true }).map((n) => n.id)).toEqual(["recent"]);
   });
 
   test("a change without the page's token, or under another host name, is refused", async () => {
     const store = tempStore();
     putNote(store, { id: "a", body: "kept" });
     const { call } = start(store);
-    expect((await call("POST", "/api/notes/a/archive", undefined, {})).status).toBe(403);
+    expect((await call("POST", "/api/notes/a/trash", undefined, {})).status).toBe(403);
     expect((await call("PUT", "/api/notes/a", { body: "x" }, { "x-kb-token": "guess" })).status).toBe(403);
     // A site that points its own name at this machine sends its own Host header.
     expect((await call("GET", "/", undefined, { host: "evil.example.com" })).status).toBe(403);
-    expect((await call("POST", "/api/notes/a/archive", undefined, { host: "evil.example.com", "x-kb-token": served!.token })).status).toBe(403);
-    expect(store.find("a")).toMatchObject({ archived: false, body: "kept" });
+    expect((await call("POST", "/api/notes/a/trash", undefined, { host: "evil.example.com", "x-kb-token": served!.token })).status).toBe(403);
+    expect(store.find("a")).toMatchObject({ trashed: false, body: "kept" });
   });
 
   test("a name in KB_SERVE_HOSTS is accepted, so a reverse proxy can sit in front", async () => {
