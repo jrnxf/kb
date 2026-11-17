@@ -26,16 +26,17 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 - **A rule is saved when the user states it.** The agent starts `/kb:note` on its own when the user
   says "always", "never", "from now on" or corrects it, and saves the rule with `kb add` in that turn.
 - **Before `/clear`** you run `/kb:checkpoint`. The agent saves what the session learned,
-  updates notes instead of duplicating them, archives finished open work, moves Claude Code's auto
+  updates notes instead of duplicating them, trashes finished open work, moves Claude Code's auto
   memory into kb, and records which notes helped with `kb use`.
-- **Archive, not delete.** `kb archive` moves a note to `archive/`, and `kb restore` brings it back.
-  `kb delete` removes a note for good, for a note the user wants gone. If the store is a git repo,
-  every write is one commit.
+- **A trash that clears itself.** `kb trash` moves a note to `trash/`, and `kb restore` brings it
+  back. A note in the trash for more than `trashDays` (30) is deleted for good, before the next
+  command. `kb delete` removes a note now, and `kb empty-trash` removes the whole trash. If the
+  store is a git repo, every write is one commit.
 - **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: an
   anchored file changed since the note was verified, an anchor is gone, the verified commit left
   the history, nobody verified the note for `decayDays` (180), or two titles are close.
   `/kb:audit` reads the code for each candidate, checks both budgets, proposes verify, rewrite,
-  merge, shorten, demote or archive, and applies what you accept. `kb budget` asks for a
+  merge, shorten, demote or trash, and applies what you accept. `kb budget` asks for a
   demotion only when the index is full and a note reaches no session. A body that became an
   index line is the normal state. It also lists the demoted notes, which no session loads. A session start says so in one
   line when more than 5 notes are candidates.
@@ -52,7 +53,7 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 
 ```
 ~/.kb/
-  notes/<scope>/<id>.md     archive/<scope>/<id>.md
+  notes/<scope>/<id>.md     trash/<scope>/<id>.md
   usage/<machine>.json      kb.config.json
   INDEX.md  local.json  .state/                 # generated or per-machine, not committed
 ```
@@ -62,19 +63,20 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 ```
 kb context [--repo .]        what a session gets at start
 kb add [--repo .]            create or update a note from JSON on stdin
-kb show <id>                 kb search <words> [--scope s] [--archive]
-kb list [--scope s]          kb use <id>...
-kb archive <id>...           kb restore <id>...
-kb delete <id>...
+kb show <id>                 kb search <words> [--scope s] [--trash]
+kb list [--scope s] [--trash]  kb use <id>...
+kb trash <id>...             kb restore <id>...
+kb delete <id>...            kb empty-trash
 kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]         kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run]
-kb scope [--repo .]          kb serve     (local page: read, edit and archive notes)
+kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
 kb sync                      kb checkpointed <session-id>
 ```
 
 `kb serve`, or `kb` alone in a terminal, opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
 list, and the open note. The arrow keys move through the sidebar and the list. `e` edits the open
-note and `a` archives it. `1` to `5` turn kinds on and off, and several can be on at once. `?` lists every key. On a phone the scopes and the kinds are two rows that scroll sideways, and a tap on a note brings it to the top of the screen. Each change goes through the same code as the CLI, so it is validated, committed and
+note and `⌫` moves it to the trash. In the trash, `⌫` deletes a note for good after a question,
+and Empty trash clears it all. `1` to `5` turn kinds on and off, and several can be on at once. `?` lists every key. On a phone the scopes and the kinds are two rows that scroll sideways, and a tap on a note brings it to the top of the screen. Each change goes through the same code as the CLI, so it is validated, committed and
 synced. The server listens on this machine only, and stops with Ctrl+C. To reach it through a
 reverse proxy, name the proxy's host in `KB_SERVE_HOSTS`, split by commas. A name that starts with a
 dot, such as `.example.com`, takes that domain and every name under it, so one setting covers a

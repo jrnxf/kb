@@ -9,6 +9,8 @@ import { KINDS, KbError, type Note, parseNote, serializeNote } from "./note.ts";
 export interface Config {
   budgets: { indexLines: number; contextChars: number };
   decayDays: number;
+  /** A note in the trash for longer than this is deleted for good. */
+  trashDays: number;
   autocommit: boolean;
   sync: boolean;
 }
@@ -25,7 +27,7 @@ export interface Usage {
 
 export interface StoredNote extends Note {
   path: string;
-  archived: boolean;
+  trashed: boolean;
 }
 
 /**
@@ -37,6 +39,7 @@ export const HARD_CONTEXT_CAP = 8800;
 const DEFAULT_CONFIG: Config = {
   budgets: { indexLines: 60, contextChars: 8000 },
   decayDays: 180,
+  trashDays: 30,
   autocommit: true,
   sync: true,
 };
@@ -80,7 +83,7 @@ export class Store {
 
   /** Create the store layout. Only commands that write call this. */
   ensure(): void {
-    for (const dir of ["notes", "archive", "usage"]) mkdirSync(join(this.home, dir), { recursive: true });
+    for (const dir of ["notes", "trash", "usage"]) mkdirSync(join(this.home, dir), { recursive: true });
     const configPath = join(this.home, "kb.config.json");
     if (!existsSync(configPath)) writeAtomic(configPath, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`);
     const ignorePath = join(this.home, ".gitignore");
@@ -124,8 +127,8 @@ export class Store {
 
   // ---- notes ----
 
-  notePath(note: Pick<Note, "scope" | "id">, archived = false): string {
-    return join(this.home, archived ? "archive" : "notes", note.scope, `${note.id}.md`);
+  notePath(note: Pick<Note, "scope" | "id">, trashed = false): string {
+    return join(this.home, trashed ? "trash" : "notes", note.scope, `${note.id}.md`);
   }
 
   private walk(dir: string): string[] {
@@ -145,12 +148,12 @@ export class Store {
   }
 
   /** Load notes. A file that fails to parse is skipped, so one bad edit never breaks a session. */
-  notes(options: { archived?: boolean } = {}): StoredNote[] {
-    const archived = options.archived ?? false;
+  notes(options: { trashed?: boolean } = {}): StoredNote[] {
+    const trashed = options.trashed ?? false;
     const notes: StoredNote[] = [];
-    for (const path of this.walk(join(this.home, archived ? "archive" : "notes"))) {
+    for (const path of this.walk(join(this.home, trashed ? "trash" : "notes"))) {
       try {
-        notes.push({ ...parseNote(readFileSync(path, "utf8")), path, archived });
+        notes.push({ ...parseNote(readFileSync(path, "utf8")), path, trashed });
       } catch {
         // skipped on purpose
       }
@@ -159,29 +162,56 @@ export class Store {
   }
 
   find(id: string): StoredNote | undefined {
-    return this.notes().find((n) => n.id === id) ?? this.notes({ archived: true }).find((n) => n.id === id);
+    return this.notes().find((n) => n.id === id) ?? this.notes({ trashed: true }).find((n) => n.id === id);
   }
 
-  writeNote(note: Note, archived = false): string {
-    const path = this.notePath(note, archived);
+  writeNote(note: Note, trashed = false): string {
+    const path = this.notePath(note, trashed);
     writeAtomic(path, serializeNote(note));
     return path;
   }
 
-  /** Move a note between notes/ and archive/, and record when it was archived. */
-  move(note: StoredNote, archived: boolean, at: string): string {
-    const target = this.notePath(note, archived);
+  /** Move a note between notes/ and trash/, and record when it went to the trash. */
+  move(note: StoredNote, trashed: boolean, at: string): string {
+    const target = this.notePath(note, trashed);
     if (existsSync(target)) throw new KbError(`cannot move ${note.id}: ${relative(this.home, target)} already exists`);
     mkdirSync(dirname(target), { recursive: true });
     renameSync(note.path, target);
-    const { path: _path, archived: _archived, archived_at: _at, ...rest } = note;
-    writeAtomic(target, serializeNote(archived ? { ...rest, archived_at: at } : rest));
+    const { path: _path, trashed: _trashed, trashed_at: _at, ...rest } = note;
+    writeAtomic(target, serializeNote(trashed ? { ...rest, trashed_at: at } : rest));
     return target;
   }
 
-  /** Remove a note file for good. In a git store, the history still has it. */
+  /** Remove a note file for good. In a git store, the history still has it. Another session may have removed it first. */
   remove(note: StoredNote): void {
-    rmSync(note.path);
+    rmSync(note.path, { force: true });
+  }
+
+  /**
+   * Move the notes of archive/, from before the archive became the trash, into trash/. A note
+   * with no time of archive gets `now`, so it has the full time in the trash. A file whose path
+   * is taken in trash/ stays where it is. Returns the number of files moved.
+   */
+  moveArchiveToTrash(now: string): number {
+    const archive = join(this.home, "archive");
+    if (!existsSync(archive)) return 0;
+    let moved = 0;
+    for (const path of this.walk(archive)) {
+      const target = join(this.home, "trash", relative(archive, path));
+      if (existsSync(target)) continue;
+      mkdirSync(dirname(target), { recursive: true });
+      try {
+        const note = parseNote(readFileSync(path, "utf8"));
+        writeAtomic(target, serializeNote({ ...note, trashed_at: note.trashed_at ?? now }));
+        rmSync(path);
+      } catch {
+        // A file that does not parse moves as it is.
+        renameSync(path, target);
+      }
+      moved++;
+    }
+    if (this.walk(archive).length === 0) rmSync(archive, { recursive: true, force: true });
+    return moved;
   }
 
   // ---- usage ----

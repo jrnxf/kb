@@ -86,11 +86,11 @@ describe("kb stale", () => {
     expect(found[0]).toMatchObject({ id: "second", reason: "duplicate", detail: "the title is close to first" });
   });
 
-  test("it leaves out other repos, archived notes and promoted notes, and works outside a repo", () => {
+  test("it leaves out other repos, trashed notes and promoted notes, and works outside a repo", () => {
     const { repo, store } = fixture();
     const old = "2025-01-01T00:00:00Z";
     putNote(store, { id: "elsewhere", scope: "github.com/acme/web", last_verified: old });
-    putNote(store, { id: "archived", last_verified: old }, true);
+    putNote(store, { id: "trashed", last_verified: old }, true);
     putNote(store, { id: "promoted", scope: SCOPE, promoted_to: "CLAUDE.md", last_verified: old });
     putNote(store, { id: "global", last_verified: old });
     expect(reasons(store, repo)).toEqual(["global:decayed"]);

@@ -1,9 +1,9 @@
 // Changes to stored notes, shared by the CLI commands and `kb serve`.
 
-import { KbError, validateNote } from "./note.ts";
+import { KbError, serializeNote, validateNote } from "./note.ts";
 import type { RepoInfo } from "./scope.ts";
 import { clearStaleCache } from "./stale.ts";
-import type { Store, StoredNote } from "./store.ts";
+import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import { kickSync } from "./sync.ts";
 
 export const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -19,7 +19,7 @@ export function afterWrite(store: Store, message: string): void {
 export function closeIds(store: Store, part: string): string[] {
   const text = part.toLowerCase();
   if (!text) return [];
-  return [...store.notes(), ...store.notes({ archived: true })].filter((n) => n.id.includes(text)).map((n) => n.id).sort();
+  return [...store.notes(), ...store.notes({ trashed: true })].filter((n) => n.id.includes(text)).map((n) => n.id).sort();
 }
 
 export function requireNote(store: Store, id: string): StoredNote {
@@ -37,7 +37,7 @@ export function requireNote(store: Store, id: string): StoredNote {
 export function updateNote(store: Store, input: Record<string, unknown> & { id: string }, repo: Pick<RepoInfo, "scope" | "head">): { id: string; path: string } {
   const existing = store.notes().find((n) => n.id === input.id);
   if (!existing) throw new KbError(`no active note with id "${input.id}"`);
-  const { path: _path, archived: _archived, ...stored } = existing;
+  const { path: _path, trashed: _trashed, ...stored } = existing;
   const merged: Record<string, unknown> = { ...stored, ...input, scope: existing.scope, created: existing.created };
   // Only a change of content says that somebody looked at the fact again.
   if (["title", "body", "anchors"].some((key) => key in input)) {
@@ -50,28 +50,74 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
   return { id: note.id, path };
 }
 
-/** Move notes between notes/ and archive/. Archive is the normal way to retire a note: it can come back. */
-export function moveNotes(store: Store, ids: string[], toArchive: boolean): string[] {
+/**
+ * Move notes between notes/ and trash/. The trash is the normal way to retire a note: it can
+ * come back until the trash clears it, `trashDays` after it went there.
+ */
+export function moveNotes(store: Store, ids: string[], toTrash: boolean): string[] {
   const moved: string[] = [];
   for (const id of ids) {
     const note = requireNote(store, id);
-    if (note.archived === toArchive) throw new KbError(`${id} is already ${toArchive ? "archived" : "active"}`);
-    store.move(note, toArchive, nowIso());
+    if (note.trashed === toTrash) throw new KbError(`${id} is already ${toTrash ? "in the trash" : "active"}`);
+    store.move(note, toTrash, nowIso());
     moved.push(id);
   }
-  afterWrite(store, `kb: ${toArchive ? "archive" : "restore"} ${moved.join(" ")}`);
+  afterWrite(store, `kb: ${toTrash ? "trash" : "restore"} ${moved.join(" ")}`);
   return moved;
 }
 
-/**
- * Remove notes for good, active or archived. For a note the user wants gone, not for finished
- * work, which `kb archive` keeps. Every id is checked before the first file goes.
- */
-export function deleteNotes(store: Store, ids: string[]): string[] {
-  const notes = [...new Set(ids)].map((id) => requireNote(store, id));
+function removeNotes(store: Store, notes: StoredNote[], message: string): string[] {
   for (const note of notes) store.remove(note);
   const deleted = notes.map((n) => n.id);
   store.dropUsage(deleted);
-  afterWrite(store, `kb: delete ${deleted.join(" ")}`);
+  afterWrite(store, message);
   return deleted;
+}
+
+/**
+ * Remove notes for good, active or in the trash. For a note the user wants gone now, not for
+ * finished work, which goes to the trash. Every id is checked before the first file goes.
+ */
+export function deleteNotes(store: Store, ids: string[]): string[] {
+  const notes = [...new Set(ids)].map((id) => requireNote(store, id));
+  return removeNotes(store, notes, `kb: delete ${notes.map((n) => n.id).join(" ")}`);
+}
+
+/** Remove every note in the trash for good. */
+export function emptyTrash(store: Store): string[] {
+  const notes = store.notes({ trashed: true });
+  if (notes.length === 0) return [];
+  return removeNotes(store, notes, `kb: empty the trash (${notes.length})`);
+}
+
+const DAY_MS = 86_400_000;
+
+/** When the trash clears a note: `trashDays` after it went there. */
+export function clearsAt(trashedAt: string, days: number): string {
+  return new Date(Date.parse(trashedAt) + days * DAY_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/**
+ * Housekeeping before a command: move a store from before the trash into trash/, give a
+ * trashed note with no time one, and delete the notes whose time in the trash is up.
+ * One commit, and only when something changed. Returns the ids deleted.
+ */
+export function tidyTrash(store: Store, now = nowIso()): string[] {
+  const moved = store.moveArchiveToTrash(now);
+  const days = store.config().trashDays;
+  const expired: StoredNote[] = [];
+  let stamped = 0;
+  for (const note of store.notes({ trashed: true })) {
+    if (!note.trashed_at) {
+      const { path, trashed: _trashed, ...rest } = note;
+      writeAtomic(path, serializeNote({ ...rest, trashed_at: now }));
+      stamped++;
+    } else if (clearsAt(note.trashed_at, days) <= now) expired.push(note);
+  }
+  if (expired.length > 0) {
+    const what = moved > 0 ? `move the archive to the trash, and clear ${expired.length} after ${days} days` : `clear ${expired.length} from the trash after ${days} days`;
+    return removeNotes(store, expired, `kb: ${what}: ${expired.map((n) => n.id).join(" ")}`);
+  }
+  if (moved > 0 || stamped > 0) afterWrite(store, moved > 0 ? "kb: move the archive to the trash" : "kb: record when trashed notes went to the trash");
+  return [];
 }

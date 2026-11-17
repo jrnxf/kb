@@ -84,7 +84,7 @@ Read the result. `created` and `updated` are done. `exists` means a note in this
 
 ## 4. Close finished work
 
-For each `open-work` note that this session finished, run `kb archive <id>`. If part of the work remains, update the note to the new state.
+For each `open-work` note that this session finished, run `kb trash <id>`. If part of the work remains, update the note to the new state.
 
 ## 5. Record what helped
 

@@ -6,11 +6,13 @@ export interface PageNote {
   scope: string;
   kind: string;
   confidence: string;
-  archived: boolean;
+  trashed: boolean;
   indexed: boolean;
   last_verified: string;
-  /** When the note was archived. Notes archived before this was recorded have none. */
-  archived_at?: string;
+  /** When the note went to the trash. */
+  trashed_at?: string;
+  /** When the trash deletes the note for good. */
+  clears_at?: string;
   verified_at_commit?: string;
   promoted_to?: string;
   anchors: string[];
@@ -23,12 +25,14 @@ export interface PageNote {
 }
 
 export interface PageData {
-  /** Changes whenever a note, the archive or a usage counter changes. */
+  /** Changes whenever a note, the trash or a usage counter changes. */
   version: string;
   /** Every request that changes the store must carry this. */
   token: string;
   kinds: string[];
-  /** Live notes scope by scope (global first) in rank order, then archived notes, most recently archived first. */
+  /** A note in the trash for longer than this is deleted for good. */
+  trashDays: number;
+  /** Live notes scope by scope (global first) in rank order, then the trash, most recently trashed first. */
   notes: PageNote[];
 }
 

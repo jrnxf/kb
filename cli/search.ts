@@ -7,14 +7,14 @@ export interface Hit {
   id: string;
   title: string;
   scope: string;
-  archived: boolean;
+  trashed: boolean;
   line: number;
   text: string;
 }
 
 export interface SearchOptions {
   scope?: string;
-  archive?: boolean;
+  trash?: boolean;
   /** The scope of the directory of the caller. Its notes come first, then global, then the rest. */
   first?: string;
 }
@@ -32,7 +32,7 @@ export interface SearchResult {
  */
 export function searchNotes(store: Store, query: string, options: SearchOptions = {}): SearchResult {
   const words = [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))];
-  const notes = [...store.notes(), ...(options.archive ? store.notes({ archived: true }) : [])].filter(
+  const notes = [...store.notes(), ...(options.trash ? store.notes({ trashed: true }) : [])].filter(
     (n) => !options.scope || n.scope === options.scope,
   );
   if (words.length === 0) return { hits: [], complete: true };
@@ -50,13 +50,13 @@ export function searchNotes(store: Store, query: string, options: SearchOptions 
       const here = words.filter((word) => lower.includes(word));
       if (here.length === 0) return;
       for (const word of here) matched.add(word);
-      hits.push({ id: note.id, title: note.title, scope: note.scope, archived: note.archived, line: i + 1, text: text.trim() });
+      hits.push({ id: note.id, title: note.title, scope: note.scope, trashed: note.trashed, line: i + 1, text: text.trim() });
     });
     if (matched.size > 0) found.push({ note, matched: matched.size, hits });
   }
 
   // A store has the same fact for several repos. The caller wants the one for this repo.
-  const near = (h: Hit) => (h.archived ? 3 : h.scope === options.first ? 0 : h.scope === "global" ? 1 : 2);
+  const near = (h: Hit) => (h.trashed ? 3 : h.scope === options.first ? 0 : h.scope === "global" ? 1 : 2);
   const best = Math.max(0, ...found.map((f) => f.matched));
   const complete = best === words.length;
   if (!complete && best < 2) return { hits: [], complete: true };

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } fro
 import { toast } from "sonner";
 import type { NoteEdit, PageData, PageNote } from "../../cli/wire.ts";
 import { Combo } from "@/components/bits";
+import { type Confirm, ConfirmDialog } from "@/components/confirm-dialog";
 import { KeysDialog } from "@/components/keys-dialog";
 import { NoteForm } from "@/components/note-form";
 import { NoteList } from "@/components/note-list";
@@ -27,6 +28,7 @@ export function App() {
   const [view, setView] = useState<View>(() => fromHash(location.hash));
   const [editing, setEditing] = useState(false);
   const [help, setHelp] = useState(false);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   // The scope to go back to when the cursor walks on from the scopes into the kinds.
   const held = useRef<string | null>(view.scope);
@@ -82,11 +84,11 @@ export function App() {
     if (!data) return;
     const scope = view.scope && !scopes.includes(view.scope) ? null : view.scope;
     const kindsOk = view.kinds.filter((k) => kinds.includes(k));
-    const archived = view.archived && shown.archivedCount > 0;
-    if (scope !== view.scope || kindsOk.length !== view.kinds.length || archived !== view.archived) {
-      setView((v) => ({ ...v, scope, kinds: kindsOk, archived }));
+    const trash = view.trash && shown.trashCount > 0;
+    if (scope !== view.scope || kindsOk.length !== view.kinds.length || trash !== view.trash) {
+      setView((v) => ({ ...v, scope, kinds: kindsOk, trash }));
     }
-  }, [data, scopes, kinds, view.scope, view.kinds, view.archived, shown.archivedCount]);
+  }, [data, scopes, kinds, view.scope, view.kinds, view.trash, shown.trashCount]);
 
   // The address keeps the view, so a reload comes back to the same place.
   useEffect(() => {
@@ -106,16 +108,16 @@ export function App() {
     () => [
       ...["*", ...scopes].map((scope): RailItem => ({ key: `scope:${scope}`, type: "scope", scope })),
       ...kinds.map((kind, i): RailItem => ({ key: `kind:${kind}`, type: "kind", kind, n: i + 1 })),
-      ...(shown.archivedCount > 0 ? [{ key: "archived", type: "archived" } as RailItem] : []),
+      ...(shown.trashCount > 0 ? [{ key: "trash", type: "trash" } as RailItem] : []),
     ],
-    [scopes, kinds, shown.archivedCount],
+    [scopes, kinds, shown.trashCount],
   );
   const scopeKey = `scope:${view.scope ?? "*"}`;
   const cursorKey = cursor && items.some((i) => i.key === cursor) ? cursor : scopeKey;
   const pressed = (item: RailItem) =>
-    item.type === "scope" ? (view.scope ?? "*") === item.scope : item.type === "kind" ? view.kinds.includes(item.kind) : shown.archived;
+    item.type === "scope" ? (view.scope ?? "*") === item.scope : item.type === "kind" ? view.kinds.includes(item.kind) : shown.trash;
   const count = (item: RailItem) =>
-    item.type === "scope" ? (shown.byScope.get(item.scope) ?? 0) : item.type === "kind" ? (shown.byKind.get(item.kind) ?? 0) : shown.archivedCount;
+    item.type === "scope" ? (shown.byScope.get(item.scope) ?? 0) : item.type === "kind" ? (shown.byKind.get(item.kind) ?? 0) : shown.trashCount;
   const scopeOf = (item: RailItem) => (item.type === "scope" && item.scope !== "*" ? item.scope : null);
   const toggleKind = (kind: string) =>
     setView((v) => ({ ...v, kinds: v.kinds.includes(kind) ? v.kinds.filter((k) => k !== kind) : [...v.kinds, kind] }));
@@ -126,7 +128,7 @@ export function App() {
       held.current = scopeOf(item);
       setView((v) => ({ ...v, scope: scopeOf(item) }));
     } else if (item.type === "kind") toggleKind(item.kind);
-    else setView((v) => ({ ...v, archived: !v.archived }));
+    else setView((v) => ({ ...v, trash: !v.trash }));
   }
 
   function moveCursor(by: number) {
@@ -196,12 +198,12 @@ export function App() {
     setEditing(false);
   }
 
-  /** Archive the open note, or restore it. Each works only on a note it fits. */
-  async function archive(restore: boolean) {
-    if (!current || editing || current.archived !== restore) return;
+  /** Move the open note to the trash, or restore it. Each works only on a note it fits. */
+  async function trash(restore: boolean) {
+    if (!current || editing || current.trashed !== restore) return;
     const id = current.id, title = current.title, after = neighbour(shown.notes, id);
     try {
-      await busy(() => (restore ? api.restoreNote(id) : api.archiveNote(id)));
+      await busy(() => (restore ? api.restoreNote(id) : api.trashNote(id)));
     } catch (error) {
       toast((error as Error).message, { id: "kb" });
       return;
@@ -215,8 +217,8 @@ export function App() {
     await refresh();
     if (restore) return;
     undoId.current = id;
-    // The toast names the note, as the note it archived is gone from the screen.
-    toast("Archived", {
+    // The toast names the note, as the note it moved is gone from the screen.
+    toast("Moved to the trash", {
       id: "kb",
       description: title,
       duration: UNDO_MS,
@@ -249,8 +251,47 @@ export function App() {
     setView((v) => ({ ...v, note: id }));
   }
 
+  /** A change that cannot be undone: the dialog asks first, then this runs it. */
+  async function removeForGood(run: () => Promise<unknown>, after: string | null) {
+    try {
+      await busy(run);
+    } catch (error) {
+      toast((error as Error).message, { id: "kb" });
+      return;
+    }
+    if (reading) {
+      back();
+      await sleep(CLOSE_MS);
+    }
+    setView((v) => ({ ...v, note: after }));
+    await refresh();
+  }
+
+  /** Delete the open note for good. Only a note in the trash, and only after the dialog. */
+  function askDelete() {
+    if (!current || editing || !current.trashed) return;
+    const id = current.id, after = neighbour(shown.notes, id);
+    setConfirm({
+      title: "Delete this note for good?",
+      description: current.title,
+      action: "Delete",
+      run: () => void removeForGood(() => api.deleteNote(id), after),
+    });
+  }
+
+  function askEmpty() {
+    const n = shown.trashCount;
+    if (n === 0) return;
+    setConfirm({
+      title: "Empty the trash?",
+      description: `${n === 1 ? "1 note is" : `${n} notes are`} deleted for good.`,
+      action: "Empty trash",
+      run: () => void removeForGood(() => api.emptyTrash(), null),
+    });
+  }
+
   function edit() {
-    if (!current || current.archived) return;
+    if (!current || current.trashed) return;
     // On a phone the form is in the drawer, so the drawer opens with it.
     if (phone && !reading) openNote();
     setEditing(true);
@@ -283,13 +324,23 @@ export function App() {
     const key = event.key;
     if (!data || editing) return;
     const mod = MAC ? event.metaKey : event.ctrlKey;
-    // ⌘Z undoes an archive while its toast shows. In the filter it stays the field's own undo.
+    // ⌘Z undoes a move to the trash while its toast shows. In the filter it stays the field's own undo.
     if (key.toLowerCase() === "z" && mod && !event.shiftKey && undoId.current && document.activeElement !== search.current) {
       event.preventDefault();
       void undo();
       return;
     }
     if (event.metaKey || event.ctrlKey || event.altKey) return;
+    // The question before a delete takes every key. Its own buttons answer Enter and Escape. An
+    // Enter that comes before the dialog has moved the focus to its action still confirms.
+    if (confirm) {
+      if (key === "Enter" && !(document.activeElement as HTMLElement | null)?.closest("[role=dialog]")) {
+        event.preventDefault();
+        confirm.run();
+        setConfirm(null);
+      }
+      return;
+    }
     // The open list of keys takes every key. It closes itself on Escape.
     if (help) {
       if (key === "?") {
@@ -344,8 +395,11 @@ export function App() {
     // The note has no keys of its own. Space pages through it from the list.
     else if (key === " ") reader.current?.scrollBy({ top: (event.shiftKey ? -0.8 : 0.8) * reader.current.clientHeight });
     else if (key === "e" && pane === "list") edit();
-    else if (key === "a" && pane === "list") void archive(false);
-    else if (key === "r" && pane === "list") void archive(true);
+    // Backspace moves a note to the trash. In the trash it asks to delete the note for good.
+    else if ((key === "Backspace" || key === "Delete") && pane === "list" && current) {
+      if (current.trashed) askDelete();
+      else void trash(false);
+    } else if (key === "r" && pane === "list") void trash(true);
     else if (key === "t") nextTheme();
     else if (key === "?") setHelp(true);
     else if (kinds[Number(key) - 1]) toggleKind(kinds[Number(key) - 1]!);
@@ -393,13 +447,17 @@ export function App() {
           setView((v) => ({ ...v, pane: "list" }));
           edit();
         }}
-        onArchive={() => {
+        onTrash={() => {
           setView((v) => ({ ...v, pane: "list" }));
-          void archive(false);
+          void trash(false);
         }}
         onRestore={() => {
           setView((v) => ({ ...v, pane: "list" }));
-          void archive(true);
+          void trash(true);
+        }}
+        onDelete={() => {
+          setView((v) => ({ ...v, pane: "list" }));
+          askDelete();
         }}
       />
     )
@@ -440,7 +498,7 @@ export function App() {
             onTheme={nextTheme}
             onKeys={() => setHelp(true)}
           />
-          <NoteList notes={shown.notes} current={current} q={view.q} onQ={(q) => setView((v) => ({ ...v, q }))} searchRef={search} onOpen={pickRow} empty={empty} />
+          <NoteList notes={shown.notes} current={current} q={view.q} onQ={(q) => setView((v) => ({ ...v, q }))} searchRef={search} onOpen={pickRow} empty={empty} trash={shown.trash ? { days: data.trashDays, onEmpty: askEmpty } : undefined} />
         </DrawerIndent>
         {!phone && (
           <main ref={reader} className="min-w-0 overflow-y-auto px-12 pt-6 pb-20">
@@ -470,6 +528,7 @@ export function App() {
           </DrawerContent>
         </Drawer>
       )}
+      <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />
       <KeysDialog open={help} onOpenChange={setHelp} kinds={kinds.length} />
       <Toaster theme={resolved} position="bottom-center" />
     </DrawerProvider>

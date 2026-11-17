@@ -17,9 +17,11 @@ interface Props {
   onOpen: (note: PageNote) => void;
   /** Why the list is empty, and the shortest way back to notes. */
   empty: { text: string; action?: { label: string; run: () => void } };
+  /** The list shows the trash: it says how long a note stays, and offers to empty it. */
+  trash?: { days: number; onEmpty: () => void };
 }
 
-export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty }: Props) {
+export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, trash }: Props) {
   const rows = useRef(new Map<string, HTMLButtonElement>());
   useEffect(() => {
     if (current) rows.current.get(current.id)?.scrollIntoView({ block: "nearest" });
@@ -61,7 +63,19 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty }: P
             <Kbd>/</Kbd>
           </InputGroupAddon>
         </InputGroup>
-        {notes.length > 0 && <div className="mt-3.5 text-xs/[normal] text-faint tabular-nums">{notes.length === 1 ? "1 note" : `${notes.length} notes`}</div>}
+        {notes.length > 0 && (
+          <div className="mt-3.5 flex min-h-[22px] items-center gap-2 text-xs/[normal] text-faint tabular-nums">
+            <span>
+              {notes.length === 1 ? "1 note" : `${notes.length} notes`}
+              {trash && `, deleted after ${trash.days} days`}
+            </span>
+            {trash && (
+              <Button variant="outline" size="xs" className="ml-auto text-muted-foreground hover:text-foreground" onClick={trash.onEmpty}>
+                Empty trash
+              </Button>
+            )}
+          </div>
+        )}
       </div>
       <ScrollArea fade className="min-h-0 flex-1 max-wide:contents" viewportClassName="max-wide:contents" contentClassName="max-wide:contents">
         {notes.length === 0 ? (
@@ -97,7 +111,7 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty }: P
                 )}
               >
                 <Dot className="relative -top-0.5" />
-                <span className={cn("line-clamp-2 min-w-0 flex-1", note.archived && "text-muted-foreground")}>{note.title}</span>
+                <span className={cn("line-clamp-2 min-w-0 flex-1", note.trashed && "text-muted-foreground")}>{note.title}</span>
               </button>
             ))}
           </div>

@@ -12,9 +12,9 @@ const KEYS = (kinds: number): [string[], string][] => [
   [["space"], "scroll the note"],
   [["enter"], "open the note on a narrow screen, as space does"],
   [["e"], "edit"],
-  [["a"], "archive"],
-  [["r"], "restore an archived note"],
-  [[MAC ? "⌘" : "ctrl", "Z"], "undo an archive"],
+  [["⌫"], "trash, or in the trash delete for good"],
+  [["r"], "restore from the trash"],
+  [[MAC ? "⌘" : "ctrl", "Z"], "undo a trash"],
   [["t"], "theme"],
   [["?"], "this list"],
 ];
