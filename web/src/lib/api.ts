@@ -26,5 +26,8 @@ export async function storeVersion(): Promise<string> {
 export const saveNote = (id: string, edit: NoteEdit) => call("PUT", `/api/notes/${id}`, edit);
 export const trashNote = (id: string) => call("POST", `/api/notes/${id}/trash`);
 export const deleteNote = (id: string) => call("DELETE", `/api/notes/${id}`);
-export const emptyTrash = () => call<{ deleted: string[] }>("POST", "/api/trash/empty");
+/** Without a scope, the whole trash. With one, only the trash of that project. */
+export const emptyTrash = (scope?: string) => call<{ deleted: string[] }>("POST", "/api/trash/empty", scope === undefined ? undefined : { scope });
+export const trashProject = (scope: string) => call<{ trashed: string[] }>("POST", "/api/projects/trash", { scope });
+export const restoreProject = (scope: string) => call<{ restored: string[] }>("POST", "/api/projects/restore", { scope });
 export const restoreNote = (id: string) => call("POST", `/api/notes/${id}/restore`);

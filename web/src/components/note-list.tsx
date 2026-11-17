@@ -19,9 +19,11 @@ interface Props {
   empty: { text: string; action?: { label: string; run: () => void } };
   /** The list shows the trash: it says how long a note stays, and offers to empty it. */
   trash?: { days: number; onEmpty: () => void };
+  /** The list shows one project: it offers to move the whole project to the trash. */
+  project?: { onTrash: () => void };
 }
 
-export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, trash }: Props) {
+export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, trash, project }: Props) {
   const rows = useRef(new Map<string, HTMLButtonElement>());
   useEffect(() => {
     if (current) rows.current.get(current.id)?.scrollIntoView({ block: "nearest" });
@@ -70,8 +72,13 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, tra
               {trash && `, deleted after ${trash.days} days`}
             </span>
             {trash && (
-              <Button variant="outline" size="xs" className="ml-auto text-muted-foreground hover:text-foreground" onClick={trash.onEmpty}>
+              <Button variant="outline" size="xs" className="-my-px ml-auto text-muted-foreground hover:text-foreground" onClick={trash.onEmpty}>
                 Empty trash
+              </Button>
+            )}
+            {project && (
+              <Button variant="outline" size="xs" className="-my-px ml-auto text-muted-foreground hover:text-foreground" onClick={project.onTrash}>
+                Trash project
               </Button>
             )}
           </div>

@@ -1,5 +1,6 @@
 // Changes to stored notes, shared by the CLI commands and `kb serve`.
 
+import { existsSync } from "node:fs";
 import { KbError, serializeNote, validateNote } from "./note.ts";
 import type { RepoInfo } from "./scope.ts";
 import { clearStaleCache } from "./stale.ts";
@@ -83,11 +84,63 @@ export function deleteNotes(store: Store, ids: string[]): string[] {
   return removeNotes(store, notes, `kb: delete ${notes.map((n) => n.id).join(" ")}`);
 }
 
-/** Remove every note in the trash for good. */
-export function emptyTrash(store: Store): string[] {
-  const notes = store.notes({ trashed: true });
+/** Remove every note in the trash for good, or only the notes of one scope. */
+export function emptyTrash(store: Store, scope?: string): string[] {
+  const notes = store.notes({ trashed: true }).filter((n) => scope === undefined || n.scope === scope);
   if (notes.length === 0) return [];
-  return removeNotes(store, notes, `kb: empty the trash (${notes.length})`);
+  return removeNotes(store, notes, scope === undefined ? `kb: empty the trash (${notes.length})` : `kb: empty the trash of ${scope} (${notes.length})`);
+}
+
+// ---- a project: every note of one repo scope ----
+
+/** A project is the notes of one repo. "global" is not a project, so no project command can touch it. */
+function requireProject(store: Store, scope: string): void {
+  if (scope === "global") throw new KbError("\"global\" is not a project. Trash or delete its notes by id.");
+  if (![...store.notes(), ...store.notes({ trashed: true })].some((n) => n.scope === scope)) {
+    throw new KbError(`no notes have the scope "${scope}". Pass the exact repo id, as \`kb list\` shows it.`);
+  }
+}
+
+/**
+ * Move every active note of a project to the trash, in one commit. They share one trashed_at, so
+ * `restoreProject` brings back this move and no note that went to the trash before it.
+ * Every target is checked before the first file moves.
+ */
+export function trashProject(store: Store, scope: string): string[] {
+  requireProject(store, scope);
+  const notes = store.notes().filter((n) => n.scope === scope);
+  if (notes.length === 0) throw new KbError(`${scope} has no active notes. Its notes are in the trash already.`);
+  for (const note of notes) {
+    if (existsSync(store.notePath(note, true))) throw new KbError(`cannot move ${note.id}: the trash has a note with that id`);
+  }
+  const at = nowIso();
+  for (const note of notes) store.move(note, true, at);
+  const ids = notes.map((n) => n.id).sort();
+  afterWrite(store, `kb: trash the project ${scope} (${ids.length})`);
+  return ids;
+}
+
+/** Bring back the notes of a project that went to the trash last, together. */
+export function restoreProject(store: Store, scope: string): string[] {
+  requireProject(store, scope);
+  const trashed = store.notes({ trashed: true }).filter((n) => n.scope === scope);
+  if (trashed.length === 0) throw new KbError(`${scope} has no notes in the trash`);
+  const last = trashed.map((n) => n.trashed_at ?? "").sort().at(-1);
+  const notes = trashed.filter((n) => (n.trashed_at ?? "") === last);
+  for (const note of notes) {
+    if (existsSync(store.notePath(note))) throw new KbError(`cannot restore ${note.id}: an active note has that id`);
+  }
+  for (const note of notes) store.move(note, false, nowIso());
+  const ids = notes.map((n) => n.id).sort();
+  afterWrite(store, `kb: restore the project ${scope} (${ids.length})`);
+  return ids;
+}
+
+/** Remove every note of a project for good, active and in the trash. Only when the user wants the project gone now. */
+export function deleteProject(store: Store, scope: string): string[] {
+  requireProject(store, scope);
+  const notes = [...store.notes(), ...store.notes({ trashed: true })].filter((n) => n.scope === scope);
+  return removeNotes(store, notes, `kb: delete the project ${scope} (${notes.length})`).sort();
 }
 
 const DAY_MS = 86_400_000;

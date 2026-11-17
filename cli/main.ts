@@ -12,7 +12,7 @@ import { markSaved } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
-import { afterWrite, clearsAt, closeIds, deleteNotes, emptyTrash, moveNotes, nowIso, requireNote, tidyTrash, updateNote } from "./write.ts";
+import { afterWrite, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, moveNotes, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
@@ -29,6 +29,10 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb delete <id>...                      remove notes for good, active or in the trash. When the user
                                          wants a note gone now. In a git store, the history keeps the file
   kb empty-trash                         remove every note in the trash for good
+  kb trash --scope <repo id>             move every note of a project to the trash. restore --scope
+                                         brings that move back. delete --scope removes the project's
+                                         notes for good, and empty-trash --scope only its trash. Each
+                                         takes the exact repo id, never "global". Only when the user asks
   kb stale [--repo .]                    notes that may no longer be true, each with a reason
   kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
   kb budget [--repo .]                   what a session loads, and what reaches no session
@@ -278,19 +282,40 @@ function cmdUse(store: Store, args: Args): Output {
   return { json: { used, unknown }, text };
 }
 
+/** The --scope of a project command: the exact repo id, with no note ids next to it. */
+function projectScope(args: Args, verb: string): string | undefined {
+  const scope = args.flags.get("scope");
+  if (scope === undefined) return undefined;
+  if (typeof scope !== "string" || args.positional.length > 0) throw new KbError(`usage: kb ${verb} --scope <repo id>, with no note ids`);
+  return scope;
+}
+
 function cmdMove(store: Store, args: Args, toTrash: boolean): Output {
   const verb = toTrash ? "trash" : "restore";
+  const scope = projectScope(args, verb);
+  if (scope !== undefined) {
+    const moved = toTrash ? trashProject(store, scope) : restoreProject(store, scope);
+    const count = `${moved.length} ${moved.length === 1 ? "note" : "notes"}`;
+    return { json: { scope, [toTrash ? "trashed" : "restored"]: moved }, text: toTrash ? `moved ${count} of ${scope} to the trash: ${moved.join(", ")}` : `restored ${count} of ${scope}: ${moved.join(", ")}` };
+  }
   if (args.positional.length === 0) throw new KbError(`usage: kb ${verb} <id>...`);
   const moved = moveNotes(store, args.positional, toTrash);
   return { json: { [toTrash ? "trashed" : "restored"]: moved }, text: `${toTrash ? "moved to the trash:" : "restored"} ${moved.join(", ")}` };
 }
 
-function cmdEmptyTrash(store: Store): Output {
-  const deleted = emptyTrash(store);
+function cmdEmptyTrash(store: Store, args: Args): Output {
+  const scope = projectScope(args, "empty-trash");
+  if (scope !== undefined && !store.notes({ trashed: true }).some((n) => n.scope === scope)) throw new KbError(`${scope} has no notes in the trash`);
+  const deleted = emptyTrash(store, scope);
   return { json: { deleted }, text: deleted.length === 0 ? "the trash is empty" : `deleted ${deleted.join(", ")}` };
 }
 
 function cmdDelete(store: Store, args: Args): Output {
+  const scope = projectScope(args, "delete");
+  if (scope !== undefined) {
+    const deleted = deleteProject(store, scope);
+    return { json: { scope, deleted }, text: `deleted ${deleted.length} ${deleted.length === 1 ? "note" : "notes"} of ${scope}: ${deleted.join(", ")}` };
+  }
   if (args.positional.length === 0) throw new KbError("usage: kb delete <id>...");
   const deleted = deleteNotes(store, args.positional);
   return { json: { deleted }, text: `deleted ${deleted.join(", ")}` };
@@ -453,7 +478,7 @@ async function main(): Promise<number> {
       case "trash": out = cmdMove(store, args, true); break;
       case "restore": out = cmdMove(store, args, false); break;
       case "delete": out = cmdDelete(store, args); break;
-      case "empty-trash": out = cmdEmptyTrash(store); break;
+      case "empty-trash": out = cmdEmptyTrash(store, args); break;
       case "stale": out = cmdStale(store, args); break;
       case "verify": out = cmdVerify(store, args); break;
       case "budget": out = cmdBudget(store, args); break;
