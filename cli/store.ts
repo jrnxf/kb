@@ -74,14 +74,6 @@ function readJson<T>(path: string): T | null {
   }
 }
 
-function parseOrNothing(text: string): Note | undefined {
-  try {
-    return parseNote(text);
-  } catch {
-    return undefined;
-  }
-}
-
 export class Store {
   constructor(readonly home: string = kbHome()) {}
 
@@ -195,44 +187,6 @@ export class Store {
   /** Remove a note file for good. In a git store, the history still has it. Another session may have removed it first. */
   remove(note: StoredNote): void {
     rmSync(note.path, { force: true });
-  }
-
-  /**
-   * Move the notes of archive/, from before the archive became the trash, into trash/. Every
-   * note gets `now` as its time in the trash, even one archived long ago, so the move itself
-   * never deletes a note: each one has the full time in the trash. Another session may move
-   * the same files at the same time. Returns the number of files this call moved.
-   */
-  moveArchiveToTrash(now: string): number {
-    const archive = join(this.home, "archive");
-    if (!existsSync(archive)) return 0;
-    let moved = 0;
-    for (const path of this.walk(archive)) {
-      const target = join(this.home, "trash", relative(archive, path));
-      try {
-        // A file that does not parse moves as it is.
-        const note = parseOrNothing(readFileSync(path, "utf8"));
-        if (existsSync(target)) {
-          // The trash has this path already, from another session or another machine. A copy of
-          // the same note goes. A different note stays, and says so, so nothing is lost.
-          const there = parseOrNothing(readFileSync(target, "utf8"));
-          if (note && there && note.body === there.body && note.title === there.title) rmSync(path, { force: true });
-          else console.error(`kb: ${relative(this.home, path)} was not moved, because ${relative(this.home, target)} exists. Move or remove one of them.`);
-          continue;
-        }
-        mkdirSync(dirname(target), { recursive: true });
-        if (note) {
-          writeAtomic(target, serializeNote({ ...note, trashed_at: now }));
-          rmSync(path, { force: true });
-        } else renameSync(path, target);
-        moved++;
-      } catch (error) {
-        // Another session moved this file first.
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
-    if (this.walk(archive).length === 0) rmSync(archive, { recursive: true, force: true });
-    return moved;
   }
 
   // ---- usage ----
