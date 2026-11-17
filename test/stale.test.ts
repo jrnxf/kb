@@ -166,7 +166,7 @@ describe("kb budget", () => {
     expect(text).toContain("longest  ");
   });
 
-  test("when notes reach no session it names as many as are hidden: least used, lowest rank, never open work", () => {
+  test("when notes reach no session it names as many as are hidden: least used, lowest rank, never open work or a rule", () => {
     const { repo, store } = fixture();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 2, contextChars: 1500 } }));
     const body = "word ".repeat(80);
@@ -183,7 +183,25 @@ describe("kb budget", () => {
     expect(ids).toHaveLength(b.index.hidden);
     for (const id of ids) expect(id).toMatch(/^howto-/);
     expect(b.demote[0].reason).toBe("never used");
-    expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is full\. Demote first: howto-/);
+    expect(b.ask).toEqual([]);
+    expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is full\.\nDemote first: howto-/);
+  });
+
+  test("gotchas and conventions fill the rest of the hidden count as notes to ask about, never as demotions", () => {
+    const { repo, store } = fixture();
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 1, contextChars: 1500 } }));
+    const body = "word ".repeat(80);
+    putNote(store, { id: "howto", scope: SCOPE, kind: "how-to", body });
+    for (const id of ["rule-1", "rule-2", "rule-3"]) putNote(store, { id, scope: SCOPE, kind: "convention", body });
+    putNote(store, { id: "trap", scope: SCOPE, kind: "gotcha", body });
+    const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
+    expect(b.over).toBe(true);
+    expect(b.demote.map((d: any) => d.id)).toEqual(["howto"]);
+    expect(b.ask).toHaveLength(b.index.hidden - 1);
+    for (const d of b.ask) expect(["gotcha", "convention"]).toContain(d.kind);
+    const text = kb(store, ["budget"], { cwd: repo }).stdout;
+    expect(text).toContain("Demote first: howto (never used)");
+    expect(text).toMatch(/Then ask the user, because these are rules: (rule-\d|trap) \((convention|gotcha), never used\)/);
   });
 
   test("a demoted note stays visible in kb budget and kb list", () => {

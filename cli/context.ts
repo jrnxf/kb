@@ -160,8 +160,10 @@ export interface BudgetResult {
   over: boolean;
   /** Every note a session of this scope can see, in rank order. */
   notes: { id: string; kind: string; scope: string; uses: number; last_used: string | null; chars: number; shown: "body" | "index" | "hidden" }[];
-  /** As many notes as are hidden, to take out of the index first: fewest uses, longest unused, lowest rank. Empty when no note is hidden. */
+  /** Notes to take out of the index first, at most as many as are hidden: fewest uses, longest unused, lowest rank. Only decisions and how-tos. Empty when no note is hidden. */
   demote: { id: string; reason: string }[];
+  /** The rest of the hidden count, as gotchas and conventions in the same order. A rule that works leaves no use count, so only the user can remove one. */
+  ask: { id: string; kind: string; reason: string }[];
   /** Notes of this scope that were demoted (`indexed: false`): no session loads them. */
   demoted: string[];
 }
@@ -189,14 +191,18 @@ export function buildBudget(store: Store, repoPath: string): BudgetResult {
   // stays small, not a fault. Only a note with neither is a reason to demote something.
   const over = context.hiddenIndexLines > 0;
   const position = new Map(notes.map((n, i) => [n.id, i]));
-  // Open work is never a demotion candidate: it leaves the index when it is done. Among notes
-  // that nobody used, the lowest rank goes first, so a gotcha is the last to be named.
+  // Open work is never a candidate: it leaves the index when it is done. A gotcha or a convention
+  // that works leaves no use count, so the count cannot say it is unneeded: those go to `ask`, for
+  // the user to name. Among notes that nobody used, the lowest rank goes first.
+  const reason = (n: (typeof notes)[number]) => (n.uses === 0 ? "never used" : `${n.uses} ${n.uses === 1 ? "use" : "uses"}, last ${n.last_used?.slice(0, 10)}`);
+  const order = (a: (typeof notes)[number], b: (typeof notes)[number]) =>
+    a.uses - b.uses || (a.last_used ?? "").localeCompare(b.last_used ?? "") || position.get(b.id)! - position.get(a.id)!;
+  const rule = (kind: string) => kind === "gotcha" || kind === "convention";
   const demote = over
-    ? notes
-        .filter((n) => n.kind !== "open-work")
-        .sort((a, b) => a.uses - b.uses || (a.last_used ?? "").localeCompare(b.last_used ?? "") || position.get(b.id)! - position.get(a.id)!)
-        .slice(0, context.hiddenIndexLines)
-        .map((n) => ({ id: n.id, reason: n.uses === 0 ? "never used" : `${n.uses} ${n.uses === 1 ? "use" : "uses"}, last ${n.last_used?.slice(0, 10)}` }))
+    ? notes.filter((n) => n.kind !== "open-work" && !rule(n.kind)).sort(order).slice(0, context.hiddenIndexLines).map((n) => ({ id: n.id, reason: reason(n) }))
+    : [];
+  const ask = over
+    ? notes.filter((n) => rule(n.kind)).sort(order).slice(0, context.hiddenIndexLines - demote.length).map((n) => ({ id: n.id, kind: n.kind, reason: reason(n) }))
     : [];
   const demoted = all.filter((n) => !n.indexed && !n.promoted_to && (n.scope === "global" || n.scope === context.scope)).map((n) => n.id);
   return {
@@ -206,6 +212,7 @@ export function buildBudget(store: Store, repoPath: string): BudgetResult {
     over,
     notes,
     demote,
+    ask,
     demoted,
   };
 }

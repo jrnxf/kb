@@ -38,7 +38,9 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
   `/kb:audit` reads the code for each candidate, checks both budgets, proposes verify, rewrite,
   merge, shorten, demote, trash or delete, and applies what you accept. `kb budget` asks for a
   demotion only when the index is full and a note reaches no session. A body that became an
-  index line is the normal state. It also lists the demoted notes, which no session loads. A session start says so in one
+  index line is the normal state. It names decisions and how-tos to demote, and leaves gotchas and
+  conventions for you to name, because a rule that works leaves no use count. It also lists the
+  demoted notes, which no session loads. A session start says so in one
   line when more than 5 notes are candidates.
 - **Proven notes move to the repo.** `/kb:promote` proposes notes with high confidence and many
   uses for the repo's `CLAUDE.md` or `AGENTS.md`, shows the exact text, and writes after you
