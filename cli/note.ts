@@ -86,9 +86,7 @@ export function validateNote(raw: Record<string, unknown>): Note {
   try {
     created = toIso(raw.created, "created");
     lastVerified = toIso(raw.last_verified, "last_verified");
-    // archived_at is the name from before the archive became the trash.
-    const at = raw.trashed_at ?? raw.archived_at;
-    if (at !== undefined) trashedAt = toIso(at, "trashed_at");
+    if (raw.trashed_at !== undefined) trashedAt = toIso(raw.trashed_at, "trashed_at");
   } catch (error) {
     problems.push((error as Error).message);
   }

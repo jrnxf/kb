@@ -98,12 +98,11 @@ export function clearsAt(trashedAt: string, days: number): string {
 }
 
 /**
- * Housekeeping before a command: move a store from before the trash into trash/, give a
- * trashed note with no time one, and delete the notes whose time in the trash is up.
- * One commit, and only when something changed. Returns the ids deleted.
+ * Housekeeping before a command: give a note in the trash with no time one (a file moved there
+ * by hand), and delete the notes whose time in the trash is up. One commit, and only when
+ * something changed. Returns the ids deleted.
  */
 export function tidyTrash(store: Store, now = nowIso()): string[] {
-  const moved = store.moveArchiveToTrash(now);
   const days = store.config().trashDays;
   const expired: StoredNote[] = [];
   let stamped = 0;
@@ -114,10 +113,7 @@ export function tidyTrash(store: Store, now = nowIso()): string[] {
       stamped++;
     } else if (clearsAt(note.trashed_at, days) <= now) expired.push(note);
   }
-  if (expired.length > 0) {
-    const what = moved > 0 ? `move the archive to the trash, and clear ${expired.length} after ${days} days` : `clear ${expired.length} from the trash after ${days} days`;
-    return removeNotes(store, expired, `kb: ${what}: ${expired.map((n) => n.id).join(" ")}`);
-  }
-  if (moved > 0 || stamped > 0) afterWrite(store, moved > 0 ? "kb: move the archive to the trash" : "kb: record when trashed notes went to the trash");
+  if (expired.length > 0) return removeNotes(store, expired, `kb: clear ${expired.length} from the trash after ${days} days: ${expired.map((n) => n.id).join(" ")}`);
+  if (stamped > 0) afterWrite(store, "kb: record when trashed notes went to the trash");
   return [];
 }

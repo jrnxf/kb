@@ -232,8 +232,7 @@ function cmdSearch(store: Store, args: Args): Output {
   return { json: hits, text };
 }
 
-/** --trash, or --archive from before the archive became the trash. */
-const inTrash = (args: Args) => args.flags.has("trash") || args.flags.has("archive");
+const inTrash = (args: Args) => args.flags.has("trash");
 
 function cmdList(store: Store, args: Args): Output {
   const scope = scopeFilter(store, args);
@@ -452,11 +451,6 @@ async function main(): Promise<number> {
       case "search": out = cmdSearch(store, args); break;
       case "list": out = cmdList(store, args); break;
       case "use": out = cmdUse(store, args); break;
-      // archive is the name from before the archive became the trash.
-      case "archive":
-        console.error("kb: archive is now trash. The trash deletes a note for good after its time there.");
-        out = cmdMove(store, args, true);
-        break;
       case "trash": out = cmdMove(store, args, true); break;
       case "restore": out = cmdMove(store, args, false); break;
       case "delete": out = cmdDelete(store, args); break;
