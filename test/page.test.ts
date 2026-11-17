@@ -42,6 +42,14 @@ test("the built page is up to date with its sources: run `bun run build` in web/
   expect(readFileSync(join(DIST, ".source-hash"), "utf8").trim()).toBe(sourceHash());
 });
 
+test("git tracks every file the built page loads: `git add web/dist` when this fails", () => {
+  const html = readFileSync(join(DIST, "index.html"), "utf8");
+  const loaded = [...html.matchAll(/(?:src|href)="\/(assets\/[^"]+)"/g)].map((m) => `web/dist/${m[1]}`);
+  expect(loaded.length).toBeGreaterThan(0);
+  const tracked = Bun.spawnSync(["git", "ls-files", "web/dist"], { cwd: join(DIST, "..", "..") }).stdout.toString().split("\n");
+  expect(loaded.filter((file) => !tracked.includes(file))).toEqual([]);
+});
+
 describe("what the page shows", () => {
   const note = (id: string, fields: Partial<PageNote> = {}): PageNote => ({
     id, title: `Title of ${id}`, scope: "global", kind: "gotcha", confidence: "high", trashed: false, indexed: true,
