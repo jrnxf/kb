@@ -75,8 +75,10 @@ export function App() {
 
   const notes = data?.notes ?? [];
   const kinds = data?.kinds ?? [];
-  const scopes = useMemo(() => scopesOf(notes), [notes]);
   const shown = useMemo(() => show(notes, view), [notes, view]);
+  // A scope with no notes where the list looks is not in the sidebar: a trashed project is gone
+  // from the notes, and shows in the trash only while it has notes there.
+  const scopes = useMemo(() => scopesOf(notes.filter((n) => n.trashed === shown.trash)), [notes, shown.trash]);
   const current = shown.current;
   const reading = phone && view.read && !!current;
 

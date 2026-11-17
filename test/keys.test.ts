@@ -110,8 +110,12 @@ describe("keys on a wide screen", () => {
     await dialog.getByText("All 2 notes of acme/web go to the trash.", { exact: false }).waitFor();
     await dialog.getByRole("button", { name: /Trash project/ }).click();
     await until(() => store.notes().every((n) => n.scope !== web), "the project is in the trash");
-    // The project stays in the sidebar at 0, because its notes are in the trash. The list shows every scope.
-    await until(async () => (await page.locator(`[data-rail="scope:${web}"]`).getAttribute("aria-pressed")) === "false", "the list shows every scope");
+    // A project with no notes is gone from the sidebar. In the trash it shows while it has notes there.
+    await page.locator(`[data-rail="scope:${web}"]`).waitFor({ state: "detached" });
+    await page.locator('[data-rail="trash"]').click();
+    await page.locator(`[data-rail="scope:${web}"]`).waitFor();
+    await page.locator('[data-rail="trash"]').click();
+    await page.locator(`[data-rail="scope:${web}"]`).waitFor({ state: "detached" });
     expect(store.notes().map((n) => n.id).sort()).toEqual(["one", "three", "two"]);
     await page.getByText("Moved the project to the trash", { exact: true }).waitFor();
     await page.keyboard.press("Meta+z");
