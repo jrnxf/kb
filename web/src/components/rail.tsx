@@ -43,7 +43,7 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
         onClick={() => onPick(it)}
         className={cn(
           "group/item flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13.5px] text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:font-[550] aria-pressed:text-foreground",
-          "max-wide:w-auto max-wide:flex-none max-wide:scroll-mx-4 max-wide:rounded-full max-wide:border max-wide:px-3",
+          "wide:scroll-my-(--scroll-fade) max-wide:w-auto max-wide:flex-none max-wide:scroll-mx-4 max-wide:rounded-full max-wide:border max-wide:px-3",
           it.type === "kind" && `k-${it.kind}`,
           it.type !== "archived" && n === 0 && "opacity-40",
           cursor === it.key && "group-data-[pane=rail]/page:bg-secondary group-data-[pane=rail]/page:text-foreground group-data-[pane=rail]/page:ring-1 group-data-[pane=rail]/page:ring-edge group-data-[pane=rail]/page:ring-inset",
@@ -71,7 +71,7 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
         <h1 className="text-xl/none font-bold tracking-[-0.01em]">kb</h1>
       </header>
       {/* A short window scrolls the scopes and kinds between the logo and the buttons, with the shadcn edge fade. */}
-      <ScrollArea fade className="min-h-0 flex-1 max-wide:contents" viewportClassName="max-wide:contents">
+      <ScrollArea fade className="min-h-0 flex-1 max-wide:contents" viewportClassName="max-wide:contents" contentClassName="max-wide:contents">
         <nav className="pr-3 max-wide:pr-0">
           {heading("Scopes", true)}
           <div className={strip} data-strip="scopes">
