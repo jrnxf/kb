@@ -50,7 +50,7 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
   return { id: note.id, path };
 }
 
-/** Move notes between notes/ and archive/. Nothing is ever deleted. */
+/** Move notes between notes/ and archive/. Archive is the normal way to retire a note: it can come back. */
 export function moveNotes(store: Store, ids: string[], toArchive: boolean): string[] {
   const moved: string[] = [];
   for (const id of ids) {
@@ -61,4 +61,17 @@ export function moveNotes(store: Store, ids: string[], toArchive: boolean): stri
   }
   afterWrite(store, `kb: ${toArchive ? "archive" : "restore"} ${moved.join(" ")}`);
   return moved;
+}
+
+/**
+ * Remove notes for good, active or archived. For a note the user wants gone, not for finished
+ * work, which `kb archive` keeps. Every id is checked before the first file goes.
+ */
+export function deleteNotes(store: Store, ids: string[]): string[] {
+  const notes = [...new Set(ids)].map((id) => requireNote(store, id));
+  for (const note of notes) store.remove(note);
+  const deleted = notes.map((n) => n.id);
+  store.dropUsage(deleted);
+  afterWrite(store, `kb: delete ${deleted.join(" ")}`);
+  return deleted;
 }

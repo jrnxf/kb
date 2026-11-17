@@ -168,7 +168,7 @@ export class Store {
     return path;
   }
 
-  /** Move a note between notes/ and archive/, and record when it was archived. Nothing is ever deleted. */
+  /** Move a note between notes/ and archive/, and record when it was archived. */
   move(note: StoredNote, archived: boolean, at: string): string {
     const target = this.notePath(note, archived);
     if (existsSync(target)) throw new KbError(`cannot move ${note.id}: ${relative(this.home, target)} already exists`);
@@ -177,6 +177,11 @@ export class Store {
     const { path: _path, archived: _archived, archived_at: _at, ...rest } = note;
     writeAtomic(target, serializeNote(archived ? { ...rest, archived_at: at } : rest));
     return target;
+  }
+
+  /** Remove a note file for good. In a git store, the history still has it. */
+  remove(note: StoredNote): void {
+    rmSync(note.path);
   }
 
   // ---- usage ----
@@ -202,7 +207,16 @@ export class Store {
     return total;
   }
 
-  bumpUsage(ids: string[], now: string): void {
+  /** Forget the counters of this machine for these ids, so a later note with the same id starts at 0. */
+  dropUsage(ids: string[]): void {
+    const path = join(this.home, "usage", `${this.machine()}.json`);
+    const data = readJson<Record<string, Usage>>(path);
+    if (!data || !ids.some((id) => id in data)) return;
+    for (const id of ids) delete data[id];
+    writeAtomic(path, `${JSON.stringify(data, null, 2)}\n`);
+  }
+
+    bumpUsage(ids: string[], now: string): void {
     const path = join(this.home, "usage", `${this.machine()}.json`);
     const data = readJson<Record<string, Usage>>(path) ?? {};
     for (const id of ids) data[id] = { uses: (data[id]?.uses ?? 0) + 1, last_used: now };

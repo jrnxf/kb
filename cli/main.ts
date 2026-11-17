@@ -12,7 +12,7 @@ import { markSaved } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
-import { afterWrite, closeIds, moveNotes, nowIso, requireNote, updateNote } from "./write.ts";
+import { afterWrite, closeIds, deleteNotes, moveNotes, nowIso, requireNote, updateNote } from "./write.ts";
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
@@ -25,6 +25,9 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          --scope takes "repo", "global" or a repo id
   kb use <id>...                         record that these notes changed what you did
   kb archive <id>... | kb restore <id>...
+                                         archive retires a note and keeps it: restore brings it back
+  kb delete <id>...                      remove notes for good, active or archived. Only when the user
+                                         wants a note gone. In a git store, the history keeps the file
   kb stale [--repo .]                    notes that may no longer be true, each with a reason
   kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
   kb budget [--repo .]                   what a session loads, and what reaches no session
@@ -276,6 +279,12 @@ function cmdMove(store: Store, args: Args, toArchive: boolean): Output {
   return { json: { [toArchive ? "archived" : "restored"]: moved }, text: `${toArchive ? "archived" : "restored"} ${moved.join(", ")}` };
 }
 
+function cmdDelete(store: Store, args: Args): Output {
+  if (args.positional.length === 0) throw new KbError("usage: kb delete <id>...");
+  const deleted = deleteNotes(store, args.positional);
+  return { json: { deleted }, text: `deleted ${deleted.join(", ")}` };
+}
+
 function cmdStale(store: Store, args: Args): Output {
   const result = findStale(store, String(args.flags.get("repo") ?? "."));
   saveStaleCount(store, result);
@@ -424,6 +433,7 @@ async function main(): Promise<number> {
       case "use": out = cmdUse(store, args); break;
       case "archive": out = cmdMove(store, args, true); break;
       case "restore": out = cmdMove(store, args, false); break;
+      case "delete": out = cmdDelete(store, args); break;
       case "stale": out = cmdStale(store, args); break;
       case "verify": out = cmdVerify(store, args); break;
       case "budget": out = cmdBudget(store, args); break;

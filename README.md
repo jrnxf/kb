@@ -12,7 +12,8 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
   A repo with no remote uses its directory name.
 - **At session start** a hook injects `kb context` for `global` and the current repo: full
   bodies for the top-ranked notes, one index line for each note whose body did not fit, and a
-  pointer to `kb show` and `kb search`. An index line is the id of the note, which is its title
+  pointer to `kb show` and `kb search`. It also says how to write: a rule, a preference or a correction
+  the user states is saved in that turn with `kb add`, and never in Claude Code's auto memory. An index line is the id of the note, which is its title
   in short form, and after `...` the words of the title that the id cut. So a title that states
   the rule in full reaches every session, also when the body does not. It runs at startup,
   resume, `/clear`, compaction and fork.
@@ -21,10 +22,13 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
   convention, decision, how-to, then repo before global, then last used, then last verified.
   Whole bodies drop from the bottom, and only a note without a body takes an index line.
   The store can grow for years and a session loads the same amount.
+- **A rule is saved when the user states it.** The agent starts `/kb:note` on its own when the user
+  says "always", "never", "from now on" or corrects it, and saves the rule with `kb add` in that turn.
 - **Before `/clear`** you run `/kb:checkpoint`. The agent saves what the session learned,
-  updates notes instead of duplicating them, archives finished open work, and records which
-  notes helped with `kb use`.
-- **Nothing is deleted.** `kb archive` moves a note to `archive/`. If the store is a git repo,
+  updates notes instead of duplicating them, archives finished open work, moves Claude Code's auto memory into kb, and
+  records which notes helped with `kb use`.
+- **Archive, not delete.** `kb archive` moves a note to `archive/`, and `kb restore` brings it back.
+  `kb delete` removes a note for good, for a note the user wants gone. If the store is a git repo,
   every write is one commit.
 - **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: an
   anchored file changed since the note was verified, an anchor is gone, the verified commit left
@@ -60,6 +64,7 @@ kb add [--repo .]            create or update a note from JSON on stdin
 kb show <id>                 kb search <words> [--scope s] [--archive]
 kb list [--scope s]          kb use <id>...
 kb archive <id>...           kb restore <id>...
+kb delete <id>...
 kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]         kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run]
 kb scope [--repo .]          kb serve     (local page: read, edit and archive notes)
@@ -88,7 +93,8 @@ global, then other repos. `kb show` accepts a part of an id when only one note h
 has no notes is an error in `kb add`, `kb search` and `kb list`, so a typing error cannot put a
 note where no session loads it. The first note of a repo is written from inside that repo, or with `--repo`.
 
-Skills: `/kb:checkpoint`, `/kb:audit`, `/kb:promote`. Only you can start them.
+Skills: `/kb:checkpoint`, `/kb:audit`, `/kb:promote`. Only you can start them. `/kb:note` saves a rule the
+user states, and the agent starts it on its own.
 
 Every command accepts `--json`. The CLI knows nothing about Claude Code: only `hooks/` and `skills/` do.
 
@@ -108,6 +114,15 @@ Then install it from that marketplace:
 ```bash
 /plugin install kb --marketplace <owner>/<marketplace-repo>
 ```
+
+Turn off Claude Code's auto memory. It is a second store with the same job, and its system prompt
+tells the agent to save preferences there. In `~/.claude/settings.json`:
+
+```json
+{ "autoMemoryEnabled": false }
+```
+
+While it is on, each session start asks the agent to tell you once. `/kb:checkpoint` moves what it holds into kb.
 
 With auto-update on for the marketplace, each machine follows the default branch. The plugin
 sets no `version`, so every commit is a release.

@@ -2,7 +2,7 @@
 name: checkpoint
 description: Save the durable knowledge of this session to the kb store before /clear. Run only when the user types /kb:checkpoint.
 disable-model-invocation: true
-allowed-tools: Bash(kb *)
+allowed-tools: Bash(kb *), Read, Glob, Edit
 ---
 
 # kb checkpoint
@@ -38,6 +38,20 @@ When the answer starts with `no note has every word. Closest:`, read those notes
 - A note already covers it and is still correct: skip it.
 - A note covers it but is incomplete or wrong: update that note (pass its `id`).
 - Nothing covers it: add a note.
+
+### Move Claude Code's auto memory into kb
+
+kb replaces Claude Code's auto memory. List its files with Glob `~/.claude/projects/*/memory/*.md`, and read each one except `MEMORY.md`.
+The folder of this session's project has the project path as its name, with each `/` and `.` changed to `-`.
+
+For each fact in it:
+
+- It holds in every repo (a user preference, a feedback rule, a tool): treat it as a candidate with the scope `"global"`, and search as above.
+- It is about this session's project: treat it as a candidate with the scope `"repo"`.
+- It is about another project: leave it, and list it under **Skipped** with the folder name.
+
+When kb holds the fact, after a write or because a note already covered it, remove the memory file with `rm` and remove its line from that folder's `MEMORY.md`.
+Remove nothing when the `kb` write failed. Never leave the same fact in both stores.
 
 ## 3. Write
 
@@ -90,7 +104,7 @@ It tells the session hooks that this session saved its knowledge. Skip it when a
 End with this, and nothing after it. Write it as Markdown, not in a code block, so it renders:
 
 ```
-**Safe to clear** - <n> saved, <n> updated, <n> closed, <n> skipped
+**Safe to clear** - <n> saved, <n> updated, <n> closed, <n> moved, <n> skipped
 
 **Saved**
 - **<title>**
@@ -103,6 +117,10 @@ End with this, and nothing after it. Write it as Markdown, not in a code block, 
 **Closed**
 - **<title>**
   <what finished the work>
+
+**Moved from auto memory**
+- **<title>**
+  <new note, or the note that already held it>
 
 **Skipped:** <candidate> (<reason>), <candidate> (<reason>).
 ```

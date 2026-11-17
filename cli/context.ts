@@ -18,6 +18,13 @@ export interface ContextResult {
   chars: number;
 }
 
+/**
+ * The write path. Without it a session sees only how to read notes, and saves a rule the user
+ * states in whatever store its harness offers instead.
+ */
+export const SAVE_RULE =
+  "When the user states a rule, a preference or a correction, save it in that turn with `kb add` (`kb help` shows the JSON). Run `kb search` first, so you update a note instead of adding a twin.";
+
 const EMPTY: ContextResult = { text: "", scope: null, index: [], bodies: [], dropped: [], hiddenIndexLines: 0, chars: 0 };
 
 /** open-work, gotcha, convention, decision, how-to. Then repo before global, last_used, last_verified. */
@@ -89,7 +96,7 @@ export function buildContext(store: Store, repoPath: string): ContextResult {
   const listedFor = (bodyCount: number, lines: number) => ranked.slice(bodyCount, bodyCount + lines);
 
   const render = (listed: StoredNote[], bodies: StoredNote[]): string => {
-    const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, "These notes come from earlier sessions. Each is below once: with its body, or as an index line. An index line is the id, then after \"...\" the words of the title that the id cut."];
+    const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, "These notes come from earlier sessions. Each is below once: with its body, or as an index line. An index line is the id, then after \"...\" the words of the title that the id cut.", SAVE_RULE];
     if (syncError) lines.push(`kb sync did not finish: ${syncError} \`kb sync\` shows the detail.`);
     if (listed.length > 0) {
       lines.push("", "## Index");

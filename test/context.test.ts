@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildContext, indexLine } from "../cli/context.ts";
+import { SAVE_RULE, buildContext, indexLine } from "../cli/context.ts";
 import { slugify } from "../cli/note.ts";
 import { HARD_CONTEXT_CAP, type StoredNote } from "../cli/store.ts";
 import { plain, putNote, tempRepo, tempStore } from "./helpers.ts";
@@ -35,7 +35,7 @@ describe("kb context ranking", () => {
 
   test("prints the index, then bodies, then the pointer", () => {
     const store = tempStore();
-    setConfig(store.home, { contextChars: 700 });
+    setConfig(store.home, { contextChars: 700 + SAVE_RULE.length });
     const repo = tempRepo({ remote: REMOTE });
     putNote(store, { id: "one", scope: SCOPE, title: "First fact", body: "The body of one.", anchors: ["src/a.ts#run"], verified_at_commit: "abc1234" });
     putNote(store, { id: "two", kind: "convention", title: "A global fact", body: "w".repeat(600) });
@@ -48,6 +48,8 @@ describe("kb context ranking", () => {
     expect(text).toContain("### one [gotcha] First fact\nverified 2026-01-01 at abc1234 | confidence medium | anchors: src/a.ts#run\nThe body of one.");
     expect(text.indexOf("## Index")).toBeLessThan(text.indexOf("## Notes"));
     expect(text.trimEnd().endsWith("`kb search <words>` searches every note.")).toBe(true);
+    // The write path comes before the notes, so the budget can never cut it.
+    expect(text.indexOf(SAVE_RULE)).toBeLessThan(text.indexOf("## Index"));
   });
 
   test("a note is printed once: its body, or an index line when the body did not fit", () => {
@@ -160,7 +162,7 @@ describe("kb context budgets", () => {
 
   test("index budget keeps the top-ranked lines and reports the others", () => {
     const store = tempStore();
-    setConfig(store.home, { indexLines: 5, contextChars: 900 });
+    setConfig(store.home, { indexLines: 5, contextChars: 900 + SAVE_RULE.length });
     const ids = Array.from({ length: 12 }, (_, i) => `n${String(i).padStart(2, "0")}`);
     ids.forEach((id, i) => putNote(store, { id, body: "x".repeat(150), last_verified: `2026-01-${String(20 - i).padStart(2, "0")}T00:00:00Z` }));
     const result = buildContext(store, plain());
@@ -171,7 +173,7 @@ describe("kb context budgets", () => {
     expect(result.hiddenIndexLines).toBe(12 - shown - 5);
     expect(result.text).toContain(`${12 - shown - 5} more index lines are over the index budget.`);
     expect(result.text.match(/^- n\d\d \[/gm)?.length).toBe(5);
-    expect(result.chars).toBeLessThanOrEqual(900);
+    expect(result.chars).toBeLessThanOrEqual(900 + SAVE_RULE.length);
   });
 
   test("a note with a body does not count against the index budget", () => {

@@ -1,13 +1,14 @@
 // Reads the SessionStart JSON on stdin and prints `kb context` for the session's directory,
-// plus at most three one-line notices. With hooks/session-end.ts and the skills, this is the
-// only code that knows about Claude Code.
+// the rule to save new facts with `kb add`, and at most four one-line notices. With the other
+// files in hooks/ and the skills, this is the only code that knows about Claude Code.
 
-import { buildContext } from "../cli/context.ts";
+import { SAVE_RULE, buildContext } from "../cli/context.ts";
 import { resolveRepo } from "../cli/scope.ts";
 import { isSaved, takeUnsaved } from "../cli/session.ts";
 import { cachedStaleCount } from "../cli/stale.ts";
 import { Store } from "../cli/store.ts";
 import { detached, kickSync } from "../cli/sync.ts";
+import { MEMORY_ON_NOTICE, MEMORY_RULE, autoMemoryOn } from "./auto-memory.ts";
 
 const STALE_NOTICE_ABOVE = 5;
 
@@ -45,8 +46,12 @@ try {
     if (text && !stale?.fresh) detached(store, ["stale", "--repo", cwd, "--quiet"]);
   }
 
-  const out = notices.length === 0 ? text : `${text || "# kb\n"}${text ? "\n" : ""}${notices.join("\n")}\n`;
-  if (out) process.stdout.write(out);
+  if (autoMemoryOn(process.env, process.env.CLAUDE_PROJECT_DIR || cwd)) notices.push(MEMORY_ON_NOTICE);
+
+  // The save rule reaches every session, also one with no store yet: `kb add` creates it.
+  // The auto memory rule goes right under it, so the two read as one instruction.
+  const head = (text || `# kb\n${SAVE_RULE}\n`).replace(SAVE_RULE, `${SAVE_RULE}\n${MEMORY_RULE}`);
+  process.stdout.write(notices.length === 0 ? head : `${head}\n${notices.join("\n")}\n`);
   // Fetch changes from other machines in the background, at most once per 5 minutes.
   kickSync(store, 5 * 60_000);
 } catch {
