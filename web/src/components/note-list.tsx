@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyTitle } from "@/components/ui/empty";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Kbd } from "@/components/ui/kbd";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { Dot } from "./bits";
 
@@ -24,9 +25,10 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty }: P
     if (current) rows.current.get(current.id)?.scrollIntoView({ block: "nearest" });
   }, [current?.id]);
   return (
-    <div className="min-w-0 overflow-y-auto border-r max-wide:border-r-0">
-      {/* Rows fade out under the filter, so a cut row does not show the tails of its letters. */}
-      <div className="sticky top-0 z-10 bg-background px-4 pt-6 pb-2 max-wide:pt-3.5 after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-5 after:bg-linear-to-b after:from-background after:to-transparent">
+    <div className="flex min-h-0 min-w-0 flex-col border-r max-wide:block max-wide:border-r-0">
+      {/* On a wide screen the filter stays above the scroll area, and the rows fade at its edges. On a phone the page
+          scrolls, so the filter sticks to the top and, once the page scrolls, the rows fade out under it. */}
+      <div className="bg-background px-4 pt-6 pb-2 max-wide:sticky max-wide:top-0 max-wide:z-10 max-wide:pt-3.5 max-wide:after:pointer-events-none max-wide:after:absolute max-wide:after:inset-x-0 max-wide:after:top-full max-wide:after:h-5 max-wide:after:bg-linear-to-b max-wide:after:from-background max-wide:after:to-transparent max-wide:after:shows-on-scroll">
         <InputGroup className="group/search h-9 bg-card dark:bg-card">
           <InputGroupInput
             ref={searchRef}
@@ -44,44 +46,46 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty }: P
         </InputGroup>
         {notes.length > 0 && <div className="mt-3.5 text-xs/[normal] text-faint tabular-nums">{notes.length === 1 ? "1 note" : `${notes.length} notes`}</div>}
       </div>
-      {notes.length === 0 ? (
-        <Empty className="items-start gap-2.5 rounded-none border-0 px-4 pt-0.5 pb-6 text-left md:p-0 md:px-4">
-          <EmptyTitle className="text-[13.5px] font-normal text-muted-foreground">{empty.text}</EmptyTitle>
-          {empty.action && (
-            <EmptyContent className="items-start">
-              <Button variant="outline" size="xs" onClick={empty.action.run}>
-                {empty.action.label}
-              </Button>
-            </EmptyContent>
-          )}
-        </Empty>
-      ) : (
-        <div className="px-2 pb-6">
-          {notes.map((note) => (
-            <button
-              key={note.id}
-              ref={(el) => {
-                if (el) rows.current.set(note.id, el);
-                else rows.current.delete(note.id);
-              }}
-              type="button"
-              tabIndex={-1}
-              data-id={note.id}
-              aria-current={note === current}
-              onClick={() => onOpen(note)}
-              className={cn(
-                `k-${note.kind}`,
-                "flex w-full scroll-mt-[104px] scroll-mb-4 items-baseline gap-2.5 rounded-md px-2 py-[7px] text-left text-sm leading-[1.4] hover:bg-muted aria-[current=true]:bg-muted",
-                // The pane that has the keys marks its current item a little more.
-                "group-data-[pane=list]/page:aria-[current=true]:bg-secondary group-data-[pane=list]/page:aria-[current=true]:ring-1 group-data-[pane=list]/page:aria-[current=true]:ring-edge group-data-[pane=list]/page:aria-[current=true]:ring-inset",
-              )}
-            >
-              <Dot className="relative -top-0.5" />
-              <span className={cn("line-clamp-2 min-w-0 flex-1", note.archived && "text-muted-foreground")}>{note.title}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      <ScrollArea fade className="min-h-0 flex-1 max-wide:contents" viewportClassName="max-wide:contents">
+        {notes.length === 0 ? (
+          <Empty className="items-start gap-2.5 rounded-none border-0 px-4 pt-0.5 pb-6 text-left md:p-0 md:px-4">
+            <EmptyTitle className="text-[13.5px] font-normal text-muted-foreground">{empty.text}</EmptyTitle>
+            {empty.action && (
+              <EmptyContent className="items-start">
+                <Button variant="outline" size="xs" onClick={empty.action.run}>
+                  {empty.action.label}
+                </Button>
+              </EmptyContent>
+            )}
+          </Empty>
+        ) : (
+          <div className="px-2 pb-6">
+            {notes.map((note) => (
+              <button
+                key={note.id}
+                ref={(el) => {
+                  if (el) rows.current.set(note.id, el);
+                  else rows.current.delete(note.id);
+                }}
+                type="button"
+                tabIndex={-1}
+                data-id={note.id}
+                aria-current={note === current}
+                onClick={() => onOpen(note)}
+                className={cn(
+                  `k-${note.kind}`,
+                  "flex w-full scroll-my-8 items-baseline gap-2.5 rounded-md px-2 py-[7px] text-left text-sm leading-[1.4] hover:bg-muted aria-[current=true]:bg-muted max-wide:scroll-mt-[104px] max-wide:scroll-mb-4",
+                  // The pane that has the keys marks its current item a little more.
+                  "group-data-[pane=list]/page:aria-[current=true]:bg-secondary group-data-[pane=list]/page:aria-[current=true]:ring-1 group-data-[pane=list]/page:aria-[current=true]:ring-edge group-data-[pane=list]/page:aria-[current=true]:ring-inset",
+                )}
+              >
+                <Dot className="relative -top-0.5" />
+                <span className={cn("line-clamp-2 min-w-0 flex-1", note.archived && "text-muted-foreground")}>{note.title}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </ScrollArea>
     </div>
   );
 }

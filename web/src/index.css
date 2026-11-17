@@ -102,6 +102,19 @@
   --k-how-to: #7dd3fc;
 }
 
+/* Shows once the page has scrolled 24px, so nothing covers the list at rest. A browser without
+   scroll-driven animations shows it all the time. */
+@keyframes scrolled-in {
+  from {
+    opacity: 0;
+  }
+}
+@utility shows-on-scroll {
+  animation: scrolled-in linear both;
+  animation-timeline: scroll(root);
+  animation-range: 0 24px;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
