@@ -3,7 +3,7 @@ name: checkpoint
 description: Save the durable knowledge of this session to the kb store before /clear, and move Claude Code's auto memory into kb. Run only when the user types /kb:checkpoint.
 argument-hint: "[auto memory folder]"
 disable-model-invocation: true
-allowed-tools: Bash(kb *), Bash(rm *), Bash(echo *), Read, Glob, Edit
+allowed-tools: Bash(kb *), Bash(rm */projects/*/memory/*.md), Bash(echo *), Read, Glob, Edit
 ---
 
 # kb checkpoint
@@ -44,11 +44,11 @@ When the answer starts with `no note has every word. Closest:`, read those notes
 
 kb replaces Claude Code's auto memory. Read one memory folder:
 
-- With an argument (`/kb:checkpoint <folder>`), read that folder only: $ARGUMENTS
-- Without one, read the folder of this session's project: `<config>/projects/<name>/memory/`. `<config>` is `$CLAUDE_CONFIG_DIR`, or `~/.claude` when that is not set (run `echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"` for the absolute path). `<name>` is the absolute path of the session's directory, with each `/` and `.` changed to `-`.
+- With an argument (`/kb:checkpoint <path>/projects/<name>/memory`), read that folder only: $ARGUMENTS
+- Without one, read the folder of this session's project: `<config>/projects/<name>/memory/`. `<config>` is `$CLAUDE_CONFIG_DIR`, or `~/.claude` when that is not set (run `echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"` for the absolute path). `<name>` is the absolute path of the session's directory, with each character that is not a letter or a digit changed to `-` (`/Users/u/my_app` gives `-Users-u-my-app`).
 
 Read each `*.md` file in the folder except `MEMORY.md`. A folder that does not exist or has no files: skip this step.
-The folder belongs to this session's project when its name is the session's directory as above, or the same path under an older home folder (`-Users-olduser-dev-app` for `/Users/user/dev/app`). Else its project is gone or elsewhere.
+In both cases `<name>` is the folder above `memory`. The folder belongs to this session's project when `<name>` is the session's directory as above, or the same path under an older home folder (`-Users-olduser-dev-app` for `/Users/user/dev/app`). Else its project is gone or elsewhere.
 
 For each fact in it, apply the skip rules of step 1 first: a dated status, a finished plan or a one-time state is not worth a note. Then:
 
@@ -56,7 +56,7 @@ For each fact in it, apply the skip rules of step 1 first: a dated status, a fin
 - It is about this session's project, and the folder belongs to it: treat it as a candidate with the scope `"repo"`.
 - It is about another project: leave it, and list it under **Skipped**.
 
-When kb holds the fact, after a write or because a note already covered it, remove the memory file with `rm` and remove its line from that folder's `MEMORY.md`.
+When kb holds the fact, after a write or because a note already covered it, remove the memory file with `rm <absolute path of the file>` (one file per command, never a glob or `-r`) and remove its line from that folder's `MEMORY.md`.
 Remove nothing when the `kb` write failed, and leave the files you skipped. Never leave the same fact in both stores.
 
 ## 3. Write
