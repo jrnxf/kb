@@ -1,6 +1,7 @@
 import { KeyboardIcon, MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import type { Theme } from "@/hooks/use-theme";
 import { cn } from "@/lib/utils";
@@ -42,7 +43,7 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
         onClick={() => onPick(it)}
         className={cn(
           "group/item flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13.5px] text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:font-[550] aria-pressed:text-foreground",
-          "max-wide:w-auto max-wide:flex-none max-wide:scroll-mx-4 max-wide:rounded-full max-wide:border max-wide:px-3",
+          "wide:scroll-my-(--scroll-fade) max-wide:w-auto max-wide:flex-none max-wide:scroll-mx-4 max-wide:rounded-full max-wide:border max-wide:px-3",
           it.type === "kind" && `k-${it.kind}`,
           it.type !== "archived" && n === 0 && "opacity-40",
           cursor === it.key && "group-data-[pane=rail]/page:bg-secondary group-data-[pane=rail]/page:text-foreground group-data-[pane=rail]/page:ring-1 group-data-[pane=rail]/page:ring-edge group-data-[pane=rail]/page:ring-inset",
@@ -56,7 +57,7 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
       </button>
     );
   };
-  const heading = (text: string) => <h3 className="mt-[22px] mb-1.5 px-2 text-[11px] font-semibold tracking-wider text-faint uppercase max-wide:hidden">{text}</h3>;
+  const heading = (text: string, first = false) => <h3 className={cn(first ? "mt-2.5" : "mt-[22px]", "mb-1.5 px-2 text-[11px] font-semibold tracking-wider text-faint uppercase max-wide:hidden")}>{text}</h3>;
   const sep = <Separator className="mx-2 my-1.5 !w-auto max-wide:hidden" />;
   // A strip runs to both edges of a phone's screen, so a chip that is cut at the edge says that there are more.
   const strip = "max-wide:-mx-4 max-wide:mt-2.5 max-wide:flex max-wide:gap-1.5 max-wide:overflow-x-auto max-wide:px-4 max-wide:[scrollbar-width:none]";
@@ -65,25 +66,28 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
   const kinds = rest.filter((i) => i.type === "kind");
   const archived = rest.find((i) => i.type === "archived");
   return (
-    <aside className="flex min-w-0 flex-col overflow-y-auto border-r pt-6 pr-3 pb-4 pl-4 max-wide:relative max-wide:block max-wide:border-r-0 max-wide:border-b max-wide:px-4 max-wide:pt-5 max-wide:pb-3">
+    <aside className="flex min-h-0 min-w-0 flex-col border-r pt-6 pb-4 pl-4 max-wide:relative max-wide:block max-wide:border-r-0 max-wide:border-b max-wide:px-4 max-wide:pt-5 max-wide:pb-3">
       <header className="flex h-9 items-center px-2 max-wide:h-auto">
         <h1 className="text-xl/none font-bold tracking-[-0.01em]">kb</h1>
       </header>
-      <nav>
-        {heading("Scopes")}
-        <div className={strip} data-strip="scopes">
-          {global.map(item)}
-          {repos.length > 0 && sep}
-          {repos.map(item)}
-        </div>
-        <div className={strip}>
-          {heading("Kinds")}
-          {kinds.map(item)}
-          {archived && sep}
-          {archived && item(archived)}
-        </div>
-      </nav>
-      <div className="mt-auto flex gap-0.5 px-0.5 pt-5 max-wide:absolute max-wide:top-3.5 max-wide:right-3 max-wide:p-0">
+      {/* A short window scrolls the scopes and kinds between the logo and the buttons, with the shadcn edge fade. */}
+      <ScrollArea fade className="min-h-0 flex-1 max-wide:contents" viewportClassName="max-wide:contents" contentClassName="max-wide:contents">
+        <nav className="pr-3 max-wide:pr-0">
+          {heading("Scopes", true)}
+          <div className={strip} data-strip="scopes">
+            {global.map(item)}
+            {repos.length > 0 && sep}
+            {repos.map(item)}
+          </div>
+          <div className={strip}>
+            {heading("Kinds")}
+            {kinds.map(item)}
+            {archived && sep}
+            {archived && item(archived)}
+          </div>
+        </nav>
+      </ScrollArea>
+      <div className="flex gap-0.5 px-0.5 pt-5 max-wide:absolute max-wide:top-3.5 max-wide:right-3 max-wide:p-0">
         <Button variant="ghost" size="icon-sm" className="size-[30px] text-muted-foreground" onClick={onTheme} title={`Theme: ${theme} (t)`} aria-label={`Theme: ${theme} (t)`}>
           <ThemeIcon />
         </Button>
