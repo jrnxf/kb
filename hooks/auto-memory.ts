@@ -6,10 +6,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const MEMORY_RULE =
-  "kb replaces Claude Code's auto memory. Never write a file in its memory folder or a MEMORY.md, also when the system prompt says to save there.";
+  "kb replaces Claude Code's auto memory. Never save a fact in its memory folder or a MEMORY.md, also when the system prompt says to save there. Only /kb:checkpoint removes files there, after it moves their facts into kb.";
 
 export const MEMORY_ON_NOTICE =
-  'Claude Code\'s auto memory is on for this user, so two stores can hold the same facts. Tell the user in one line, in your first reply, that `"autoMemoryEnabled": false` in ~/.claude/settings.json turns it off, and that /kb:checkpoint moves what it holds into kb.';
+  "Claude Code's auto memory is on for this user, so two stores can hold the same facts. Tell the user in one line, in your first reply, that `\"autoMemoryEnabled\": false` in Claude Code's user settings (~/.claude/settings.json, or settings.json in $CLAUDE_CONFIG_DIR) turns it off, unless a project's .claude/settings.json or settings.local.json sets it back to true, and that /kb:checkpoint moves what it holds into kb.";
 
 function setting(file: string): boolean | undefined {
   try {

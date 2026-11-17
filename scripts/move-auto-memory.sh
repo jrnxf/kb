@@ -43,31 +43,30 @@ if ! grep -q 'ARGUMENTS' "$plugin/skills/checkpoint/SKILL.md" 2>/dev/null; then
   exit 1
 fi
 
-# The project directory of a folder: the first cwd its transcripts recorded, when it still exists
-# and its name gives the folder name.
+# Claude Code names a project folder after its path, with each character that is not a letter or a
+# digit changed to a -. (A name over 200 characters is cut and gets a hash: not handled here.)
+slug() { printf '%s' "$1" | sed 's/[^a-zA-Z0-9]/-/g'; }
+# The first cwd of each transcript in a folder.
+cwds() { grep -h -m1 -o '"cwd":"[^"]*"' "$1"/*.jsonl 2>/dev/null | cut -d'"' -f4 | sort -u || true; }
+count() { find "$1" -maxdepth 1 -name '*.md' ! -name MEMORY.md | wc -l | tr -d ' '; }
+
+# The project directory of a folder: a cwd from its transcripts, else its name read as a path
+# (which misses a path with a - or other punctuation in it). The first that exists and gives the
+# folder name wins. Empty when none does.
 project_dir() {
-  local folder="$1" name cwd
+  local folder="$1" name cwd rest
   name="$(basename "$folder")"
-  # First a cwd from the transcripts, then the name read as a path (which misses a path with a - or
-  # a . in it). The first that exists and gives the folder name wins.
-  for cwd in $(grep -h -o '"cwd":"[^"]*"' "$folder"/*.jsonl 2>/dev/null | cut -d'"' -f4 | sort -u) "$(printf '%s' "$name" | tr '-' '/')"; do
-    if [ -d "$cwd" ] && [ "$(printf '%s' "$cwd" | tr '/.' '--')" = "$name" ]; then
-      printf '%s' "$cwd"
-      return
-    fi
-  done
+  while IFS= read -r cwd; do
+    if [ -d "$cwd" ] && [ "$(slug "$cwd")" = "$name" ]; then printf '%s' "$cwd"; return 0; fi
+  done < <(cwds "$folder"; printf '%s\n' "$name" | tr '-' '/')
   # A folder from an old home (another user name): the same path under this $HOME.
-  local home rest
-  home="$(printf '%s' "$HOME" | tr '/.' '--')"
-  case "$name" in "$home"* | -Users-* | -home-*) ;; *) return ;; esac
+  [[ "$name" == -Users-* || "$name" == -home-* ]] || return 0
   rest="${name#-*-*-}"
-  [ "$rest" != "$name" ] || return
-  for cwd in $(grep -h -o '"cwd":"[^"]*"' "$folder"/*.jsonl 2>/dev/null | cut -d'"' -f4 | sort -u | sed -E 's#^/(Users|home)/[^/]+#'"$HOME"'#') "$HOME/$(printf '%s' "$rest" | tr '-' '/')"; do
-    if [ -d "$cwd" ] && [ "${cwd#"$HOME"/}" != "$cwd" ] && [ "$(printf '%s' "${cwd#"$HOME"/}" | tr '/.' '--')" = "$rest" ]; then
-      printf '%s' "$cwd"
-      return
-    fi
-  done
+  [ "$rest" != "$name" ] || return 0
+  while IFS= read -r cwd; do
+    if [ -d "$cwd" ] && [[ "$cwd" == "$HOME"/* ]] && [ "$(slug "${cwd#"$HOME"/}")" = "$rest" ]; then printf '%s' "$cwd"; return 0; fi
+  done < <(cwds "$folder" | sed -E "s#^/(Users|home)/[^/]+#$HOME#"; printf '%s\n' "$HOME/$(printf '%s' "$rest" | tr '-' '/')")
+  return 0
 }
 
 folders=()
@@ -76,15 +75,15 @@ for memory in "$config"/projects/*/memory; do
   name="$(basename "$(dirname "$memory")")"
   if [ ${#only[@]} -gt 0 ] && [[ ! " ${only[*]} " == *" $name "* ]]; then continue; fi
   # Only folders with a fact in them. MEMORY.md is just the index.
-  if find "$memory" -maxdepth 1 -name '*.md' ! -name MEMORY.md | grep -q .; then folders+=("$memory"); fi
+  if [ "$(count "$memory")" -gt 0 ]; then folders+=("$memory"); fi
 done
 [ ${#folders[@]} -gt 0 ] || { echo "no auto memory to move"; exit 0; }
 
 if $dry_run; then
   for memory in "${folders[@]}"; do
-    count="$(find "$memory" -maxdepth 1 -name '*.md' ! -name MEMORY.md | wc -l | tr -d ' ')"
+    files="$(count "$memory")"
     dir="$(project_dir "$(dirname "$memory")")"
-    printf '%3s files  %s\n           runs in %s\n' "$count" "$(basename "$(dirname "$memory")")" "${dir:-$HOME (project gone: global facts only)}"
+    printf '%3s files  %s\n           runs in %s\n' "$files" "$(basename "$(dirname "$memory")")" "${dir:-$HOME (project gone: global facts only)}"
   done
   echo "${#folders[@]} folders"
   exit 0
@@ -99,17 +98,22 @@ echo "backup: $backup"
 echo "logs:   $logs"
 
 failed=0
+untouched=0
 i=0
 for memory in "${folders[@]}"; do
   i=$((i + 1))
   name="$(basename "$(dirname "$memory")")"
   dir="$(project_dir "$(dirname "$memory")")"
   log="$logs/$name.md"
+  before="$(count "$memory")"
   printf '[%d/%d] %s ... ' "$i" "${#folders[@]}" "$name"
   # Auto memory is off for the run, so it cannot write a new memory while it moves the old ones.
   # Only user settings load: a project's own hooks (a Stop hook that waits, for one) can hang -p.
   if (cd "${dir:-$HOME}" && CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude -p "/kb:checkpoint $memory" --setting-sources user ${claude_args[@]+"${claude_args[@]}"} </dev/null >"$log" 2>&1); then
-    grep -m1 -o 'Safe to clear.*\|Not safe to clear.*' "$log" | tr -d '*' || echo "done, see the log"
+    after="$(count "$memory")"
+    # claude exits 0 also when a write or an rm was refused, so the files left are the real check.
+    [ "$after" -lt "$before" ] || untouched=$((untouched + 1))
+    echo "$((before - after)) of $before files moved, see the log for the skipped ones"
   else
     failed=$((failed + 1))
     echo "failed, see $log"
@@ -117,4 +121,4 @@ for memory in "${folders[@]}"; do
 done
 
 left="$(find "$config"/projects/*/memory -maxdepth 1 -name '*.md' ! -name MEMORY.md 2>/dev/null | wc -l | tr -d ' ')"
-echo "done: ${#folders[@]} folders, $failed failed, $left memory files left (skipped facts stay)"
+echo "done: ${#folders[@]} folders, $failed failed, $untouched with no file moved, $left memory files left (skipped facts stay)"
