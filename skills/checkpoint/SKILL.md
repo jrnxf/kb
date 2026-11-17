@@ -2,7 +2,7 @@
 name: checkpoint
 description: Save the durable knowledge of this session to the kb store before /clear. Run only when the user types /kb:checkpoint.
 disable-model-invocation: true
-allowed-tools: Bash(kb *), Read, Glob, Edit
+allowed-tools: Bash(kb *), Bash(rm *), Bash(echo *), Read, Glob, Edit
 ---
 
 # kb checkpoint
@@ -41,7 +41,8 @@ When the answer starts with `no note has every word. Closest:`, read those notes
 
 ### Move Claude Code's auto memory into kb
 
-kb replaces Claude Code's auto memory. List its files with Glob `~/.claude/projects/*/memory/*.md`, and read each one except `MEMORY.md`.
+kb replaces Claude Code's auto memory. Its folders are `<config>/projects/*/memory/`, where `<config>` is `$CLAUDE_CONFIG_DIR`, or `~/.claude` when that is not set.
+Run `echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"` to get the absolute path. List the files with Glob `<that path>/projects/*/memory/*.md`, and read each one except `MEMORY.md`.
 The folder of this session's project has the project path as its name, with each `/` and `.` changed to `-`.
 
 For each fact in it:

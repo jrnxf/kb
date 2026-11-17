@@ -11,6 +11,10 @@ import { detached, kickSync } from "../cli/sync.ts";
 import { MEMORY_ON_NOTICE, MEMORY_RULE, autoMemoryOn } from "./auto-memory.ts";
 
 const STALE_NOTICE_ABOVE = 5;
+/** Claude Code shows SessionStart output above 10,000 characters as a file preview. */
+const OUTPUT_LIMIT = 9900;
+/** What a session gets when there is no note to show: no store yet, or a broken one. */
+const RULES_ONLY = `# kb\n${SAVE_RULE}\n${MEMORY_RULE}\n`;
 
 try {
   let cwd = process.cwd();
@@ -46,15 +50,24 @@ try {
     if (text && !stale?.fresh) detached(store, ["stale", "--repo", cwd, "--quiet"]);
   }
 
-  if (autoMemoryOn(process.env, process.env.CLAUDE_PROJECT_DIR || cwd)) notices.push(MEMORY_ON_NOTICE);
+  // Once per session: a /clear, a resume or a compaction is the same session to the user.
+  if (input.source === "startup" && autoMemoryOn(process.env, process.env.CLAUDE_PROJECT_DIR || cwd)) notices.push(MEMORY_ON_NOTICE);
 
-  // The save rule reaches every session, also one with no store yet: `kb add` creates it.
-  // The auto memory rule goes right under it, so the two read as one instruction.
-  const head = (text || `# kb\n${SAVE_RULE}\n`).replace(SAVE_RULE, `${SAVE_RULE}\n${MEMORY_RULE}`);
-  process.stdout.write(notices.length === 0 ? head : `${head}\n${notices.join("\n")}\n`);
+  // The auto memory rule goes right under the save rule, so the two read as one instruction.
+  const head = text ? text.replace(SAVE_RULE, `${SAVE_RULE}\n${MEMORY_RULE}`) : RULES_ONLY;
+  // Output over the limit becomes a file preview. A notice that does not fit is left out.
+  const shown: string[] = [];
+  let length = head.length + 1;
+  for (const notice of notices) {
+    if (length + notice.length + 1 > OUTPUT_LIMIT) continue;
+    shown.push(notice);
+    length += notice.length + 1;
+  }
+  process.stdout.write(shown.length === 0 ? head : `${head}\n${shown.join("\n")}\n`);
   // Fetch changes from other machines in the background, at most once per 5 minutes.
   kickSync(store, 5 * 60_000);
 } catch {
-  // silent on purpose
+  // The rules for saving reach every session, also one with a broken store: `kb add` says what is wrong.
+  process.stdout.write(RULES_ONLY);
 }
 process.exit(0);

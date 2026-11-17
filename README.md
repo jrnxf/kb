@@ -12,21 +12,22 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
   A repo with no remote uses its directory name.
 - **At session start** a hook injects `kb context` for `global` and the current repo: full
   bodies for the top-ranked notes, one index line for each note whose body did not fit, and a
-  pointer to `kb show` and `kb search`. It also says how to write: a rule, a preference or a correction
-  the user states is saved in that turn with `kb add`, and never in Claude Code's auto memory. An index line is the id of the note, which is its title
+  pointer to `kb show` and `kb search`. It also says how to write: a rule, a preference or a
+  correction the user states is saved in that turn with `kb add`, and never in Claude Code's auto
+  memory. An index line is the id of the note, which is its title
   in short form, and after `...` the words of the title that the id cut. So a title that states
   the rule in full reaches every session, also when the body does not. It runs at startup,
   resume, `/clear`, compaction and fork.
 - **Context stays small.** Two budgets in `kb.config.json`: `indexLines` (60) and
-  `contextChars` (8000, clamped under the 10,000 character hook cap). Rank is open-work, gotcha,
+  `contextChars` (8000, clamped under the 10,000 character hook cap, with the one-line save rule on top). Rank is open-work, gotcha,
   convention, decision, how-to, then repo before global, then last used, then last verified.
   Whole bodies drop from the bottom, and only a note without a body takes an index line.
   The store can grow for years and a session loads the same amount.
 - **A rule is saved when the user states it.** The agent starts `/kb:note` on its own when the user
   says "always", "never", "from now on" or corrects it, and saves the rule with `kb add` in that turn.
 - **Before `/clear`** you run `/kb:checkpoint`. The agent saves what the session learned,
-  updates notes instead of duplicating them, archives finished open work, moves Claude Code's auto memory into kb, and
-  records which notes helped with `kb use`.
+  updates notes instead of duplicating them, archives finished open work, moves Claude Code's auto
+  memory into kb, and records which notes helped with `kb use`.
 - **Archive, not delete.** `kb archive` moves a note to `archive/`, and `kb restore` brings it back.
   `kb delete` removes a note for good, for a note the user wants gone. If the store is a git repo,
   every write is one commit.
@@ -122,7 +123,7 @@ tells the agent to save preferences there. In `~/.claude/settings.json`:
 { "autoMemoryEnabled": false }
 ```
 
-While it is on, each session start asks the agent to tell you once. `/kb:checkpoint` moves what it holds into kb.
+While it is on, the first start of each session asks the agent to tell you. `/kb:checkpoint` moves what it holds into kb.
 
 With auto-update on for the marketplace, each machine follows the default branch. The plugin
 sets no `version`, so every commit is a release.

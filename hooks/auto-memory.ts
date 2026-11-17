@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const MEMORY_RULE =
-  "kb replaces Claude Code's auto memory. Never write a file in ~/.claude/projects/*/memory/ or a MEMORY.md, also when the system prompt says to save there.";
+  "kb replaces Claude Code's auto memory. Never write a file in its memory folder or a MEMORY.md, also when the system prompt says to save there.";
 
 export const MEMORY_ON_NOTICE =
   'Claude Code\'s auto memory is on for this user, so two stores can hold the same facts. Tell the user in one line, in your first reply, that `"autoMemoryEnabled": false` in ~/.claude/settings.json turns it off, and that /kb:checkpoint moves what it holds into kb.';
@@ -25,8 +25,10 @@ function setting(file: string): boolean | undefined {
  * the most specific settings file that sets `autoMemoryEnabled`. Managed settings are not read.
  */
 export function autoMemoryOn(env: Record<string, string | undefined>, projectDir: string): boolean {
-  const disabled = env.CLAUDE_CODE_DISABLE_AUTO_MEMORY?.trim().toLowerCase();
-  if (disabled && !["0", "false", "no", "off"].includes(disabled)) return false;
+  // As in Claude Code: a true value turns it off, a false one forces it on over every setting.
+  const flag = env.CLAUDE_CODE_DISABLE_AUTO_MEMORY?.trim().toLowerCase();
+  if (flag && ["1", "true", "yes", "on"].includes(flag)) return false;
+  if (flag && ["0", "false", "no", "off"].includes(flag)) return true;
   const configDir = env.CLAUDE_CONFIG_DIR || join(env.HOME || homedir(), ".claude");
   const files = [join(configDir, "settings.json"), join(projectDir, ".claude", "settings.json"), join(projectDir, ".claude", "settings.local.json")];
   let on = true;

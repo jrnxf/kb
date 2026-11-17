@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseNote } from "../cli/note.ts";
 import { search } from "../cli/search.ts";
@@ -141,6 +141,9 @@ describe("kb use, archive, show, list", () => {
     expect([...store.notes(), ...store.notes({ archived: true })].map((n) => n.id)).toEqual(["keep"]);
     expect(store.usage().has("wrong")).toBe(false);
     expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe("kb: delete wrong old");
+    // Another machine still counts uses of "wrong", so a new note with that title must not inherit them.
+    writeFileSync(join(store.home, "usage", "othermachine.json"), JSON.stringify({ wrong: { uses: 9 } }));
+    expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Wrong", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("wrong-2");
   });
 
   test("kb list --archive lists the most recently archived note first", () => {

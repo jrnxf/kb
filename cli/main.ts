@@ -145,7 +145,8 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     indexed: true,
     anchors: [],
     ...input,
-    id: uniqueId(slug, new Set([...active, ...archived].map((n) => n.id))),
+    // An id with counters on any machine belongs to a deleted note: a new note must not inherit its uses.
+    id: uniqueId(slug, new Set([...active, ...archived].map((n) => n.id).concat([...store.usage().keys()]))),
     scope,
     created: now,
     last_verified: now,

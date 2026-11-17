@@ -30,9 +30,9 @@ export interface StoredNote extends Note {
 
 /**
  * SessionStart output above 10,000 characters is replaced by a file preview, so stay well under it.
- * The hook may add a few lines of its own after the context.
+ * The hook adds lines of its own after the context, and drops a notice that would pass the limit.
  */
-export const HARD_CONTEXT_CAP = 9000;
+export const HARD_CONTEXT_CAP = 8800;
 
 const DEFAULT_CONFIG: Config = {
   budgets: { indexLines: 60, contextChars: 8000 },
@@ -207,7 +207,7 @@ export class Store {
     return total;
   }
 
-  /** Forget the counters of this machine for these ids, so a later note with the same id starts at 0. */
+  /** Forget the counters of this machine for these ids. Other machines keep theirs: `kb add` never reuses an id that has counters. */
   dropUsage(ids: string[]): void {
     const path = join(this.home, "usage", `${this.machine()}.json`);
     const data = readJson<Record<string, Usage>>(path);
@@ -216,7 +216,7 @@ export class Store {
     writeAtomic(path, `${JSON.stringify(data, null, 2)}\n`);
   }
 
-    bumpUsage(ids: string[], now: string): void {
+  bumpUsage(ids: string[], now: string): void {
     const path = join(this.home, "usage", `${this.machine()}.json`);
     const data = readJson<Record<string, Usage>>(path) ?? {};
     for (const id of ids) data[id] = { uses: (data[id]?.uses ?? 0) + 1, last_used: now };

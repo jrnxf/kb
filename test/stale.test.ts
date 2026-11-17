@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { contextBudget } from "../cli/context.ts";
 import { findStale } from "../cli/stale.ts";
 import { kb, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
 
@@ -145,7 +146,7 @@ describe("kb budget", () => {
     const { repo, store } = fixture();
     putNote(store, { id: "a", scope: SCOPE });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
-    expect(b).toMatchObject({ scope: SCOPE, over: false, demote: [], index: { lines: 0, budget: 60, hidden: 0 }, context: { bodies: 1, dropped: 0, budget: 8000 } });
+    expect(b).toMatchObject({ scope: SCOPE, over: false, demote: [], index: { lines: 0, budget: 60, hidden: 0 }, context: { bodies: 1, dropped: 0, budget: contextBudget(8000) } });
     expect(b.notes[0]).toMatchObject({ id: "a", shown: "body", uses: 0 });
   });
 

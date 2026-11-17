@@ -80,6 +80,8 @@ describe("keys on a wide screen", () => {
     const id = last!;
     await page.keyboard.press("a");
     await until(() => store.find(id)?.archived ?? false, "the note is archived");
+    // The page takes Undo once its toast shows, as a person does. The file moves before that.
+    await page.getByText("Archived", { exact: true }).waitFor();
     const before = (await selected(page))!;
     expect(await page.locator("[data-id]").first().getAttribute("data-id")).not.toBe(before);
     // Every row that is the current one at any moment, from here on.

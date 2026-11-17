@@ -25,6 +25,14 @@ export interface ContextResult {
 export const SAVE_RULE =
   "When the user states a rule, a preference or a correction, save it in that turn with `kb add` (`kb help` shows the JSON). Run `kb search` first, so you update a note instead of adding a twin.";
 
+/**
+ * Characters a session may get. The save rule is fixed text, so it comes on top of the notes
+ * budget: a store tuned for N bodies still shows N. The hard cap holds for the whole text.
+ */
+export function contextBudget(contextChars: number): number {
+  return Math.min(Math.max(500, contextChars) + SAVE_RULE.length + 1, HARD_CONTEXT_CAP);
+}
+
 const EMPTY: ContextResult = { text: "", scope: null, index: [], bodies: [], dropped: [], hiddenIndexLines: 0, chars: 0 };
 
 /** open-work, gotcha, convention, decision, how-to. Then repo before global, last_used, last_verified. */
@@ -88,7 +96,7 @@ export function buildContext(store: Store, repoPath: string): ContextResult {
   if (visible.length === 0 && !syncError) return { ...EMPTY, scope };
 
   const ranked = rank(visible, usage);
-  const charBudget = Math.max(500, Math.min(config.budgets.contextChars, HARD_CONTEXT_CAP));
+  const charBudget = contextBudget(config.budgets.contextChars);
   let indexCount = Math.min(ranked.length, Math.max(1, config.budgets.indexLines));
 
   // A note with a body needs no index line: the body starts with its id and title. Bodies are
@@ -194,7 +202,7 @@ export function buildBudget(store: Store, repoPath: string): BudgetResult {
   return {
     scope: context.scope,
     index: { lines: context.index.length, budget: config.budgets.indexLines, hidden: context.hiddenIndexLines },
-    context: { chars: context.chars, budget: Math.min(config.budgets.contextChars, HARD_CONTEXT_CAP), bodies: context.bodies.length, dropped: context.dropped.length },
+    context: { chars: context.chars, budget: contextBudget(config.budgets.contextChars), bodies: context.bodies.length, dropped: context.dropped.length },
     over,
     notes,
     demote,

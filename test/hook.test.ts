@@ -57,7 +57,7 @@ describe("SessionStart hook", () => {
     // A file where the store should be.
     const file = join(tempDir(), "file");
     writeFileSync(file, "x");
-    expect(runHook({ home: file, stdin: input(plain()) })).toMatchObject({ code: 0, stderr: "" });
+    expect(runHook({ home: file, stdin: input(plain()) })).toMatchObject({ code: 0, stdout: SAVING, stderr: "" });
   });
 
   test("prints the context for the session directory on every source", () => {
@@ -75,6 +75,21 @@ describe("SessionStart hook", () => {
     const elsewhere = runHook({ home: store.home, stdin: input(tempRepo({ remote: "git@github.com:acme/web.git" })) });
     expect(elsewhere.stdout).not.toContain("repo-note");
     expect(elsewhere.stdout).toContain("global-note");
+  });
+
+  test("stays under the 10,000 character limit at the largest budget, with every notice", () => {
+    const store = tempStore();
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 1, contextChars: 20000 } }));
+    for (let i = 0; i < 40; i++) putNote(store, { id: `big-${i}`, body: "x".repeat(400) });
+    const repo = tempRepo();
+    const END = join(ROOT, "hooks", "session-end.sh");
+    for (let i = 0; i < 20; i++) {
+      const body = { session_id: `lost-${i}`, transcript_path: `/home/user/${"t".repeat(150)}-${i}.jsonl`, cwd: repo, hook_event_name: "SessionEnd", reason: "clear" };
+      Bun.spawnSync([END], { env: { ...process.env, KB_HOME: store.home }, stdin: Buffer.from(JSON.stringify(body)) });
+    }
+    const out = runHook({ home: store.home, stdin: input(repo), env: { CLAUDE_CONFIG_DIR: tempDir("kb-claude-") } }).stdout;
+    expect(out).toContain("An earlier session in this directory");
+    expect(out.length).toBeLessThan(10000);
   });
 
   test("finishes well under a second with a large store", () => {
@@ -213,6 +228,12 @@ describe("session notices", () => {
     expect(run({})).not.toContain(MEMORY_ON_NOTICE);
     expect(run({ CLAUDE_CONFIG_DIR: on })).toContain(MEMORY_ON_NOTICE);
     expect(run({ CLAUDE_CONFIG_DIR: on, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" })).not.toContain(MEMORY_ON_NOTICE);
+    // A false value forces it on over every setting, as Claude Code does.
+    expect(run({ CLAUDE_CODE_DISABLE_AUTO_MEMORY: "0" })).toContain(MEMORY_ON_NOTICE);
+    // Once per session: not again after a /clear or a resume.
+    for (const source of ["clear", "resume", "compact"]) {
+      expect(runHook({ home: store.home, stdin: startInput(repo, source), env: { CLAUDE_CONFIG_DIR: on } }).stdout).not.toContain(MEMORY_ON_NOTICE);
+    }
     // The project's local settings win over the user's.
     mkdirSync(join(repo, ".claude"));
     writeFileSync(join(repo, ".claude", "settings.local.json"), JSON.stringify({ autoMemoryEnabled: true }));
@@ -227,7 +248,7 @@ describe("session notices", () => {
     for (let i = 0; i < 4; i++) putNote(store, { id: `n-${i}`, body: "x".repeat(400) });
     const line = "The kb store is over its index budget here";
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain(line);
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 2, contextChars: 1100 + SAVE_RULE.length } }));
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 2, contextChars: 1100 } }));
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(`${line}: 1 note is hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
   });
 
