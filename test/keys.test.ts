@@ -100,6 +100,39 @@ describe("keys on a wide screen", () => {
     await page.locator('[data-rail="trash"]').waitFor({ state: "detached" });
   });
 
+  test("Trash project asks first, moves every note of the project, and ⌘Z brings it back", async () => {
+    const web = "github.com/acme/web";
+    for (const id of ["w1", "w2"]) putNote(store, { id, title: `Web ${id}`, scope: web });
+    await page.reload();
+    await page.locator(`[data-rail="scope:${web}"]`).click();
+    await page.getByRole("button", { name: "Trash project" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByText("All 2 notes of acme/web go to the trash.", { exact: false }).waitFor();
+    await dialog.getByRole("button", { name: /Trash project/ }).click();
+    await until(() => store.notes().every((n) => n.scope !== web), "the project is in the trash");
+    // The project stays in the sidebar at 0, because its notes are in the trash. The list shows every scope.
+    await until(async () => (await page.locator(`[data-rail="scope:${web}"]`).getAttribute("aria-pressed")) === "false", "the list shows every scope");
+    expect(store.notes().map((n) => n.id).sort()).toEqual(["one", "three", "two"]);
+    await page.getByText("Moved the project to the trash", { exact: true }).waitFor();
+    await page.keyboard.press("Meta+z");
+    await until(() => store.notes().filter((n) => n.scope === web).length === 2, "the project is back");
+    await until(async () => (await page.locator(`[data-rail="scope:${web}"]`).getAttribute("aria-pressed")) === "true", "the project is picked again");
+  });
+
+  test("Backspace on a project in the sidebar asks to trash the project, and not on global", async () => {
+    putNote(store, { id: "w1", scope: "github.com/acme/web" });
+    await page.reload();
+    await page.locator('[data-rail="scope:global"]').click();
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Backspace");
+    const dialog = page.getByRole("dialog");
+    await dialog.getByText("Move this project to the trash?").waitFor();
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+    expect(store.notes()).toHaveLength(4);
+  });
+
   test("Undo selects the restored note, and no other row on the way", async () => {
     // The last row, so the row selected after the move is not the first row.
     const last = await page.locator("[data-id]").last().getAttribute("data-id");

@@ -186,6 +186,58 @@ describe("kb use, trash, show, list", () => {
     expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Wrong", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("wrong-2");
   });
 
+  test("trash --scope moves a whole project in one commit, and restore --scope brings back only that move", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    const web = "github.com/acme/web";
+    putNote(store, { id: "a", scope: web });
+    putNote(store, { id: "b", scope: web });
+    putNote(store, { id: "done-before", scope: web, trashed_at: daysAgo(3) }, true);
+    putNote(store, { id: "other", scope: "github.com/acme/api" });
+    putNote(store, { id: "g" });
+    expect(kb(store, ["trash", "--scope", web, "--json"]).json).toEqual({ scope: web, trashed: ["a", "b"] });
+    expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe(`kb: trash the project ${web} (2)`);
+    expect(store.notes().map((n) => n.id).sort()).toEqual(["g", "other"]);
+    // A second trash has nothing to move.
+    expect(kb(store, ["trash", "--scope", web]).code).toBe(1);
+    // The note that was in the trash before stays there.
+    expect(kb(store, ["restore", "--scope", web, "--json"]).json).toEqual({ scope: web, restored: ["a", "b"] });
+    expect(store.find("done-before")!.trashed).toBe(true);
+  });
+
+  test("delete --scope removes a project for good, active and in the trash, and nothing else", () => {
+    const store = tempStore();
+    const web = "github.com/acme/web";
+    putNote(store, { id: "a", scope: web });
+    putNote(store, { id: "old", scope: web, trashed_at: daysAgo(1) }, true);
+    putNote(store, { id: "other", scope: "github.com/acme/api" });
+    kb(store, ["use", "a"]);
+    expect(kb(store, ["delete", "--scope", web, "--json"]).json).toEqual({ scope: web, deleted: ["a", "old"] });
+    expect([...store.notes(), ...store.notes({ trashed: true })].map((n) => n.id)).toEqual(["other"]);
+    expect(store.usage().has("a")).toBe(false);
+  });
+
+  test("empty-trash --scope clears only the trash of that project", () => {
+    const store = tempStore();
+    putNote(store, { id: "a", scope: "github.com/acme/web", trashed_at: daysAgo(1) }, true);
+    putNote(store, { id: "b", scope: "github.com/acme/api", trashed_at: daysAgo(1) }, true);
+    expect(kb(store, ["empty-trash", "--scope", "github.com/acme/web", "--json"]).json).toEqual({ deleted: ["a"] });
+    expect(store.notes({ trashed: true }).map((n) => n.id)).toEqual(["b"]);
+    expect(kb(store, ["empty-trash", "--scope", "github.com/acme/web"]).code).toBe(1);
+  });
+
+  test("a project command refuses global, an unknown scope and note ids, and changes nothing", () => {
+    const store = tempStore();
+    putNote(store, { id: "g" });
+    putNote(store, { id: "a", scope: "github.com/acme/web" });
+    for (const args of [["trash", "--scope", "global"], ["delete", "--scope", "global"], ["delete", "--scope", "github.com/acme/nope"], ["delete", "--scope", "repo"], ["trash", "a", "--scope", "github.com/acme/web"]]) {
+      const r = kb(store, args);
+      expect(r.code).toBe(1);
+    }
+    expect(kb(store, ["delete", "--scope", "global"]).stderr).toContain("not a project");
+    expect(store.notes().map((n) => n.id).sort()).toEqual(["a", "g"]);
+  });
+
   test("kb list --trash lists the most recently trashed note first", () => {
     const store = tempStore();
     putNote(store, { id: "oldest", trashed_at: daysAgo(20) }, true);

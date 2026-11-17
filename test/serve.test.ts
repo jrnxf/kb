@@ -108,6 +108,23 @@ describe("kb serve", () => {
     expect(store.find("live")).toBeDefined();
   });
 
+  test("a project goes to the trash whole and comes back whole, and its trash empties alone", async () => {
+    const store = tempStore();
+    const web = "github.com/acme/web";
+    putNote(store, { id: "a", scope: web });
+    putNote(store, { id: "b", scope: web });
+    putNote(store, { id: "api-old", scope: "github.com/acme/api", trashed_at: daysAgo(1) }, true);
+    const { call } = start(store);
+    expect((await call("POST", "/api/projects/trash", { scope: web })).json).toEqual({ scope: web, trashed: ["a", "b"] });
+    expect(store.notes()).toEqual([]);
+    expect((await call("POST", "/api/projects/trash", { scope: "global" })).status).toBe(400);
+    expect((await call("POST", "/api/projects/trash", { scope: web }, {})).status).toBe(403);
+    expect((await call("POST", "/api/projects/restore", { scope: web })).json).toEqual({ scope: web, restored: ["a", "b"] });
+    await call("POST", "/api/projects/trash", { scope: web });
+    expect((await call("POST", "/api/trash/empty", { scope: web })).json.deleted.sort()).toEqual(["a", "b"]);
+    expect(store.notes({ trashed: true }).map((n) => n.id)).toEqual(["api-old"]);
+  });
+
   test("a server that starts clears the notes whose time in the trash is up", () => {
     const store = tempStore();
     putNote(store, { id: "expired", trashed_at: daysAgo(31) }, true);

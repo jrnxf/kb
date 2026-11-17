@@ -13,6 +13,7 @@ const KEYS = (kinds: number): [string[], string][] => [
   [["enter"], "open the note on a narrow screen, as space does"],
   [["e"], "edit"],
   [["⌫"], "trash, or in the trash delete for good"],
+  [["⌫"], "on a project in the sidebar, trash the project"],
   [["r"], "restore from the trash"],
   [[MAC ? "⌘" : "ctrl", "Z"], "undo a trash"],
   [["t"], "theme"],

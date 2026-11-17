@@ -1,4 +1,4 @@
-// `kb serve`: the store as a local page, where a person can read, edit, trash and delete notes.
+// `kb serve`: the store as a local page, where a person can read, edit, trash and delete notes, and trash a project.
 // It listens on this machine only. The page is the React app built into web/dist, and it reads
 // the store from /api/page.
 
@@ -7,7 +7,7 @@ import { join, normalize, sep } from "node:path";
 import { pageData, storeVersion } from "./page.ts";
 import { KbError } from "./note.ts";
 import type { Store } from "./store.ts";
-import { deleteNotes, emptyTrash, moveNotes, requireNote, tidyTrash, updateNote } from "./write.ts";
+import { deleteNotes, emptyTrash, moveNotes, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 export const DEFAULT_PORT = 4810;
 
@@ -68,7 +68,20 @@ async function handle(store: Store, token: string, port: number, request: Reques
   if (url.pathname === "/api/trash/empty") {
     if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
-    return json({ deleted: emptyTrash(store) });
+    // With a scope, only the trash of that project: the list shows only its notes.
+    const scope = (await body(request))?.scope;
+    if (scope !== undefined && typeof scope !== "string") throw new KbError("scope: must be a repo id");
+    return json({ deleted: emptyTrash(store, scope) });
+  }
+
+  // A project goes to the trash whole, and comes back whole. The page deletes it for good only from the trash.
+  const project = url.pathname.match(/^\/api\/projects\/(trash|restore)$/);
+  if (project) {
+    if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
+    if (request.method !== "POST") return json({ error: "not found" }, 404);
+    const scope = (await body(request))?.scope;
+    if (typeof scope !== "string") throw new KbError("scope: must be a repo id");
+    return json(project[1] === "trash" ? { scope, trashed: trashProject(store, scope) } : { scope, restored: restoreProject(store, scope) });
   }
 
   const match = url.pathname.match(/^\/api\/notes\/([a-z0-9-]+)(?:\/(trash|restore))?$/);
@@ -92,14 +105,20 @@ async function handle(store: Store, token: string, port: number, request: Reques
     return json({ deleted: deleteNotes(store, [id]) });
   }
   if (request.method === "PUT" && !action) {
-    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-    if (body === null || typeof body !== "object" || Array.isArray(body)) throw new KbError("the request needs one JSON object");
+    const edit = await body(request);
+    if (edit === null) throw new KbError("the request needs one JSON object");
     const input: Record<string, unknown> & { id: string } = { id };
-    for (const key of EDITABLE) if (key in body) input[key] = body[key];
+    for (const key of EDITABLE) if (key in edit) input[key] = edit[key];
     // An edit in the page is made outside any repo, so it records no commit.
     return json(updateNote(store, input, { scope: null, head: null }));
   }
   return json({ error: "not found" }, 404);
+}
+
+/** The JSON object a request carries, or null when it carries none. */
+async function body(request: Request): Promise<Record<string, unknown> | null> {
+  const value = (await request.json().catch(() => null)) as unknown;
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 /** The page at /, and the files of the built page. The page keeps its view in the hash, so it has no other paths. */

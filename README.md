@@ -32,6 +32,10 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
   back. A note in the trash for more than `trashDays` (30) is deleted for good, before the next
   command. `kb delete` removes a note now, and `kb empty-trash` removes the whole trash. If the
   store is a git repo, every write is one commit.
+- **A project goes whole.** `kb trash --scope <repo id>` moves every note of one repo to the
+  trash in one commit, and `kb restore --scope` brings back that move and no older trash.
+  `kb delete --scope` removes the project's notes for good, and `kb empty-trash --scope` only its
+  trash. Each takes the exact repo id, and none touches `global`.
 - **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: an
   anchored file changed since the note was verified, an anchor is gone, the verified commit left
   the history, nobody verified the note for `decayDays` (180), or two titles are close.
@@ -69,6 +73,7 @@ kb show <id>                 kb search <words> [--scope s] [--trash]
 kb list [--scope s] [--trash]  kb use <id>...
 kb trash <id>...             kb restore <id>...
 kb delete <id>...            kb empty-trash
+kb trash|restore|delete|empty-trash --scope <repo id>   a whole project
 kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]         kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run]
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
@@ -78,7 +83,7 @@ kb sync                      kb checkpointed <session-id>
 `kb serve`, or `kb` alone in a terminal, opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
 list, and the open note. The arrow keys move through the sidebar and the list. `e` edits the open
 note and `⌫` moves it to the trash. In the trash, `⌫` deletes a note for good after a question,
-and Empty trash clears it all. `1` to `5` turn kinds on and off, and several can be on at once. `?` lists every key. On a phone the scopes and the kinds are two rows that scroll sideways, and a tap on a note brings it to the top of the screen. Each change goes through the same code as the CLI, so it is validated, committed and
+and Empty trash clears it all, or with a scope picked only that scope's trash. With a project picked, Trash project (or `⌫` on the project in the sidebar) moves all its notes to the trash after a question, and Undo brings them back. `1` to `5` turn kinds on and off, and several can be on at once. `?` lists every key. On a phone the scopes and the kinds are two rows that scroll sideways, and a tap on a note brings it to the top of the screen. Each change goes through the same code as the CLI, so it is validated, committed and
 synced. The server listens on this machine only, and stops with Ctrl+C. To reach it through a
 reverse proxy, name the proxy's host in `KB_SERVE_HOSTS`, split by commas. A name that starts with a
 dot, such as `.example.com`, takes that domain and every name under it, so one setting covers a

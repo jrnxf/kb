@@ -14,7 +14,7 @@ import { MAC, PHONE, useMedia } from "@/hooks/use-media";
 import { useTheme } from "@/hooks/use-theme";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { fromHash, neighbour, scopesOf, show, toHash, type View } from "@/lib/view";
+import { fromHash, neighbour, scopeName, scopesOf, show, toHash, type View } from "@/lib/view";
 
 /** The longest the drawer takes to close. */
 const CLOSE_MS = 450;
@@ -32,7 +32,8 @@ export function App() {
   const [cursor, setCursor] = useState<string | null>(null);
   // The scope to go back to when the cursor walks on from the scopes into the kinds.
   const held = useRef<string | null>(view.scope);
-  const undoId = useRef<string | null>(null);
+  // What ⌘Z and the toast's Undo bring back while the toast shows: one note, or one project.
+  const undoing = useRef<(() => Promise<void>) | null>(null);
   const search = useRef<HTMLInputElement>(null);
   const reader = useRef<HTMLDivElement>(null);
   const indent = useRef<HTMLDivElement>(null);
@@ -216,11 +217,21 @@ export function App() {
     setView((v) => ({ ...v, note: after }));
     await refresh();
     if (restore) return;
-    undoId.current = id;
     // The toast names the note, as the note it moved is gone from the screen.
-    toast("Moved to the trash", {
+    offerUndo("Moved to the trash", title, async () => {
+      await busy(() => api.restoreNote(id));
+      // The list has the note again before it is selected. Else the first row is selected for a frame.
+      await refresh();
+      setView((v) => ({ ...v, note: id }));
+    });
+  }
+
+  /** A toast with Undo, which ⌘Z also presses while the toast shows. */
+  function offerUndo(text: string, description: string, run: () => Promise<void>) {
+    undoing.current = run;
+    toast(text, {
       id: "kb",
-      description: title,
+      description,
       duration: UNDO_MS,
       action: {
         label: (
@@ -231,24 +242,57 @@ export function App() {
         onClick: () => void undo(),
       },
       onAutoClose: () => {
-        if (undoId.current === id) undoId.current = null;
+        if (undoing.current === run) undoing.current = null;
       },
     });
   }
   async function undo() {
-    const id = undoId.current;
-    if (!id) return;
-    undoId.current = null;
+    const run = undoing.current;
+    if (!run) return;
+    undoing.current = null;
     toast.dismiss("kb");
     try {
-      await busy(() => api.restoreNote(id));
+      await run();
+    } catch (error) {
+      toast((error as Error).message, { id: "kb" });
+    }
+  }
+
+  /** Move every note of a project to the trash, after the dialog. Undo brings the project back. */
+  function askTrashProject(scope: string) {
+    if (editing || scope === "global") return;
+    const n = notes.filter((note) => !note.trashed && note.scope === scope).length;
+    if (n === 0) return;
+    const name = scopeName(scope);
+    setConfirm({
+      title: "Move this project to the trash?",
+      description: `${n === 1 ? "The 1 note" : `All ${n} notes`} of ${name} go to the trash. The trash deletes them after ${data!.trashDays} days.`,
+      action: "Trash project",
+      run: () => void trashProject(scope, name),
+    });
+  }
+  async function trashProject(scope: string, name: string) {
+    try {
+      await busy(() => api.trashProject(scope));
     } catch (error) {
       toast((error as Error).message, { id: "kb" });
       return;
     }
-    // The list has the note again before it is selected. Else the first row is selected for a frame.
+    if (reading) {
+      back();
+      await sleep(CLOSE_MS);
+    }
+    // The project is gone from the sidebar, so the list shows every scope.
+    held.current = null;
+    setCursor(null);
+    setView((v) => ({ ...v, scope: null, note: null }));
     await refresh();
-    setView((v) => ({ ...v, note: id }));
+    offerUndo("Moved the project to the trash", name, async () => {
+      await busy(() => api.restoreProject(scope));
+      await refresh();
+      held.current = scope;
+      setView((v) => ({ ...v, scope, trash: false, note: null }));
+    });
   }
 
   /** A change that cannot be undone: the dialog asks first, then this runs it. */
@@ -279,14 +323,17 @@ export function App() {
     });
   }
 
+  /** Empty the trash the list shows: all of it, or only the trash of the picked scope. */
   function askEmpty() {
-    const n = shown.trashCount;
+    const scope = view.scope;
+    const n = scope ? notes.filter((note) => note.trashed && note.scope === scope).length : shown.trashCount;
     if (n === 0) return;
+    const what = n === 1 ? "1 note is" : `${n} notes are`;
     setConfirm({
-      title: "Empty the trash?",
-      description: `${n === 1 ? "1 note is" : `${n} notes are`} deleted for good.`,
+      title: scope ? `Empty the trash of ${scopeName(scope)}?` : "Empty the trash?",
+      description: `${what} deleted for good.${scope ? " The trash of other scopes stays." : ""}`,
       action: "Empty trash",
-      run: () => void removeForGood(() => api.emptyTrash(), null),
+      run: () => void removeForGood(() => api.emptyTrash(scope ?? undefined), null),
     });
   }
 
@@ -335,7 +382,7 @@ export function App() {
       return;
     }
     // ⌘Z undoes a move to the trash while its toast shows. In the filter it stays the field's own undo.
-    if (key.toLowerCase() === "z" && mod && !event.shiftKey && undoId.current && document.activeElement !== search.current) {
+    if (key.toLowerCase() === "z" && mod && !event.shiftKey && undoing.current && document.activeElement !== search.current) {
       event.preventDefault();
       void undo();
       return;
@@ -395,6 +442,12 @@ export function App() {
     // The note has no keys of its own. Space pages through it from the list.
     else if (key === " ") reader.current?.scrollBy({ top: (event.shiftKey ? -0.8 : 0.8) * reader.current.clientHeight });
     else if (key === "e" && pane === "list") edit();
+    // Backspace on a project in the sidebar asks to move the whole project to the trash.
+    else if ((key === "Backspace" || key === "Delete") && pane === "rail") {
+      const item = items.find((i) => i.key === cursorKey);
+      const scope = item && scopeOf(item);
+      if (scope && scope !== "global" && !shown.trash) askTrashProject(scope);
+    }
     // Backspace moves a note to the trash. In the trash it asks to delete the note for good.
     else if ((key === "Backspace" || key === "Delete") && pane === "list" && current) {
       if (current.trashed) askDelete();
@@ -498,7 +551,9 @@ export function App() {
             onTheme={nextTheme}
             onKeys={() => setHelp(true)}
           />
-          <NoteList notes={shown.notes} current={current} q={view.q} onQ={(q) => setView((v) => ({ ...v, q }))} searchRef={search} onOpen={pickRow} empty={empty} trash={shown.trash ? { days: data.trashDays, onEmpty: askEmpty } : undefined} />
+          <NoteList notes={shown.notes} current={current} q={view.q} onQ={(q) => setView((v) => ({ ...v, q }))} searchRef={search} onOpen={pickRow} empty={empty} trash={shown.trash ? { days: data.trashDays, onEmpty: askEmpty } : undefined}
+            project={!shown.trash && view.scope && view.scope !== "global" ? { onTrash: () => askTrashProject(view.scope!) } : undefined}
+          />
         </DrawerIndent>
         {!phone && (
           <main ref={reader} className="min-w-0 overflow-y-auto px-12 pt-6 pb-20">
