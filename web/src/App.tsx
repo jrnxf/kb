@@ -324,6 +324,16 @@ export function App() {
     const key = event.key;
     if (!data || editing) return;
     const mod = MAC ? event.metaKey : event.ctrlKey;
+    // The question before a delete takes every key. Its own buttons answer Enter and Escape. An
+    // Enter that comes before the dialog has moved the focus to its action still confirms.
+    if (confirm) {
+      if (key === "Enter" && !mod && !(document.activeElement as HTMLElement | null)?.closest("[role=dialog]")) {
+        event.preventDefault();
+        confirm.run();
+        setConfirm(null);
+      }
+      return;
+    }
     // ⌘Z undoes a move to the trash while its toast shows. In the filter it stays the field's own undo.
     if (key.toLowerCase() === "z" && mod && !event.shiftKey && undoId.current && document.activeElement !== search.current) {
       event.preventDefault();
@@ -331,16 +341,6 @@ export function App() {
       return;
     }
     if (event.metaKey || event.ctrlKey || event.altKey) return;
-    // The question before a delete takes every key. Its own buttons answer Enter and Escape. An
-    // Enter that comes before the dialog has moved the focus to its action still confirms.
-    if (confirm) {
-      if (key === "Enter" && !(document.activeElement as HTMLElement | null)?.closest("[role=dialog]")) {
-        event.preventDefault();
-        confirm.run();
-        setConfirm(null);
-      }
-      return;
-    }
     // The open list of keys takes every key. It closes itself on Escape.
     if (help) {
       if (key === "?") {

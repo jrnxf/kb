@@ -128,8 +128,10 @@ describe("kb use, trash, show, list", () => {
     expect(store.notes().map((n) => n.id)).toEqual(["done"]);
     expect(store.find("done")!.trashed_at).toBeUndefined();
     expect(kb(store, ["trash", "nope"]).code).toBe(1);
-    // archive is the name from before the trash, and still works.
-    expect(kb(store, ["archive", "done"]).code).toBe(0);
+    // archive is the name from before the trash. It still works, and says what it now means.
+    const archived = kb(store, ["archive", "done"]);
+    expect(archived.code).toBe(0);
+    expect(archived.stderr).toContain("archive is now trash");
     expect(kb(store, ["list", "--archive", "--json"]).json[0].id).toBe("done");
   });
 
@@ -150,23 +152,44 @@ describe("kb use, trash, show, list", () => {
     expect(store.find("live")).toBeDefined();
   });
 
-  test("a store from before the trash moves archive/ to trash/, and an archive with no time gets a full 30 days", () => {
+  test("a store from before the trash moves archive/ to trash/, and every note gets a full 30 days, even one archived long ago", () => {
     const store = tempStore();
     sh(store.home, "git", "init", "-q", "-b", "main");
     const old = join(store.home, "archive", "global");
     mkdirSync(old, { recursive: true });
-    const recent = daysAgo(3);
-    writeFileSync(join(old, "timed.md"), serializeNote(putNote(store, { id: "timed" })).replace("indexed: true", `indexed: true\narchived_at: "${recent}"`));
+    writeFileSync(join(old, "timed.md"), serializeNote(putNote(store, { id: "timed" })).replace("indexed: true", `indexed: true\narchived_at: "${daysAgo(100)}"`));
     writeFileSync(join(old, "untimed.md"), serializeNote(putNote(store, { id: "untimed" })));
     rmSync(join(store.home, "notes", "global", "timed.md"));
     rmSync(join(store.home, "notes", "global", "untimed.md"));
     const listed = kb(store, ["list", "--trash", "--json"]).json;
-    expect(listed.map((n: { id: string }) => n.id)).toEqual(["untimed", "timed"]);
-    expect(listed[1].trashed_at).toBe(recent);
-    expect(Date.now() - Date.parse(listed[0].trashed_at)).toBeLessThan(60_000);
+    expect(listed.map((n: { id: string }) => n.id).sort()).toEqual(["timed", "untimed"]);
+    for (const n of listed) expect(Date.now() - Date.parse(n.trashed_at)).toBeLessThan(60_000);
     expect(existsSync(join(store.home, "archive"))).toBe(false);
     expect(readFileSync(join(store.home, "trash", "global", "timed.md"), "utf8")).toContain("trashed_at:");
     expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe("kb: move the archive to the trash");
+  });
+
+  test("in the archive move, a copy already in the trash goes, and a different note stays and says so", () => {
+    const store = tempStore();
+    const same = putNote(store, { id: "same", trashed_at: daysAgo(1) }, true);
+    putNote(store, { id: "other", body: "the trash copy", trashed_at: daysAgo(1) }, true);
+    const old = join(store.home, "archive", "global");
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "same.md"), serializeNote({ ...same, trashed_at: undefined }));
+    writeFileSync(join(old, "other.md"), serializeNote({ ...same, id: "other", body: "the archive copy", trashed_at: undefined }));
+    const result = kb(store, ["list", "--trash"]);
+    expect(result.stderr).toContain("archive/global/other.md was not moved");
+    expect(existsSync(join(old, "same.md"))).toBe(false);
+    expect(readFileSync(join(old, "other.md"), "utf8")).toContain("the archive copy");
+  });
+
+  test("a wrong trashDays falls back to 30 days, so it never empties the trash or stops a command", () => {
+    for (const trashDays of ["thirty", null, 0, -5]) {
+      const store = tempStore();
+      writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ trashDays }));
+      putNote(store, { id: "recent", trashed_at: daysAgo(2) }, true);
+      expect(kb(store, ["list", "--trash", "--json"]).json.map((n: { id: string }) => n.id)).toEqual(["recent"]);
+    }
   });
 
   test("empty-trash deletes every note in the trash, and nothing else", () => {

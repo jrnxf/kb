@@ -103,6 +103,8 @@ describe("kb serve", () => {
     expect(store.notes().map((n) => n.id)).toEqual(["live"]);
     expect((await call("POST", "/api/trash/empty", undefined, {})).status).toBe(403);
     expect((await call("DELETE", "/api/notes/live", undefined, {})).status).toBe(403);
+    // The page deletes only from the trash.
+    expect((await call("DELETE", "/api/notes/live")).status).toBe(400);
     expect(store.find("live")).toBeDefined();
   });
 

@@ -74,6 +74,14 @@ function readJson<T>(path: string): T | null {
   }
 }
 
+function parseOrNothing(text: string): Note | undefined {
+  try {
+    return parseNote(text);
+  } catch {
+    return undefined;
+  }
+}
+
 export class Store {
   constructor(readonly home: string = kbHome()) {}
 
@@ -104,6 +112,8 @@ export class Store {
       ...DEFAULT_CONFIG,
       ...raw,
       budgets: { ...DEFAULT_CONFIG.budgets, ...(raw.budgets ?? {}) },
+      // A wrong value must not empty the trash or stop every command.
+      trashDays: Number.isFinite(raw.trashDays) && raw.trashDays! >= 1 ? raw.trashDays! : DEFAULT_CONFIG.trashDays,
     };
   }
 
@@ -188,9 +198,10 @@ export class Store {
   }
 
   /**
-   * Move the notes of archive/, from before the archive became the trash, into trash/. A note
-   * with no time of archive gets `now`, so it has the full time in the trash. A file whose path
-   * is taken in trash/ stays where it is. Returns the number of files moved.
+   * Move the notes of archive/, from before the archive became the trash, into trash/. Every
+   * note gets `now` as its time in the trash, even one archived long ago, so the move itself
+   * never deletes a note: each one has the full time in the trash. Another session may move
+   * the same files at the same time. Returns the number of files this call moved.
    */
   moveArchiveToTrash(now: string): number {
     const archive = join(this.home, "archive");
@@ -198,17 +209,27 @@ export class Store {
     let moved = 0;
     for (const path of this.walk(archive)) {
       const target = join(this.home, "trash", relative(archive, path));
-      if (existsSync(target)) continue;
-      mkdirSync(dirname(target), { recursive: true });
       try {
-        const note = parseNote(readFileSync(path, "utf8"));
-        writeAtomic(target, serializeNote({ ...note, trashed_at: note.trashed_at ?? now }));
-        rmSync(path);
-      } catch {
         // A file that does not parse moves as it is.
-        renameSync(path, target);
+        const note = parseOrNothing(readFileSync(path, "utf8"));
+        if (existsSync(target)) {
+          // The trash has this path already, from another session or another machine. A copy of
+          // the same note goes. A different note stays, and says so, so nothing is lost.
+          const there = parseOrNothing(readFileSync(target, "utf8"));
+          if (note && there && note.body === there.body && note.title === there.title) rmSync(path, { force: true });
+          else console.error(`kb: ${relative(this.home, path)} was not moved, because ${relative(this.home, target)} exists. Move or remove one of them.`);
+          continue;
+        }
+        mkdirSync(dirname(target), { recursive: true });
+        if (note) {
+          writeAtomic(target, serializeNote({ ...note, trashed_at: now }));
+          rmSync(path, { force: true });
+        } else renameSync(path, target);
+        moved++;
+      } catch (error) {
+        // Another session moved this file first.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-      moved++;
     }
     if (this.walk(archive).length === 0) rmSync(archive, { recursive: true, force: true });
     return moved;

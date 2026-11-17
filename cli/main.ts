@@ -429,7 +429,14 @@ async function main(): Promise<number> {
     json = args.flags.has("json");
     const store = new Store();
     // A note whose time in the trash is up is gone before any command reads the store.
-    if (command && store.exists() && !["help", "--help", "-h"].includes(command) && !args.flags.has("help")) tidyTrash(store);
+    if (command && store.exists() && !["help", "--help", "-h"].includes(command) && !args.flags.has("help")) {
+      // Housekeeping must never stop the command, above all a restore or a delete.
+      try {
+        tidyTrash(store);
+      } catch (error) {
+        console.error(`kb: the trash was not cleared: ${(error as Error).message}`);
+      }
+    }
     // A person who types only `kb` in a terminal wants to see the notes. A script gets the help.
     if (!command && process.stdout.isTTY && store.exists()) await cmdServe(store, args, json);
     if (!command || command === "help" || command === "--help" || command === "-h" || args.flags.has("help")) {
@@ -446,7 +453,11 @@ async function main(): Promise<number> {
       case "list": out = cmdList(store, args); break;
       case "use": out = cmdUse(store, args); break;
       // archive is the name from before the archive became the trash.
-      case "trash": case "archive": out = cmdMove(store, args, true); break;
+      case "archive":
+        console.error("kb: archive is now trash. The trash deletes a note for good after its time there.");
+        out = cmdMove(store, args, true);
+        break;
+      case "trash": out = cmdMove(store, args, true); break;
       case "restore": out = cmdMove(store, args, false); break;
       case "delete": out = cmdDelete(store, args); break;
       case "empty-trash": out = cmdEmptyTrash(store); break;

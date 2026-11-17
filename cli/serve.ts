@@ -58,7 +58,11 @@ async function handle(store: Store, token: string, port: number, request: Reques
 
   if (request.method === "GET" && url.pathname === "/api/state") return json({ kb: true, version: storeVersion(store) });
   // Another site cannot read this answer, so it cannot learn the token.
-  if (request.method === "GET" && url.pathname === "/api/page") return json(pageData(store, token));
+  if (request.method === "GET" && url.pathname === "/api/page") {
+    // A note whose time in the trash is up goes before the page shows it.
+    tidy(store);
+    return json(pageData(store, token));
+  }
   if ((request.method === "GET" || request.method === "HEAD") && !url.pathname.startsWith("/api/")) return staticFile(url.pathname);
 
   if (url.pathname === "/api/trash/empty") {
@@ -82,7 +86,11 @@ async function handle(store: Store, token: string, port: number, request: Reques
     moveNotes(store, [id], action === "trash");
     return json({ id, trashed: action === "trash" });
   }
-  if (request.method === "DELETE" && !action) return json({ deleted: deleteNotes(store, [id]) });
+  if (request.method === "DELETE" && !action) {
+    // The page deletes only from the trash. An active note goes to the trash first.
+    if (!requireNote(store, id).trashed) return json({ error: `${id} is not in the trash` }, 400);
+    return json({ deleted: deleteNotes(store, [id]) });
+  }
   if (request.method === "PUT" && !action) {
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     if (body === null || typeof body !== "object" || Array.isArray(body)) throw new KbError("the request needs one JSON object");
@@ -109,17 +117,19 @@ async function staticFile(pathname: string): Promise<Response> {
   return new Response(file, { headers: { "cache-control": cache } });
 }
 
+/** Clear the trash. An error waits for the next turn, and never stops the page. */
+function tidy(store: Store): void {
+  try {
+    tidyTrash(store);
+  } catch {
+    // the next turn tries again
+  }
+}
+
 export function serve(store: Store, options: { port?: number } = {}): Served {
   const token = randomBytes(16).toString("hex");
-  const tidy = () => {
-    try {
-      tidyTrash(store);
-    } catch {
-      // the next turn tries again
-    }
-  };
-  tidy();
-  const timer = setInterval(tidy, TIDY_MS);
+  tidy(store);
+  const timer = setInterval(() => tidy(store), TIDY_MS);
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: options.port ?? DEFAULT_PORT,
