@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildContext, indexLine } from "../cli/context.ts";
+import { SAVE_RULE, buildContext, contextBudget, indexLine } from "../cli/context.ts";
 import { slugify } from "../cli/note.ts";
 import { HARD_CONTEXT_CAP, type StoredNote } from "../cli/store.ts";
 import { plain, putNote, tempRepo, tempStore } from "./helpers.ts";
@@ -48,6 +48,8 @@ describe("kb context ranking", () => {
     expect(text).toContain("### one [gotcha] First fact\nverified 2026-01-01 at abc1234 | confidence medium | anchors: src/a.ts#run\nThe body of one.");
     expect(text.indexOf("## Index")).toBeLessThan(text.indexOf("## Notes"));
     expect(text.trimEnd().endsWith("`kb search <words>` searches every note.")).toBe(true);
+    // The write path comes before the notes, so the budget can never cut it.
+    expect(text.indexOf(SAVE_RULE)).toBeLessThan(text.indexOf("## Index"));
   });
 
   test("a note is printed once: its body, or an index line when the body did not fit", () => {
@@ -130,7 +132,7 @@ describe("kb context budgets", () => {
     ids.forEach((id, i) => putNote(store, { id, body: `START-${id} ${"x".repeat(200)} END-${id}`, last_verified: `2026-01-${String(28 - i).padStart(2, "0")}T00:00:00Z` }));
 
     const result = buildContext(store, plain());
-    expect(result.chars).toBeLessThanOrEqual(2000);
+    expect(result.chars).toBeLessThanOrEqual(contextBudget(2000));
     expect(result.text.length).toBe(result.chars);
     expect(result.bodies.length).toBeGreaterThan(0);
     expect(result.bodies.length).toBeLessThan(ids.length);
@@ -171,7 +173,7 @@ describe("kb context budgets", () => {
     expect(result.hiddenIndexLines).toBe(12 - shown - 5);
     expect(result.text).toContain(`${12 - shown - 5} more index lines are over the index budget.`);
     expect(result.text.match(/^- n\d\d \[/gm)?.length).toBe(5);
-    expect(result.chars).toBeLessThanOrEqual(900);
+    expect(result.chars).toBeLessThanOrEqual(contextBudget(900));
   });
 
   test("a note with a body does not count against the index budget", () => {

@@ -1,15 +1,20 @@
 // Reads the SessionStart JSON on stdin and prints `kb context` for the session's directory,
-// plus at most three one-line notices. With hooks/session-end.ts and the skills, this is the
-// only code that knows about Claude Code.
+// the rule to save new facts with `kb add`, and at most four one-line notices. With the other
+// files in hooks/ and the skills, this is the only code that knows about Claude Code.
 
-import { buildContext } from "../cli/context.ts";
+import { SAVE_RULE, buildContext } from "../cli/context.ts";
 import { resolveRepo } from "../cli/scope.ts";
 import { isSaved, takeUnsaved } from "../cli/session.ts";
 import { cachedStaleCount } from "../cli/stale.ts";
 import { Store } from "../cli/store.ts";
 import { detached, kickSync } from "../cli/sync.ts";
+import { MEMORY_ON_NOTICE, MEMORY_RULE, autoMemoryOn } from "./auto-memory.ts";
 
 const STALE_NOTICE_ABOVE = 5;
+/** Claude Code shows SessionStart output above 10,000 characters as a file preview. */
+const OUTPUT_LIMIT = 9900;
+/** What a session gets when there is no note to show: no store yet, or a broken one. */
+const RULES_ONLY = `# kb\n${SAVE_RULE}\n${MEMORY_RULE}\n`;
 
 try {
   let cwd = process.cwd();
@@ -45,11 +50,24 @@ try {
     if (text && !stale?.fresh) detached(store, ["stale", "--repo", cwd, "--quiet"]);
   }
 
-  const out = notices.length === 0 ? text : `${text || "# kb\n"}${text ? "\n" : ""}${notices.join("\n")}\n`;
-  if (out) process.stdout.write(out);
+  // Once per session: a /clear, a resume or a compaction is the same session to the user.
+  if (input.source === "startup" && autoMemoryOn(process.env, process.env.CLAUDE_PROJECT_DIR || cwd)) notices.push(MEMORY_ON_NOTICE);
+
+  // The auto memory rule goes right under the save rule, so the two read as one instruction.
+  const head = text ? text.replace(SAVE_RULE, `${SAVE_RULE}\n${MEMORY_RULE}`) : RULES_ONLY;
+  // Output over the limit becomes a file preview. A notice that does not fit is left out.
+  const shown: string[] = [];
+  let length = head.length + 1;
+  for (const notice of notices) {
+    if (length + notice.length + 1 > OUTPUT_LIMIT) continue;
+    shown.push(notice);
+    length += notice.length + 1;
+  }
+  process.stdout.write(shown.length === 0 ? head : `${head}\n${shown.join("\n")}\n`);
   // Fetch changes from other machines in the background, at most once per 5 minutes.
   kickSync(store, 5 * 60_000);
 } catch {
-  // silent on purpose
+  // The rules for saving reach every session, also one with a broken store: `kb add` says what is wrong.
+  process.stdout.write(RULES_ONLY);
 }
 process.exit(0);

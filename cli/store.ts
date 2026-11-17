@@ -30,9 +30,9 @@ export interface StoredNote extends Note {
 
 /**
  * SessionStart output above 10,000 characters is replaced by a file preview, so stay well under it.
- * The hook may add a few lines of its own after the context.
+ * The hook adds lines of its own after the context, and drops a notice that would pass the limit.
  */
-export const HARD_CONTEXT_CAP = 9000;
+export const HARD_CONTEXT_CAP = 8800;
 
 const DEFAULT_CONFIG: Config = {
   budgets: { indexLines: 60, contextChars: 8000 },
@@ -168,7 +168,7 @@ export class Store {
     return path;
   }
 
-  /** Move a note between notes/ and archive/, and record when it was archived. Nothing is ever deleted. */
+  /** Move a note between notes/ and archive/, and record when it was archived. */
   move(note: StoredNote, archived: boolean, at: string): string {
     const target = this.notePath(note, archived);
     if (existsSync(target)) throw new KbError(`cannot move ${note.id}: ${relative(this.home, target)} already exists`);
@@ -177,6 +177,11 @@ export class Store {
     const { path: _path, archived: _archived, archived_at: _at, ...rest } = note;
     writeAtomic(target, serializeNote(archived ? { ...rest, archived_at: at } : rest));
     return target;
+  }
+
+  /** Remove a note file for good. In a git store, the history still has it. */
+  remove(note: StoredNote): void {
+    rmSync(note.path);
   }
 
   // ---- usage ----
@@ -200,6 +205,15 @@ export class Store {
       }
     }
     return total;
+  }
+
+  /** Forget the counters of this machine for these ids. Other machines keep theirs: `kb add` never reuses an id that has counters. */
+  dropUsage(ids: string[]): void {
+    const path = join(this.home, "usage", `${this.machine()}.json`);
+    const data = readJson<Record<string, Usage>>(path);
+    if (!data || !ids.some((id) => id in data)) return;
+    for (const id of ids) delete data[id];
+    writeAtomic(path, `${JSON.stringify(data, null, 2)}\n`);
   }
 
   bumpUsage(ids: string[], now: string): void {

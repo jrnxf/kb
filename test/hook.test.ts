@@ -1,15 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { SAVE_RULE } from "../cli/context.ts";
+import { MEMORY_ON_NOTICE, MEMORY_RULE } from "../hooks/auto-memory.ts";
 import { ROOT, kb, plain, putNote, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const HOOK = join(ROOT, "hooks", "session-start.sh");
 
-function runHook(options: { home: string; stdin: string; path?: string }) {
+// A Claude Code config folder with auto memory off, so the developer's own settings never reach a test.
+const QUIET_CONFIG = tempDir("kb-claude-");
+writeFileSync(join(QUIET_CONFIG, "settings.json"), JSON.stringify({ autoMemoryEnabled: false }));
+
+function runHook(options: { home: string; stdin: string; path?: string; env?: Record<string, string | undefined> }) {
   const started = performance.now();
   const r = Bun.spawnSync([HOOK], {
     cwd: plain(),
-    env: { ...process.env, KB_HOME: options.home, PATH: options.path ?? process.env.PATH },
+    env: { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: undefined, CLAUDE_PROJECT_DIR: undefined, CLAUDE_CONFIG_DIR: QUIET_CONFIG, KB_HOME: options.home, PATH: options.path ?? process.env.PATH, ...options.env },
     stdin: Buffer.from(options.stdin),
     stdout: "pipe",
     stderr: "pipe",
@@ -17,13 +23,15 @@ function runHook(options: { home: string; stdin: string; path?: string }) {
   return { code: r.exitCode, stdout: r.stdout.toString(), stderr: r.stderr.toString(), ms: performance.now() - started };
 }
 
+const SAVING = `# kb\n${SAVE_RULE}\n${MEMORY_RULE}\n`;
+
 const input = (cwd: string, source = "startup") => JSON.stringify({ session_id: "abc", transcript_path: "/home/user/t.jsonl", cwd, hook_event_name: "SessionStart", source });
 
 describe("SessionStart hook", () => {
-  test("exits 0 and prints nothing when there is no store", () => {
+  test("prints only the rules for saving when there is no store, and creates none", () => {
     const home = join(tempDir(), "missing");
     const result = runHook({ home, stdin: input(plain()) });
-    expect(result).toMatchObject({ code: 0, stdout: "", stderr: "" });
+    expect(result).toMatchObject({ code: 0, stdout: SAVING, stderr: "" });
     expect(existsSync(home)).toBe(false);
   });
 
@@ -37,18 +45,19 @@ describe("SessionStart hook", () => {
     expect(result).toMatchObject({ code: 0, stdout: "", stderr: "" });
   });
 
-  test("exits 0 and prints nothing on bad stdin, a missing directory or a broken store", () => {
+  test("exits 0 on bad stdin, a missing directory or a broken store", () => {
     const store = tempStore();
-    expect(runHook({ home: store.home, stdin: "" })).toMatchObject({ code: 0, stdout: "", stderr: "" });
-    expect(runHook({ home: store.home, stdin: "{not json" })).toMatchObject({ code: 0, stdout: "", stderr: "" });
-    expect(runHook({ home: store.home, stdin: input("/does/not/exist") })).toMatchObject({ code: 0, stdout: "", stderr: "" });
+    // No note to show: only the rules for saving.
+    expect(runHook({ home: store.home, stdin: "" })).toMatchObject({ code: 0, stdout: SAVING, stderr: "" });
+    expect(runHook({ home: store.home, stdin: "{not json" })).toMatchObject({ code: 0, stdout: SAVING, stderr: "" });
+    expect(runHook({ home: store.home, stdin: input("/does/not/exist") })).toMatchObject({ code: 0, stdout: SAVING, stderr: "" });
     writeFileSync(join(store.home, "kb.config.json"), "{broken");
     writeFileSync(join(store.home, "notes", "bad.md"), "no frontmatter here");
-    expect(runHook({ home: store.home, stdin: input(plain()) })).toMatchObject({ code: 0, stdout: "", stderr: "" });
+    expect(runHook({ home: store.home, stdin: input(plain()) })).toMatchObject({ code: 0, stdout: SAVING, stderr: "" });
     // A file where the store should be.
     const file = join(tempDir(), "file");
     writeFileSync(file, "x");
-    expect(runHook({ home: file, stdin: input(plain()) })).toMatchObject({ code: 0, stdout: "", stderr: "" });
+    expect(runHook({ home: file, stdin: input(plain()) })).toMatchObject({ code: 0, stdout: SAVING, stderr: "" });
   });
 
   test("prints the context for the session directory on every source", () => {
@@ -66,6 +75,21 @@ describe("SessionStart hook", () => {
     const elsewhere = runHook({ home: store.home, stdin: input(tempRepo({ remote: "git@github.com:acme/web.git" })) });
     expect(elsewhere.stdout).not.toContain("repo-note");
     expect(elsewhere.stdout).toContain("global-note");
+  });
+
+  test("stays under the 10,000 character limit at the largest budget, with every notice", () => {
+    const store = tempStore();
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 1, contextChars: 20000 } }));
+    for (let i = 0; i < 40; i++) putNote(store, { id: `big-${i}`, body: "x".repeat(400) });
+    const repo = tempRepo();
+    const END = join(ROOT, "hooks", "session-end.sh");
+    for (let i = 0; i < 20; i++) {
+      const body = { session_id: `lost-${i}`, transcript_path: `/home/user/${"t".repeat(150)}-${i}.jsonl`, cwd: repo, hook_event_name: "SessionEnd", reason: "clear" };
+      Bun.spawnSync([END], { env: { ...process.env, KB_HOME: store.home }, stdin: Buffer.from(JSON.stringify(body)) });
+    }
+    const out = runHook({ home: store.home, stdin: input(repo), env: { CLAUDE_CONFIG_DIR: tempDir("kb-claude-") } }).stdout;
+    expect(out).toContain("An earlier session in this directory");
+    expect(out.length).toBeLessThan(10000);
   });
 
   test("finishes well under a second with a large store", () => {
@@ -162,7 +186,7 @@ describe("session notices", () => {
     const store = tempStore();
     const repo = tempRepo();
     end(store.home, endInput(repo, "lost"));
-    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toMatch(/^# kb\nAn earlier session/);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toStartWith(`${SAVING}\nAn earlier session`);
   });
 
   test("after a compaction it says once per start that no checkpoint ran, unless one did", () => {
@@ -191,6 +215,30 @@ describe("session notices", () => {
     expect(existsSync(cache)).toBe(false);
     kb(store, ["stale"], { cwd: repo });
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain("may be stale");
+  });
+
+  test("auto memory that is on gives one line, and the env variable or a settings file turns it off", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    putNote(store, { id: "g" });
+    const run = (env: Record<string, string | undefined>) => runHook({ home: store.home, stdin: startInput(repo, "startup"), env }).stdout;
+    const on = tempDir("kb-claude-");
+    // The rule to stay out of auto memory is there either way.
+    expect(run({})).toContain(MEMORY_RULE);
+    expect(run({})).not.toContain(MEMORY_ON_NOTICE);
+    expect(run({ CLAUDE_CONFIG_DIR: on })).toContain(MEMORY_ON_NOTICE);
+    expect(run({ CLAUDE_CONFIG_DIR: on, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" })).not.toContain(MEMORY_ON_NOTICE);
+    // A false value forces it on over every setting, as Claude Code does.
+    expect(run({ CLAUDE_CODE_DISABLE_AUTO_MEMORY: "0" })).toContain(MEMORY_ON_NOTICE);
+    // Once per session: not again after a /clear or a resume.
+    for (const source of ["clear", "resume", "compact"]) {
+      expect(runHook({ home: store.home, stdin: startInput(repo, source), env: { CLAUDE_CONFIG_DIR: on } }).stdout).not.toContain(MEMORY_ON_NOTICE);
+    }
+    // The project's local settings win over the user's.
+    mkdirSync(join(repo, ".claude"));
+    writeFileSync(join(repo, ".claude", "settings.local.json"), JSON.stringify({ autoMemoryEnabled: true }));
+    expect(run({})).toContain(MEMORY_ON_NOTICE);
+    expect(run({ CLAUDE_PROJECT_DIR: plain() })).not.toContain(MEMORY_ON_NOTICE);
   });
 
   test("a store over its index budget gives one line, and a store within it gives none", () => {
