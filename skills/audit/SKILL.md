@@ -24,7 +24,8 @@ kb budget --json
   - `anchor-changed` - an anchored file changed since the note was verified.
   - `anchor-missing` - an anchored path is gone, or the symbol is no longer in the file.
   - `commit-unknown` - the verified commit is not in the history (a rebase or a shallow clone).
-  - `decayed` - nobody verified the note within the decay window.
+  - `expired` - no session used the note and nobody checked it for `expireDays` (90). Propose trash, also for a gotcha or a convention, but not for open work that is not done. If the note still holds, the user picks keep on the card, and the keep records a check that resets the clock.
+  - `decayed` - sessions use the note, but nobody verified it within the decay window.
   - `duplicate` - the title is close to the title of another note.
 - `kb budget` shows what a session of this scope loads. `notes` gives the size and the use count of each note. In a repo, `index.capped` counts the global notes that stay out of its sessions on purpose, the least used. That is not a reason to change them here.
   - Bodies that did not fit (`context.dropped`) are normal: each of these notes still reaches the session as an index line. This alone is no reason to take a note out. The notes with the most `chars` are the bodies to shorten, so that more notes load whole.
@@ -50,7 +51,7 @@ Rules:
 
 - Check a note against the code or a source before you say that it is still true. When you checked it, set `"checked": true` on the keep, and kb records the check. If you cannot tell, propose `keep` without `checked` and say what is unknown.
 - When `over` is true, make room with merge and trash. Shortening a `trim` note frees nothing, because it ranks low. Propose trash for a `trim` note only when it is obsolete or adds nothing. Never trash `open-work` that is not done.
-- Never propose trash for a `gotcha` or a `convention` because it has no uses: a rule that works leaves no use count. Propose `keep`, and the user decides.
+- Never propose trash for a `gotcha` or a `convention` because it has no uses: a rule that works leaves no use count. Propose `keep`, and the user decides. The one exception is an `expired` note: then nobody checked it either, so propose trash.
 - For a rewrite, a merge or a shorten, write the new text now, so the user sees it on the card.
 
 ### Move rules to the instruction file

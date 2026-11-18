@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SAVE_RULE, buildContext, contextBudget, indexLine } from "../cli/context.ts";
+import { SAVE_RULE, budgetOf, buildContext, contextBudget, indexLine } from "../cli/context.ts";
+import { rememberRepo } from "../cli/repos.ts";
 import { slugify } from "../cli/note.ts";
 import { HARD_CONTEXT_CAP, type StoredNote } from "../cli/store.ts";
 import { plain, putNote, tempRepo, tempStore } from "./helpers.ts";
@@ -67,6 +68,8 @@ describe("kb context ranking", () => {
     const store = tempStore();
     setConfig(store.home, { contextChars: 700 });
     const repo = tempRepo({ remote: REMOTE });
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src/a.ts"), "export function run() {}\n");
     putNote(store, { id: "one", scope: SCOPE, title: "First fact", body: "The body of one.", anchors: ["src/a.ts#run"], verified_at_commit: "abc1234" });
     putNote(store, { id: "two", kind: "convention", title: "A global fact", body: "w".repeat(600) });
     putNote(store, { id: "three", kind: "how-to", scope: SCOPE, title: "A repo fact", body: "w".repeat(600) });
@@ -145,6 +148,42 @@ describe("kb context visibility", () => {
     putNote(store, { id: "kept" });
     const result = buildContext(store, plain());
     expect(result.bodies).toEqual(["kept"]);
+  });
+
+  test("a repo note whose file or symbol is gone says so, and a sound note or a global note does not", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: REMOTE });
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src/ledger.ts"), "export function append() {}\n");
+    putNote(store, { id: "sound", scope: SCOPE, anchors: ["src/ledger.ts#append", "src"] });
+    putNote(store, { id: "renamed", scope: SCOPE, anchors: ["src/ledger.ts#post"] });
+    putNote(store, { id: "deleted", scope: SCOPE, anchors: ["src/rates.ts", "src/ledger.ts"] });
+    putNote(store, { id: "outside", scope: SCOPE, anchors: ["../elsewhere.ts"] });
+    putNote(store, { id: "global-anchored", anchors: ["src/nothing.ts"] });
+    const { text, gone } = buildContext(store, repo);
+    expect(gone).toEqual([
+      { id: "deleted", detail: "src/rates.ts does not exist" },
+      { id: "outside", detail: "../elsewhere.ts does not exist" },
+      { id: "renamed", detail: "post is no longer in src/ledger.ts" },
+    ]);
+    expect(text).toContain("## Anchors gone\nThese notes name a file or a symbol that is not in the checkout now.");
+    expect(text).toContain("- renamed: post is no longer in src/ledger.ts\n");
+    // Outside the repo nothing is checked: a global note's anchors name no checkout.
+    expect(buildContext(store, plain()).gone).toEqual([]);
+  });
+
+  test("a checkout that lacks many anchored files lists five notes, so the index keeps its room", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: REMOTE });
+    for (let i = 0; i < 40; i++) putNote(store, { id: `gone-${String(i).padStart(2, "0")}`, scope: SCOPE, anchors: [`src/file-${i}.ts`] });
+    const result = buildContext(store, repo);
+    expect(result.gone).toHaveLength(result.bodies.length + result.index.length);
+    const section = result.text.slice(result.text.indexOf("## Anchors gone"), result.text.indexOf("## Index"));
+    expect(section.match(/^- gone-/gm)).toHaveLength(5);
+    expect(section).toContain(`${result.gone.length - 5} more. \`kb stale\` lists them.`);
+    // The kb budget of the scope sees the same session as the session start.
+    rememberRepo(store, SCOPE, repo);
+    expect(budgetOf(store, SCOPE).context.chars).toBe(result.chars);
   });
 
   test("prints nothing when no note is visible", () => {

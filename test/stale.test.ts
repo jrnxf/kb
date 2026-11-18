@@ -44,6 +44,31 @@ describe("kb stale", () => {
     expect(findStale(store, repo, NOW).candidates[1]!.detail).toBe(`changed since ${head}: src/ledger.ts`);
   });
 
+  test("a gone symbol does not hide a change to another anchor, also on the same file", () => {
+    const { repo, store, head } = fixture();
+    mkdirSync(join(repo, "b"));
+    writeFileSync(join(repo, "b/x.ts"), "x\n");
+    commit(repo, "add b");
+    const base = sh(repo, "git", "rev-parse", "--short", "HEAD");
+    putNote(store, { id: "same-file", scope: SCOPE, verified_at_commit: base, anchors: ["src/ledger.ts#gone", "src/ledger.ts#append"], last_verified: FRESH });
+    putNote(store, { id: "same-word", scope: SCOPE, verified_at_commit: base, anchors: ["src/rates.ts#b", "b"], last_verified: FRESH });
+    writeFileSync(join(repo, "src/ledger.ts"), "export function append() { return 1; }\n");
+    writeFileSync(join(repo, "b/x.ts"), "y\n");
+    commit(repo, "change both");
+    expect(reasons(store, repo)).toEqual(["same-file:anchor-changed", "same-file:anchor-missing", "same-word:anchor-changed", "same-word:anchor-missing"]);
+    expect(head).not.toBe(base);
+  });
+
+  test("a symbol check reads only a regular file of a sane size, so a pipe never blocks it", () => {
+    const { repo, store } = fixture();
+    sh(repo, "mkfifo", "pipe");
+    writeFileSync(join(repo, "huge.txt"), "x".repeat(2_000_001));
+    putNote(store, { id: "pipe", scope: SCOPE, anchors: ["pipe#x"], last_verified: FRESH });
+    putNote(store, { id: "huge", scope: SCOPE, anchors: ["huge.txt#nothing"], last_verified: FRESH });
+    putNote(store, { id: "dir", scope: SCOPE, anchors: ["src#nothing"], last_verified: FRESH });
+    expect(reasons(store, repo)).toEqual([]);
+  });
+
   test("anchor-missing: the path is gone, or the symbol left the file", () => {
     const { repo, store, head } = fixture();
     putNote(store, { id: "path", scope: SCOPE, verified_at_commit: head, anchors: ["src/gone.ts"], last_verified: FRESH });
@@ -66,14 +91,34 @@ describe("kb stale", () => {
     expect(reasons(store, repo)).toEqual(["never:commit-unknown", "rebased:commit-unknown"]);
   });
 
-  test("decayed: last_verified is older than the decay window", () => {
+  test("expired: no use and no check for expireDays. decayed: used, but not verified for decayDays", () => {
     const { repo, store } = fixture();
+    putNote(store, { id: "unused", scope: SCOPE, last_verified: "2025-11-01T00:00:00Z" });
+    putNote(store, { id: "used", scope: SCOPE, last_verified: "2025-08-01T00:00:00Z" });
+    putNote(store, { id: "checked", scope: SCOPE, last_verified: "2026-01-01T00:00:00Z" });
     putNote(store, { id: "old-global", last_verified: "2025-08-01T00:00:00Z" });
-    putNote(store, { id: "old-repo", scope: SCOPE, last_verified: "2025-08-01T00:00:00Z" });
-    putNote(store, { id: "new", last_verified: FRESH });
-    expect(reasons(store, repo)).toEqual(["old-repo:decayed"]);
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ decayDays: 365 }));
-    expect(reasons(store, repo)).toEqual([]);
+    store.bumpUsage(["used"], "2026-02-01T00:00:00Z");
+    // A note gets one of the two: expired says more.
+    expect(findStale(store, repo, NOW).candidates.map((c) => `${c.id}: ${c.detail}`)).toEqual(["unused: no use and no check for 120 days", "used: last verified 212 days ago"]);
+    expect(reasons(store, repo)).toEqual(["unused:expired", "used:decayed"]);
+    // A use within expireDays keeps a note from expiring, and the config sets both windows.
+    store.bumpUsage(["unused"], "2026-02-01T00:00:00Z");
+    expect(reasons(store, repo)).toEqual(["used:decayed"]);
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ decayDays: 365, expireDays: 30 }));
+    expect(reasons(store, repo)).toEqual(["checked:expired"]);
+  });
+
+  test("a note expires after expireDays whole days, and a wrong window falls back to the default", () => {
+    const { repo, store } = fixture();
+    const daysBefore = (days: number, hours = 0) => new Date(NOW.getTime() - (days * 24 + hours) * 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    putNote(store, { id: "edge", scope: SCOPE, last_verified: daysBefore(90, 23) });
+    putNote(store, { id: "over", scope: SCOPE, last_verified: daysBefore(91) });
+    expect(reasons(store, repo)).toEqual(["over:expired"]);
+    for (const expireDays of [null, 0, -1, "abc"]) {
+      writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ expireDays, decayDays: expireDays }));
+      expect(store.config()).toMatchObject({ expireDays: 90, decayDays: 180 });
+      expect(reasons(store, repo)).toEqual(["over:expired"]);
+    }
   });
 
   test("duplicate: two titles share most of their words, and the newer note is the candidate", () => {
@@ -94,7 +139,7 @@ describe("kb stale", () => {
     putNote(store, { id: "promoted", scope: SCOPE, promoted_to: "CLAUDE.md", last_verified: old });
     putNote(store, { id: "global", last_verified: old });
     putNote(store, { id: "mine", scope: SCOPE, last_verified: old });
-    expect(reasons(store, repo)).toEqual(["mine:decayed"]);
+    expect(reasons(store, repo)).toEqual(["mine:expired"]);
     const outside = kb(store, ["stale", "--json"]);
     expect(outside.json).toMatchObject({ scope: null, notes: 1 });
     expect(outside.json.candidates[0].id).toBe("global");
@@ -108,8 +153,8 @@ describe("kb verify", () => {
     putNote(store, { id: "g" });
     writeFileSync(join(repo, "src/ledger.ts"), "export function append() { return 2; }\n");
     commit(repo, "change");
-    // Both notes are also past the decay window, because the fixture dates are old.
-    expect(kb(store, ["stale", "--json"], { cwd: repo }).json.candidates.map((c: any) => `${c.id}:${c.reason}`)).toEqual(["ledger:anchor-changed", "ledger:decayed"]);
+    // Both notes have also expired, because the fixture dates are old and nobody used them.
+    expect(kb(store, ["stale", "--json"], { cwd: repo }).json.candidates.map((c: any) => `${c.id}:${c.reason}`)).toEqual(["ledger:anchor-changed", "ledger:expired"]);
 
     const result = kb(store, ["verify", "ledger", "g", "--json"], { cwd: repo });
     const newHead = sh(repo, "git", "rev-parse", "--short", "HEAD");

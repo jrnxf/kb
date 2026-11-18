@@ -1,8 +1,9 @@
 // `kb context`: the text a session gets at start. Ranking and both budgets live here.
 
 import { KINDS, normalizeTitle } from "./note.ts";
-import { rememberRepo } from "./repos.ts";
+import { rememberRepo, repoRoot } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
+import { anchorReader, missingAnchors } from "./stale.ts";
 import { HARD_CONTEXT_CAP, type Store, type StoredNote, type Usage } from "./store.ts";
 
 export interface ContextResult {
@@ -18,6 +19,8 @@ export interface ContextResult {
   hiddenIndexLines: number;
   /** Global notes over the global cap in a repo session, the least used. `kb search` still finds them. */
   capped: string[];
+  /** Notes in the session whose anchor is gone from the checkout, with what is gone. */
+  gone: { id: string; detail: string }[];
   chars: number;
 }
 
@@ -37,7 +40,7 @@ export function contextBudget(contextChars: number): number {
   return Math.min(Math.max(500, contextChars) + SAVE_RULE.length + 1, HARD_CONTEXT_CAP);
 }
 
-const EMPTY: ContextResult = { text: "", scope: null, index: [], bodies: [], dropped: [], hiddenIndexLines: 0, capped: [], chars: 0 };
+const EMPTY: ContextResult = { text: "", scope: null, index: [], bodies: [], dropped: [], hiddenIndexLines: 0, capped: [], gone: [], chars: 0 };
 
 /**
  * Repo notes before global notes, so the notes of the repo are never crowded out. Repo notes go by
@@ -100,11 +103,22 @@ export function buildContext(store: Store, repoPath: string): ContextResult {
   if (!store.exists()) return EMPTY;
   const { scope, root } = resolveRepo(repoPath, store);
   if (scope && root) rememberRepo(store, scope, root);
-  return contextFor(store, scope);
+  return contextFor(store, scope, root);
 }
 
-/** The context of a scope: a repo id, or null for a session outside any repo. */
-export function contextFor(store: Store, scope: string | null): ContextResult {
+/** At most this many characters say what is gone from one note, so one note cannot fill the budget. */
+const GONE_DETAIL_CHARS = 120;
+
+/** At most this many notes are listed under "Anchors gone". A checkout that lacks many files must not push notes out of the index. */
+const GONE_LINES = 5;
+
+/**
+ * The context of a scope: a repo id, or null for a session outside any repo. With the checkout at
+ * `root`, each repo note in the session has its anchors checked, and a note whose file or symbol is
+ * gone says so. The check reads files only, so a session start can afford it. `kb stale` runs the
+ * git checks later.
+ */
+export function contextFor(store: Store, scope: string | null, root: string | null = null): ContextResult {
   if (!store.exists()) return EMPTY;
   const usage = store.usage();
   const config = store.config();
@@ -121,6 +135,16 @@ export function contextFor(store: Store, scope: string | null): ContextResult {
   const capped = scope ? globals.slice(Math.max(0, config.budgets.globalIndexLines)) : [];
   const ranked = all.filter((n) => !capped.includes(n));
   const charBudget = contextBudget(config.budgets.contextChars);
+  const goneOf = new Map<string, string>();
+  if (scope && root) {
+    const read = anchorReader();
+    for (const note of ranked) {
+      if (note.scope !== scope || note.anchors.length === 0) continue;
+      const missing = missingAnchors(note, root, read).map((m) => m.detail).join("; ");
+      if (missing) goneOf.set(note.id, missing.length > GONE_DETAIL_CHARS ? `${missing.slice(0, GONE_DETAIL_CHARS - 3)}...` : missing);
+    }
+  }
+  const goneIn = (shown: StoredNote[]) => shown.filter((n) => goneOf.has(n.id)).map((n) => ({ id: n.id, detail: goneOf.get(n.id)! }));
   let indexCount = Math.min(ranked.length, Math.max(1, config.budgets.indexLines));
 
   // A note with a body needs no index line: the body starts with its id and title. Bodies are
@@ -130,6 +154,12 @@ export function contextFor(store: Store, scope: string | null): ContextResult {
   const render = (listed: StoredNote[], bodies: StoredNote[]): string => {
     const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, "These notes come from earlier sessions. Each is below once: with its body, or as an index line. An index line is the id, then after \"...\" the words of the title that the id cut.", SAVE_RULE];
     if (syncError) lines.push(`kb sync did not finish: ${syncError} \`kb sync\` shows the detail.`);
+    // A note whose file or symbol is gone may be wrong now. The session checks it before it acts on it.
+    const gone = goneIn([...bodies, ...listed]);
+    if (gone.length > 0) {
+      lines.push("", "## Anchors gone", "These notes name a file or a symbol that is not in the checkout now. Check a note before you act on it, then update it or trash it.", ...gone.slice(0, GONE_LINES).map((g) => `- ${g.id}: ${g.detail}`));
+      if (gone.length > GONE_LINES) lines.push(`${gone.length - GONE_LINES} more. \`kb stale\` lists them.`);
+    }
     if (listed.length > 0) {
       lines.push("", "## Index");
       for (const section of [scope, "global"]) {
@@ -173,6 +203,7 @@ export function contextFor(store: Store, scope: string | null): ContextResult {
     dropped: dropped.map((n) => n.id),
     hiddenIndexLines: dropped.length - listed.length,
     capped: capped.map((n) => n.id),
+    gone: goneIn([...bodies, ...listed]),
     chars: text.length,
   };
 }
@@ -199,7 +230,7 @@ export function buildBudget(store: Store, repoPath: string): BudgetResult {
 
 /** The budget of a scope: a repo id, or null for global notes only. */
 export function budgetOf(store: Store, scope: string | null): BudgetResult {
-  return budgetFor(store, contextFor(store, scope));
+  return budgetFor(store, contextFor(store, scope, scope ? repoRoot(store, scope) : null));
 }
 
 function budgetFor(store: Store, context: ContextResult): BudgetResult {

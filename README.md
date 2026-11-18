@@ -52,11 +52,15 @@ highest.
   trash. Each takes the exact repo id, and none touches `global`.
 - **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: an
   anchored file changed since the note was verified, an anchor is gone, the verified commit left
-  the history, nobody verified the note for `decayDays` (180), or two titles are close.
+  the history, no session used the note and nobody checked it for `expireDays` (90), nobody
+  verified it for `decayDays` (180), or two titles are close. An expired note goes to the audit
+  as trash, and you decide: kb never deletes a note on its own. A session start also checks the
+  anchors of the repo's notes on disk, and tells the agent which notes name a file or a symbol that
+  is gone.
   `kb stale` and `/kb:audit` cover one scope: the repo's notes in a repo, the global notes outside
   any repo. `/kb:audit` reads the code for each candidate, checks both budgets, and proposes keep, rewrite,
-  merge, shorten or trash with `kb audit propose`. The global audit also moves rules to the global
-  instructions file: the agent merges the global conventions into a few short rules, and each card
+  merge, shorten or trash with `kb audit propose`. Each audit also moves rules to the
+  instruction file of its scope: the agent merges the conventions into a few short rules, and each card
   shows the lines that Apply adds to the file. Apply writes them and does not commit the file. You decide in the `kb serve` page, one
   card per note: each card shows the note, the new text struck against the old, and the agent's
   pick with its reason. `a` accepts the agent's pick, `k` keeps the note as is and records that
