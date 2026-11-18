@@ -4,9 +4,9 @@ import type { AuditCard, AuditData, AuditNote, AuditPick } from "../../../cli/wi
 
 /**
  * What the user can pick on a card. keep says the note is still true. ask sends the note back to
- * the agent. edit opens the user's own text.
+ * the agent. edit opens the user's own text. promote moves the rule into an instruction file.
  */
-export type Choice = "rewrite" | "ask" | "edit" | "trash" | "merge" | "keep";
+export type Choice = "rewrite" | "ask" | "edit" | "trash" | "merge" | "keep" | "promote";
 
 export interface Pick {
   action: Exclude<Choice, "edit">;
@@ -15,6 +15,8 @@ export interface Pick {
   body?: string;
   /** For ask: what is wrong with the note. */
   request?: string;
+  /** For promote: the user's own text for the rule. */
+  rule?: string;
   /** For keep: the user picked it on the card, so the note records the check. */
   checked?: boolean;
 }
@@ -22,7 +24,7 @@ export interface Pick {
 /** One step of the deck: a card, or a divider before a group of cards. */
 export type Step = { type: "card"; card: AuditCard; i: number } | { type: "divider"; group: string; cards: number[] };
 
-export const KEYS: Record<Choice, string> = { rewrite: "u", ask: "r", edit: "e", trash: "t", merge: "m", keep: "k" };
+export const KEYS: Record<Choice, string> = { rewrite: "u", ask: "r", edit: "e", trash: "t", merge: "m", keep: "k", promote: "p" };
 
 /** The key that takes the agent's pick, whatever it is. */
 export const ACCEPT_KEY = "a";
@@ -43,12 +45,15 @@ export function steps(cards: AuditCard[]): Step[] {
  * The buttons of a card. The agent's pick comes first, as accept. Then the other picks, each once.
  */
 export function choices(card: AuditCard): Choice[] {
-  const all: Choice[] = card.merge ? ["merge", "keep"] : [...(card.proposed ? (["rewrite"] as Choice[]) : []), "keep", "trash"];
+  // A promote card with notes that move along has no trash, as a merge card has none.
+  const all: Choice[] = card.promote ? ["promote", "keep", ...(card.merge ? [] : (["trash"] as Choice[]))]
+    : card.merge ? ["merge", "keep"]
+    : [...(card.proposed ? (["rewrite"] as Choice[]) : []), "keep", "trash"];
   return [card.action, ...all.filter((c) => c !== card.action)];
 }
 
 /** The picks that change the text. They sit on the text box, not in the row of buttons. */
-export const textChoices = (card: AuditCard): Choice[] => (card.merge ? ["edit"] : ["edit", "ask"]);
+export const textChoices = (card: AuditCard): Choice[] => (card.merge && !card.promote ? ["edit"] : ["edit", "ask"]);
 
 /** The choice a key takes on a card, if any. */
 export function choiceForKey(card: AuditCard, key: string): Choice | undefined {
@@ -70,16 +75,49 @@ export function freed(cards: AuditCard[], picks: Pick[]): number {
     const pick = picks[i]!;
     if (pick.action === "trash") return n + (placed(card.note) ? 1 : 0);
     if (pick.action === "merge") return n + (card.merge ?? []).filter(placed).length;
+    // A moved rule loads from the instructions file, so its notes leave the index.
+    if (pick.action === "promote") return n + [card.note, ...(card.merge ?? [])].filter(placed).length;
     return n;
   }, 0);
+}
+
+/** The notes on a card: its note, and the notes a merge or a move takes along. */
+const notesOf = (card: AuditCard) => 1 + (card.merge?.length ?? 0);
+
+/** How many notes the picks change, of how many notes the cards hold. A merge or a move changes every note on its card. */
+export function changes(cards: AuditCard[], picks: Pick[]): { changed: number; total: number } {
+  const changed = cards.reduce((n, card, i) => {
+    const action = picks[i]!.action;
+    return n + (action === "keep" ? 0 : action === "merge" || action === "promote" ? notesOf(card) : 1);
+  }, 0);
+  return { changed, total: cards.reduce((n, card) => n + notesOf(card), 0) };
 }
 
 /** Notes that still reach no session after the picks. */
 export const stillHidden = (data: AuditData, picks: Pick[]) => Math.max(0, data.index.hidden - freed(data.cards, picks));
 
+/** The file a promote card writes, by its name alone: CLAUDE.md. */
+export const promoteFile = (card: AuditCard) => card.promote?.file.split("/").pop() ?? "CLAUDE.md";
+
+/**
+ * The lines Apply adds for a promote card: the rule, after a new heading when the section does not
+ * exist yet. The user's own text takes the place of the agent's rule.
+ */
+export function promoteLines(card: AuditCard, pick: Pick): string[] {
+  const promote = card.promote!;
+  if (pick.rule === undefined) return promote.added;
+  const heading = promote.added.slice(0, promote.added.length - promote.rule.split("\n").length);
+  return [...heading, ...pick.rule.split("\n")];
+}
+
+/** The keep of a card, in words: a merge keeps both notes, a promote keeps the note in kb. */
+const keepLabel = (card: AuditCard) => (card.promote ? "keep in kb" : card.merge ? "keep both" : "keep as is");
+
 /** The words for a pick, as the card and the summary say it. */
 export function pickLabel(card: AuditCard, pick: Pick): string {
   switch (pick.action) {
+    case "promote":
+      return `move to ${promoteFile(card)}${pick.rule !== undefined ? " with your text" : ""}`;
     case "rewrite":
       return pick.body !== undefined || pick.title !== undefined ? "rewrite with your text" : "rewrite with the agent's text";
     case "merge":
@@ -87,7 +125,7 @@ export function pickLabel(card: AuditCard, pick: Pick): string {
     case "ask":
       return "ask the agent to rewrite";
     case "keep":
-      return card.merge ? "keep both" : "keep as is";
+      return keepLabel(card);
     default:
       return pick.action;
   }
@@ -96,9 +134,10 @@ export function pickLabel(card: AuditCard, pick: Pick): string {
 /** The label of a choice's button. */
 export function choiceLabel(card: AuditCard, choice: Choice): string {
   if (choice === "rewrite") return "use new text";
+  if (choice === "promote") return `move to ${promoteFile(card)}`;
   if (choice === "ask") return "ask the agent";
   if (choice === "edit") return "edit";
-  if (choice === "keep") return card.merge ? "keep both" : "keep as is";
+  if (choice === "keep") return keepLabel(card);
   return choice;
 }
 
@@ -110,6 +149,7 @@ export function toPicks(cards: AuditCard[], picks: Pick[]): AuditPick[] {
     if (pick.title !== undefined) out.title = pick.title;
     if (pick.body !== undefined) out.body = pick.body;
     if (pick.request !== undefined) out.request = pick.request;
+    if (pick.rule !== undefined) out.rule = pick.rule;
     if (pick.checked) out.checked = true;
     return out;
   });
@@ -118,7 +158,7 @@ export function toPicks(cards: AuditCard[], picks: Pick[]): AuditPick[] {
 /** The summary before Apply: each pick with the cards that have it, in a fixed order. */
 export function summary(cards: AuditCard[], picks: Pick[]): { label: string; action: Pick["action"]; ids: string[] }[] {
   const groups = new Map<string, { label: string; action: Pick["action"]; ids: string[] }>();
-  const order = ["rewrite", "merge", "ask", "trash", "keep"];
+  const order = ["promote", "rewrite", "merge", "ask", "trash", "keep"];
   cards.forEach((card, i) => {
     const pick = picks[i]!;
     const label = pick.action === "ask" ? "sent back to the agent to rewrite" : pickLabel(card, pick);

@@ -71,29 +71,30 @@ describe("kb stale", () => {
     putNote(store, { id: "old-global", last_verified: "2025-08-01T00:00:00Z" });
     putNote(store, { id: "old-repo", scope: SCOPE, last_verified: "2025-08-01T00:00:00Z" });
     putNote(store, { id: "new", last_verified: FRESH });
-    expect(reasons(store, repo)).toEqual(["old-global:decayed", "old-repo:decayed"]);
+    expect(reasons(store, repo)).toEqual(["old-repo:decayed"]);
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ decayDays: 365 }));
     expect(reasons(store, repo)).toEqual([]);
   });
 
   test("duplicate: two titles share most of their words, and the newer note is the candidate", () => {
     const { repo, store } = fixture();
-    putNote(store, { id: "first", title: "Amounts are stored as integer cents", created: "2026-01-01T00:00:00Z", last_verified: FRESH });
+    putNote(store, { id: "first", scope: SCOPE, title: "Amounts are stored as integer cents", created: "2026-01-01T00:00:00Z", last_verified: FRESH });
     putNote(store, { id: "second", scope: SCOPE, title: "Store amounts as integer cents", created: "2026-02-01T00:00:00Z", last_verified: FRESH });
-    putNote(store, { id: "third", title: "Ledger rows are append-only", last_verified: FRESH });
+    putNote(store, { id: "third", scope: SCOPE, title: "Ledger rows are append-only", last_verified: FRESH });
     const found = findStale(store, repo, NOW).candidates;
     expect(found).toHaveLength(1);
     expect(found[0]).toMatchObject({ id: "second", reason: "duplicate", detail: "the title is close to first" });
   });
 
-  test("it leaves out other repos, trashed notes and promoted notes, and works outside a repo", () => {
+  test("it checks one scope: the repo's notes in a repo, the global notes outside any repo", () => {
     const { repo, store } = fixture();
     const old = "2025-01-01T00:00:00Z";
     putNote(store, { id: "elsewhere", scope: "github.com/acme/web", last_verified: old });
     putNote(store, { id: "trashed", last_verified: old }, true);
     putNote(store, { id: "promoted", scope: SCOPE, promoted_to: "CLAUDE.md", last_verified: old });
     putNote(store, { id: "global", last_verified: old });
-    expect(reasons(store, repo)).toEqual(["global:decayed"]);
+    putNote(store, { id: "mine", scope: SCOPE, last_verified: old });
+    expect(reasons(store, repo)).toEqual(["mine:decayed"]);
     const outside = kb(store, ["stale", "--json"]);
     expect(outside.json).toMatchObject({ scope: null, notes: 1 });
     expect(outside.json.candidates[0].id).toBe("global");
@@ -108,7 +109,7 @@ describe("kb verify", () => {
     writeFileSync(join(repo, "src/ledger.ts"), "export function append() { return 2; }\n");
     commit(repo, "change");
     // Both notes are also past the decay window, because the fixture dates are old.
-    expect(kb(store, ["stale", "--json"], { cwd: repo }).json.candidates.map((c: any) => `${c.id}:${c.reason}`)).toEqual(["g:decayed", "ledger:anchor-changed", "ledger:decayed"]);
+    expect(kb(store, ["stale", "--json"], { cwd: repo }).json.candidates.map((c: any) => `${c.id}:${c.reason}`)).toEqual(["ledger:anchor-changed", "ledger:decayed"]);
 
     const result = kb(store, ["verify", "ledger", "g", "--json"], { cwd: repo });
     const newHead = sh(repo, "git", "rev-parse", "--short", "HEAD");

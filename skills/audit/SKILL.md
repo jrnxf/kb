@@ -1,6 +1,6 @@
 ---
 name: audit
-description: Check the kb notes of this repo for stale, duplicate and over-budget entries, propose changes, and hand them to the user in the kb serve page. Run only when the user types /kb:audit.
+description: Check the kb notes of this repo, or the global notes outside any repo, for stale, duplicate and over-budget entries, propose changes, and hand them to the user in the kb serve page. Run only when the user types /kb:audit.
 disable-model-invocation: true
 allowed-tools: Bash(kb *)
 model: opus
@@ -11,6 +11,7 @@ effort: medium
 
 Keep the store true and small. You propose changes. The user picks in the page, and the page applies them.
 `kb` is on PATH. Run every `kb` command from the session's project directory, so scope and commit resolve.
+In a repo, the audit covers that repo's notes. Outside any repo, it is the global audit: it covers the global notes, and it can move rules to the global instructions file (step 2).
 
 ## 1. Collect
 
@@ -19,13 +20,13 @@ kb stale --json
 kb budget --json
 ```
 
-- `kb stale` lists candidates for the current repo and for `global`. Each has a `reason`:
+- `kb stale` lists candidates for this scope: the repo's notes in a repo, the global notes outside any repo. Each has a `reason`:
   - `anchor-changed` - an anchored file changed since the note was verified.
   - `anchor-missing` - an anchored path is gone, or the symbol is no longer in the file.
   - `commit-unknown` - the verified commit is not in the history (a rebase or a shallow clone).
   - `decayed` - nobody verified the note within the decay window.
   - `duplicate` - the title is close to the title of another note.
-- `kb budget` shows what a session of this repo loads. `notes` gives the size and the use count of each note.
+- `kb budget` shows what a session of this scope loads. `notes` gives the size and the use count of each note. In a repo, `index.capped` counts the global notes that stay out of its sessions on purpose, the least used. That is not a reason to change them here.
   - Bodies that did not fit (`context.dropped`) are normal: each of these notes still reaches the session as an index line. This alone is no reason to take a note out. The notes with the most `chars` are the bodies to shorten, so that more notes load whole.
   - `over` is true only when notes reach no session, because the index is full (`index.hidden`). Then `trim` lists decisions and how-tos to look at first, least used first. Treat each one as a candidate too.
   - `ask` fills the rest of the hidden count with gotchas and conventions, least used first. Only the user can trash one of them.
@@ -34,7 +35,7 @@ A candidate is a reason to look, not a verdict. If `kb stale` has no candidate a
 
 ## 2. Judge each candidate
 
-Read the note with `kb show <id>`. For an anchor reason, read the anchored code as it is now. Then choose one action:
+Read the note with `kb show <id> --no-use`, so the read counts no use. For an anchor reason, read the anchored code as it is now. Then choose one action:
 
 | Action | When |
 |---|---|
@@ -43,6 +44,7 @@ Read the note with `kb show <id>`. For an anchor reason, read the anchored code 
 | merge | Two or more notes cover one idea. One note keeps everything, the others go to the trash. |
 | shorten | The note is true but long. Cut it to the fact, the reason and how to apply it. |
 | keep | The note is still true as written, or you cannot tell. Also a `duplicate` candidate that is in fact a different idea. |
+| promote | Global audit only. The note is a rule for how to work, which the user stated. It moves to the global instructions file, which every session loads whole. |
 
 Rules:
 
@@ -50,6 +52,19 @@ Rules:
 - When `over` is true, make room with merge and trash. Shortening a `trim` note frees nothing, because it ranks low. Propose trash for a `trim` note only when it is obsolete or adds nothing. Never trash `open-work` that is not done.
 - Never propose trash for a `gotcha` or a `convention` because it has no uses: a rule that works leaves no use count. Propose `keep`, and the user decides.
 - For a rewrite, a merge or a shorten, write the new text now, so the user sees it on the card.
+
+### The global audit: move rules to the instructions file
+
+A rule the user states belongs in an instruction file, not in kb. In the global audit, every global `convention` is a candidate, also without a `kb stale` reason. Find them with `kb list --scope global --json`.
+
+1. Run `kb instructions` and read the whole global file. It loads into every session, and it is long already.
+2. Group the conventions that say one thing. Each group becomes one `promote` item: the first note is `id`, and the others go in `merge`. They all move with the rule.
+3. Write the `rule` for each group: as few lines as the rule needs, often one, in the style of the file around it. Merge, do not copy: a short instruction, with no history and no dates.
+4. Pick a `section`: a heading that the file has, or a new heading when none fits.
+5. When the file already says the rule, propose `trash` for the notes, and name the line in `why`.
+
+A gotcha, a how-to or open work is a fact the agent learned. It stays in kb.
+Never write the instructions file yourself. Apply writes it, at the end of the section, and does not commit it.
 
 ## 3. Propose in the page, then stop
 
@@ -64,13 +79,15 @@ kb audit propose <<'KB_AUDIT'
   { "id": "<id>", "action": "merge", "why": "The two notes give the same rule: pin the bunx version.", "merge": ["<other id>"], "body": "<merged body>" },
   { "id": "<id>", "action": "trash", "why": "Sessions used this note one time, in August. The tool it describes is gone.", "reason": "1 use" },
   { "id": "<id>", "action": "keep", "why": "A use counts only when a checkpoint names the note. So 0 uses does not show that the rule is not useful.", "group": "Rules with few uses: only you can remove one to make room" },
-  { "id": "<id>", "action": "keep", "why": "I could not check this note. It has no anchor, and the tap repo is not on this machine." }
+  { "id": "<id>", "action": "keep", "why": "I could not check this note. It has no anchor, and the tap repo is not on this machine." },
+  { "id": "<id>", "action": "promote", "why": "The user stated this rule. The two other notes say the same thing.", "rule": "- Write short sentences in the active voice.", "section": "Style", "merge": ["<id>", "<id>"] }
 ] }
 KB_AUDIT
 ```
 
-- `action` is one of keep, rewrite, trash and merge. A shorten is a rewrite.
+- `action` is one of keep, rewrite, trash, merge and promote. A shorten is a rewrite. Only the global audit has promote.
 - A rewrite needs the new `title` or `body`, or both. A merge needs `merge`, the notes that go to the trash. The note `id` keeps every fact, so give it the merged text.
+- A promote needs the `rule`, the lines to add to the instructions file. `section` is the heading they go under. `merge` is optional: the other notes that move with the rule.
 - `reason` is what `kb stale` or `kb budget` said.
 - `checked` is only for a keep, and only when you read the code or a source and the note is still true.
 - `why` is the evidence for your pick, in 140 characters or fewer. The user reads it on the card with no other context.
@@ -85,6 +102,7 @@ KB_AUDIT
   - When the user keeps a note on its card, kb records the check.
   - A card with your new text offers to use it.
   - A merge card offers merge and keep both.
+  - A promote card shows the lines it adds, under the lines above them in the file. It offers move, keep, edit and ask, and trash when no notes move with it.
 - Never propose delete. When the user asks for a note to be gone now, run `kb delete <id>` yourself, outside the audit.
 
 `kb audit propose` prints the page link. If it says kb serve is not running, start `kb serve` in the background. Give the user the link, and stop. Apply nothing yourself: the page applies the picks in one commit.
@@ -112,6 +130,7 @@ checked and kept: <ids>
 kept, not checked: <ids>
 rewritten: <ids>
 merged: <kept id> <- <trashed ids>
+moved to <file>: <ids>
 trashed: <ids>
 budget: <chars> of <budget> characters, <bodies> bodies, <lines> notes in the index only, <hidden> in no session
 ```

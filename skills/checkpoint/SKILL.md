@@ -1,9 +1,9 @@
 ---
 name: checkpoint
-description: Save the durable knowledge of this session to the kb store before /clear, and move Claude Code's auto memory into kb. Run only when the user types /kb:checkpoint.
+description: Save the durable knowledge of this session before /clear - rules to instruction files, facts to the kb store - and empty Claude Code's auto memory into them. Run only when the user types /kb:checkpoint.
 argument-hint: "[auto memory folder]"
 disable-model-invocation: true
-allowed-tools: Bash(kb *), Bash(rm */projects/*/memory/*.md), Bash(echo *), Read, Glob, Edit
+allowed-tools: Bash(kb *), Bash(rm */projects/*/memory/*.md), Bash(echo *), Read, Glob, Edit, Write
 ---
 
 # kb checkpoint
@@ -17,7 +17,8 @@ Sweep the whole session. Candidates:
 
 - **gotcha** - something that surprised you or cost time, and will again.
 - **decision** - a choice, with the reason and the alternative that lost.
-- **convention** - a rule the user corrected you on or stated.
+- **convention** - a pattern of the code that a reader would miss, which you found in this session.
+- **rule** - a rule the user stated or corrected you on. It goes to an instruction file, not to kb: see "Write a rule" below. Skip it when this session wrote it there already.
 - **how-to** - a non-obvious procedure that worked.
 - **open-work** - unfinished work. Write enough that a fresh session can resume: current state, the next step, the files, and what done looks like.
 
@@ -37,7 +38,7 @@ Use the nouns of the fact ("staging migration"), not a sentence. Also check the 
 When the answer starts with `no note has every word. Closest:`, read those notes too: one of them can be the same fact in other words.
 
 - A note already covers it and is still correct: skip it.
-- A note covers it but is incomplete or wrong: update that note (pass its `id`).
+- A note covers it but is incomplete or wrong: update that note (pass its `id`). Read it with `kb show <id> --no-use`, so the read counts no use.
 - Nothing covers it: add a note.
 
 ### Move Claude Code's auto memory into kb
@@ -52,12 +53,19 @@ In both cases `<name>` is the folder above `memory`. The folder belongs to this 
 
 For each fact in it, apply the skip rules of step 1 first: a dated status, a finished plan or a one-time state is not worth a note. Then:
 
-- It holds in every repo (a user preference, a feedback rule, a tool): treat it as a candidate with the scope `"global"`, and search as above.
+- It is a rule or a preference of the user (a feedback memory): treat it as a **rule**.
+- It holds in every repo (a tool, a platform behavior): treat it as a candidate with the scope `"global"`, and search as above.
 - It is about this session's project, and the folder belongs to it: treat it as a candidate with the scope `"repo"`.
 - It is about another project: leave it, and list it under **Skipped**.
 
-When kb holds the fact, after a write or because a note already covered it, remove the memory file with `rm <absolute path of the file>` (one file per command, never a glob or `-r`) and remove its line from that folder's `MEMORY.md`.
-Remove nothing when the `kb` write failed, and leave the files you skipped. Never leave the same fact in both stores.
+When kb or an instruction file holds the fact, after a write or because it was there already, remove the memory file with `rm <absolute path of the file>` (one file per command, never a glob or `-r`) and remove its line from that folder's `MEMORY.md`.
+Remove nothing when the write failed, and leave the files you skipped. Never leave the same fact in two places.
+
+### Write a rule
+
+Run `kb instructions`. A rule about the user or how they work everywhere goes to the global file it prints. A rule about this repo only goes to the repo's `CLAUDE.md` or `AGENTS.md`, after the user says yes to the line.
+Read the whole file. Change a rule that says something close, or add one short line at the end of the section that fits. Do not commit the change.
+If a kb note holds the same rule, run `kb trash <id>`.
 
 ## 3. Write
 
@@ -83,9 +91,9 @@ KB_NOTE
 - `kind`: `gotcha`, `decision`, `convention`, `how-to` or `open-work`.
 - `confidence`: `high` when you verified it in this session, `medium` when it is likely, `low` when it is a guess.
 - `anchors`: repo-relative paths, or `path#symbol`, of the code the fact depends on. They let a later check find stale notes. Leave the list empty for a global note.
-- To update, add `"id": "<id>"` and only the fields that change. A `body` replaces the whole body, so read the note with `kb show <id>` first and write the full new body, with the old detail that is still true. A new title, body or anchors also records the note as verified now.
+- To update, add `"id": "<id>"` and only the fields that change. A `body` replaces the whole body, so read the note with `kb show <id> --no-use` first and write the full new body, with the old detail that is still true. A new title, body or anchors also records the note as verified now.
 
-Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id>`, then update it or skip.
+Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id> --no-use`, then update it or skip.
 
 ## 4. Close finished work
 
@@ -93,7 +101,7 @@ For each `open-work` note that this session finished, run `kb trash <id>`. If pa
 
 ## 5. Record what helped
 
-Run `kb use <id>...` once, with the ids of the injected or shown notes that changed what you did in this session. Do not list notes you only read. This is the only usefulness signal the store has.
+Run `kb use <id>...` once, with the ids of the injected notes that changed what you did in this session. Leave out the notes you read with `kb show`: the read counted a use already. Do not list notes you only read.
 
 ## 6. Record the checkpoint
 
@@ -110,7 +118,7 @@ It tells the session hooks that this session saved its knowledge. Skip it when a
 End with this, and nothing after it. Write it as Markdown, not in a code block, so it renders:
 
 ```
-**Safe to clear** - <n> saved, <n> updated, <n> closed, <n> moved, <n> skipped
+**Safe to clear** - <n> saved, <n> updated, <n> rules, <n> closed, <n> moved, <n> skipped
 
 **Saved**
 - **<title>**
@@ -120,13 +128,17 @@ End with this, and nothing after it. Write it as Markdown, not in a code block, 
 - **<title>**
   <what changed in the note>
 
+**Rules**
+- **<rule>**
+  <the file that holds it now>
+
 **Closed**
 - **<title>**
   <what finished the work>
 
 **Moved from auto memory**
 - **<title>**
-  <new note, or the note that already held it>
+  <new note or rule, or the place that already held it>
 
 **Skipped:** <candidate> (<reason>), <candidate> (<reason>).
 ```

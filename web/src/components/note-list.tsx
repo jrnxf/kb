@@ -82,7 +82,7 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, tra
                 size="xs"
                 data-audit-start={project.audit.state}
                 disabled={project.audit.state === "running"}
-                title={project.audit.state === "start" ? "An agent checks the stale notes of this repo and proposes cards" : undefined}
+                title={project.audit.state === "start" ? "An agent checks the stale notes here and proposes cards" : undefined}
                 className="-my-px ml-auto text-muted-foreground hover:text-foreground"
                 onClick={project.audit.run}
               >

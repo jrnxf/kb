@@ -61,7 +61,8 @@ export interface NoteEdit {
 
 // ---- the audit page ----
 
-export type AuditAction = "rewrite" | "trash" | "merge" | "keep";
+/** promote moves a global rule into the global instructions file. Only a global audit proposes it. */
+export type AuditAction = "rewrite" | "trash" | "merge" | "keep" | "promote";
 
 export interface AuditNote {
   id: string;
@@ -86,8 +87,29 @@ export interface AuditCard {
   note: AuditNote;
   /** The agent's new text, for a rewrite or a merge. */
   proposed?: { title: string; body: string };
-  /** For a merge: the notes that go to the trash. */
+  /** For a merge: the notes that go to the trash. For a promote: the notes that move with the note. */
   merge?: AuditNote[];
+  /** For a promote: where the rule goes, and the lines above it in the file now. */
+  promote?: AuditPromote;
+}
+
+export interface AuditPromote {
+  /** The file as the config names it, such as ~/.claude/CLAUDE.md. */
+  file: string;
+  /** The file kb writes, with every link resolved. */
+  path: string;
+  /** True when the file the config names is a link to path. */
+  link: boolean;
+  /** The heading the rule goes under. A heading the file does not have yet is added. */
+  section?: string;
+  /** The lines of the file right above the new lines. */
+  above: string[];
+  /** The lines Apply adds: the agent's text, with a new heading when the section is new. */
+  added: string[];
+  /** The file holds the agent's text already, so Apply adds nothing and only marks the notes moved. */
+  present?: boolean;
+  /** The agent's text alone, for the edit box. */
+  rule: string;
 }
 
 export interface AuditResult {
@@ -101,6 +123,8 @@ export interface AuditResult {
   checked: string[];
   /** Notes the user sent back to the agent, with what is wrong. */
   requests: { id: string; request: string }[];
+  /** Notes whose rule moved to an instruction file. An audit applied by an older kb has no list. */
+  promoted?: string[];
 }
 
 export interface AuditData {
@@ -124,6 +148,8 @@ export interface AuditPick {
   title?: string;
   body?: string;
   request?: string;
+  /** For promote: the user's own text for the rule. */
+  rule?: string;
 }
 
 /** The result as named groups of note ids, in a fixed order. The CLI and the page both print it this way. */
@@ -131,6 +157,7 @@ export function resultGroups(r: AuditResult, arrow = "<-"): [string, string[]][]
   return [
     ["rewritten", r.rewritten],
     ["merged", r.merged.map((m) => `${m.kept} ${arrow} ${m.trashed.join(", ")}`)],
+    ["moved to an instruction file", r.promoted ?? []],
     ["trashed", r.trashed],
     ["checked and kept", r.checked],
     ["kept, not checked", r.kept],

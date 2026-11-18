@@ -10,7 +10,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { MAC } from "@/hooks/use-media";
 import * as api from "@/lib/api";
 import { auditQuery, queryClient, reloadPage } from "@/lib/queries";
-import { ACCEPT_KEY, ACCEPT_REST_KEY, type Choice, KEYS, type Pick, agentPick, choiceForKey, choiceLabel, choices, pickLabel, steps, stillHidden, summary, textChoices, toPicks } from "@/lib/audit";
+import { ACCEPT_KEY, ACCEPT_REST_KEY, type Choice, KEYS, type Pick, agentPick, changes, choiceForKey, choiceLabel, choices, pickLabel, promoteFile, promoteLines, steps, stillHidden, summary, textChoices, toPicks } from "@/lib/audit";
 import { diffLines, wordDiff } from "@/lib/diff";
 import { cn } from "@/lib/utils";
 import { scopeName } from "@/lib/view";
@@ -360,7 +360,7 @@ function Strip({ data, flow, picks, seen, pos, onJump }: { data: AuditData; flow
         {used.map((action) => (
           <span key={action} className={cn("flex items-center gap-1.5", `a-${action}`)}>
             <span className="size-2 rounded-[2px] bg-(--a)" />
-            {action === "ask" ? "ask the agent" : action === "keep" ? "keep as is" : action}
+            {action === "ask" ? "ask the agent" : action === "keep" ? "keep as is" : action === "promote" ? "move to an instruction file" : action}
           </span>
         ))}
       </div>
@@ -435,13 +435,55 @@ function Head({ card }: { card: AuditCard }) {
   return (
     <>
       <Meta note={card.note} reason={card.reason} />
-      <h2 className="mt-2 text-[19px]/snug font-semibold text-balance">{card.merge ? "These notes look like one idea" : card.note.title}</h2>
+      <h2 className="mt-2 text-[19px]/snug font-semibold text-balance">{card.merge ? (card.promote ? "These notes become one rule" : "These notes look like one idea") : card.note.title}</h2>
     </>
   );
 }
 
+/** The lines a promote card adds to the instructions file, under the last lines above them. */
+function PromoteBox({ card, pick }: { card: AuditCard; pick: Pick }) {
+  const promote = card.promote!;
+  const file = promoteFile(card);
+  const where = promote.section && promote.added[0] !== "" ? `, under ${promote.section}` : promote.section ? ", in a new section" : ", at the end";
+  // The user's own text is checked again at Apply. The agent's text the file holds already is not added.
+  if (promote.present && pick.rule === undefined)
+    return (
+      <div className={cn(textBlock, "mt-2.5 text-foreground")} data-promote="present">
+        <span className={cn(label, "text-faint")}>already in {file}, so Apply adds nothing</span>
+        {promote.rule.split("\n").map((line, i) => (
+          <div key={i} className="min-h-[1lh] text-muted-foreground">
+            {line}
+          </div>
+        ))}
+      </div>
+    );
+  return (
+    <div className={cn(textBlock, "mt-2.5 text-foreground")} data-promote>
+      <span className={cn(label, "text-(--k-convention)")}>
+        + {pick.rule !== undefined ? "your text, " : ""}added to {file}
+        {where}
+      </span>
+      {promote.above.slice(-2).filter((line, i, all) => all.slice(0, i + 1).some((l) => l.trim())).map((line, i) => (
+        <div key={`a${i}`} className="min-h-[1lh] truncate whitespace-pre text-faint">
+          {line}
+        </div>
+      ))}
+      {promoteLines(card, pick).map((line, i) => (
+        <div key={i} data-diff-line="+" className="-mx-1.5 min-h-[1lh] rounded-sm bg-(--k-convention)/10 px-1.5 text-(--k-convention)">
+          {line}
+        </div>
+      ))}
+      <div className="mt-1.5 text-[12px] text-faint [overflow-wrap:anywhere]">
+        Apply writes {promote.path}
+        {promote.link ? ` (${promote.file} links to it)` : ""} and does not commit it.
+      </div>
+    </div>
+  );
+}
+
 function Card({ card, pick, seen, mode, keys, textKeys, onCancel, onSave }: { card: AuditCard; pick: Pick; seen: boolean; mode: Mode; keys: React.ReactNode; textKeys: React.ReactNode; onCancel: () => void; onSave: (pick: Pick) => void }) {
-  const own = pick.title !== undefined || pick.body !== undefined;
+  if (card.promote && mode === "edit") return <RuleCard card={card} initial={pick.rule ?? card.promote.rule} onCancel={onCancel} onSave={(rule) => onSave({ action: "promote", rule })} />;
+  const own = pick.title !== undefined || pick.body !== undefined || pick.rule !== undefined;
   const newTitle = pick.title ?? card.proposed?.title ?? card.note.title;
   const newBody = pick.body ?? card.proposed?.body ?? card.note.body;
   const changed = own || !!card.proposed;
@@ -455,11 +497,11 @@ function Card({ card, pick, seen, mode, keys, textKeys, onCancel, onSave }: { ca
             <div key={note.id} className="rounded-lg border px-3.5 py-2.5">
               <div className="text-[13.5px] font-semibold">{note.title}</div>
               <div className="mt-1 text-[13px] whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{note.body}</div>
-              <div className="mt-1.5 text-[11.5px] text-faint">{i === 0 ? "stays, with every fact" : "goes to the trash"}</div>
+              <div className="mt-1.5 text-[11.5px] text-faint">{card.promote ? `moves to ${promoteFile(card)}` : i === 0 ? "stays, with every fact" : "goes to the trash"}</div>
             </div>
           ))}
         </div>
-      ) : changed ? (
+      ) : changed && !card.promote ? (
         <div className={cn(textBlock, "text-foreground")}>
           <span className={cn(label, "flex gap-3")}>
             <span className="text-(--destructive)">− now</span>
@@ -472,7 +514,9 @@ function Card({ card, pick, seen, mode, keys, textKeys, onCancel, onSave }: { ca
         <div className={cn(textBlock, "text-foreground")}>{card.note.body}</div>
       )}
 
-      {card.merge && changed && (
+      {card.promote && <PromoteBox card={card} pick={pick} />}
+
+      {card.merge && changed && !card.promote && (
         <div className={cn(textBlock, "mt-2.5 border-(--k-convention)/35 bg-(--k-convention)/6 text-foreground")}>
           <span className={cn(label, "text-(--k-convention)")}>{own ? "your merged text" : "merged text, proposed by the agent"}</span>
           {newTitle !== card.note.title && <b className="block">{newTitle}</b>}
@@ -489,7 +533,7 @@ function Card({ card, pick, seen, mode, keys, textKeys, onCancel, onSave }: { ca
         <div className="flex items-center gap-2">
           <span className="size-2 flex-none rounded-[2px] bg-(--a)" aria-hidden />
           <span className="text-muted-foreground">The agent suggests</span>
-          <b className="font-semibold">{card.action}</b>
+          <b className="font-semibold">{card.action === "promote" ? choiceLabel(card, "promote") : card.action}</b>
         </div>
         <p className="mt-1.5 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{card.why}</p>
       </div>
@@ -540,6 +584,43 @@ function EditCard({ card, title, body, onCancel, onSave }: { card: AuditCard; ti
   );
 }
 
+/** Edit the rule a promote card adds. It is plain lines of the instructions file, so it has no title. */
+function RuleCard({ card, initial, onCancel, onSave }: { card: AuditCard; initial: string; onCancel: () => void; onSave: (rule: string) => void }) {
+  const [text, setText] = useState(initial);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => ref.current?.focus(), []);
+  const ok = !!text.trim();
+  const keys = (event: React.KeyboardEvent) => {
+    if (event.key === "Escape") onCancel();
+    else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && ok) onSave(text.trim());
+    else return;
+    event.preventDefault();
+  };
+  return (
+    <Panel
+      className="flex-1"
+      head={<Head card={card} />}
+      data-card={card.id}
+      onKeyDown={keys}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" className="h-9 gap-2" onClick={onCancel}>
+            <Kbd>Esc</Kbd> cancel
+          </Button>
+          <Button className="h-9 gap-2" disabled={!ok} onClick={() => onSave(text.trim())}>
+            <Kbd className="bg-primary-foreground/15 text-primary-foreground">{MAC ? "⌘" : "ctrl"} Enter</Kbd> save
+          </Button>
+        </div>
+      }
+    >
+      <div className="flex min-h-full flex-col gap-2">
+        <span className={cn(label, "mb-0 text-(--k-convention)")}>your text for {promoteFile(card)}</span>
+        <Textarea ref={ref} value={text} onChange={(e) => setText(e.target.value)} aria-label="Rule" className="min-h-40 flex-1 resize-none font-mono text-[13px]" />
+      </div>
+    </Panel>
+  );
+}
+
 function AskCard({ card, initial, onCancel, onSave }: { card: AuditCard; initial: string; onCancel: () => void; onSave: (request: string) => void }) {
   const [text, setText] = useState(initial);
   const ref = useRef<HTMLInputElement>(null);
@@ -579,14 +660,14 @@ function AskCard({ card, initial, onCancel, onSave }: { card: AuditCard; initial
 
 function End({ data, picks, left, applying, error, onApply }: { data: AuditData; picks: Pick[]; left: number; applying: boolean; error: string; onApply: () => void }) {
   const groups = summary(data.cards, picks);
-  const changes = picks.filter((p) => p.action !== "keep").length;
+  const { changed, total } = changes(data.cards, picks);
   return (
     <Panel
       head={
         <>
           <h2 className="text-[19px] font-semibold">Ready to apply</h2>
           <p className="mt-1 text-[13.5px] text-muted-foreground">
-            {changes} of {data.cards.length} notes change.
+            {changed} of {total} notes change.
             {data.index.hidden > 0 && (left === 0 ? " Every note will reach a session." : ` ${left} ${left === 1 ? "note" : "notes"} will still reach no session.`)}
           </p>
         </>

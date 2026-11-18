@@ -1,5 +1,5 @@
 // Reads the SessionStart JSON on stdin and prints `kb context` for the session's directory,
-// the rule to save new facts with `kb add`, and at most four one-line notices. With the other
+// the rule for where rules and facts go, and at most four one-line notices. With the other
 // files in hooks/ and the skills, this is the only code that knows about Claude Code.
 
 import { SAVE_RULE, buildContext } from "../cli/context.ts";

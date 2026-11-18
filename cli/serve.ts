@@ -76,7 +76,9 @@ async function handle(store: Store, token: string, port: number, request: Reques
     if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
     const scope = (await body(request))?.scope;
-    if (typeof scope !== "string") throw new KbError("scope: must be a repo id");
+    if (typeof scope !== "string") throw new KbError("scope: must be a repo id or global");
+    // The global audit runs in an empty folder of its own, so it needs no checkout.
+    if (scope === "global") return json(startRun(store, scope));
     const root = repoRoot(store, scope);
     if (!root) throw new KbError(`kb does not know where ${scope} is checked out. Start a session in it once, or run kb audit there.`);
     return json(startRun(store, scope, root));
@@ -85,7 +87,7 @@ async function handle(store: Store, token: string, port: number, request: Reques
     if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
     const input = await body(request);
-    if (typeof input?.scope !== "string") throw new KbError("scope: must be a repo id");
+    if (typeof input?.scope !== "string") throw new KbError("scope: must be a repo id or global");
     return json(applyAudit(store, input.scope, input));
   }
 

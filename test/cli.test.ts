@@ -8,6 +8,27 @@ import { daysAgo, kb, putNote, sh, tempDir, tempRepo, tempStore } from "./helper
 
 const add = (store: Store | string, note: object, cwd?: string) => kb(store, ["add", "--json"], { stdin: JSON.stringify(note), cwd });
 
+describe("KB_HOME", () => {
+  test("a relative KB_HOME is the folder under the directory kb runs in", () => {
+    const dir = tempDir();
+    expect(add("./kb", { title: "A note", kind: "gotcha", body: "b", scope: "global" }, dir).code).toBe(0);
+    expect(existsSync(join(dir, "kb/notes/global/a-note.md"))).toBe(true);
+  });
+});
+
+describe("kb instructions", () => {
+  test("names the file at the end of the links, and says which link points there only when one does", () => {
+    const store = tempStore();
+    const dir = tempDir();
+    writeFileSync(join(dir, "AGENTS.md"), "# Rules\n");
+    sh(dir, "ln", "-s", "AGENTS.md", "CLAUDE.md");
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(dir, "CLAUDE.md") }));
+    expect(kb(store, ["instructions"]).stdout).toContain(`AGENTS.md (${join(dir, "CLAUDE.md")} links here)`);
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(dir, "AGENTS.md") }));
+    expect(kb(store, ["instructions"]).stdout).not.toContain("links here");
+  });
+});
+
 describe("kb add", () => {
   test("creates the store on first run and writes a valid note", () => {
     const home = join(tempDir(), "fresh");
@@ -108,11 +129,22 @@ describe("kb use, trash, show, list", () => {
     kb(store, ["use", "a"]);
     kb(store, ["use", "a", "ghost"]);
     Bun.write(join(store.home, "usage", "othermachine.json"), JSON.stringify({ a: { uses: 5, last_used: "2020-01-01T00:00:00Z" } }));
-    const shown = kb(store, ["show", "a", "--json"]).json;
+    const shown = kb(store, ["show", "a", "--no-use", "--json"]).json;
     expect(shown.uses).toBe(7);
     expect(shown.last_used > "2026").toBe(true);
     expect(readFileSync(store.find("a")!.path, "utf8")).toBe(before);
     expect(kb(store, ["use", "ghost"]).code).toBe(1);
+  });
+
+  test("show counts a use, since an agent reads a note when it needs it, and --no-use only looks", () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    expect(kb(store, ["show", "a", "--json"]).json.uses).toBe(1);
+    expect(kb(store, ["show", "a", "--json"]).json.uses).toBe(2);
+    expect(kb(store, ["show", "a", "--no-use", "--json"]).json.uses).toBe(2);
+    putNote(store, { id: "gone" }, true);
+    kb(store, ["show", "gone"]);
+    expect(store.usage().get("gone")).toBeUndefined();
   });
 
   test("trash moves the file and restore moves it back", () => {

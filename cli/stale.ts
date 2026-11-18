@@ -86,8 +86,9 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
   const result: StaleResult = { scope: repo.scope, head: repo.head, notes: 0, candidates: [] };
   if (!store.exists()) return result;
 
-  // Promoted notes live in the repo's own file now, so the repo owns them.
-  const notes = store.notes().filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === repo.scope));
+  // Promoted notes live in an instruction file now, so that file owns them. Like the audit, the
+  // check covers one scope: the repo's notes in a repo, the global notes outside any repo.
+  const notes = store.notes().filter((n) => !n.promoted_to && n.scope === (repo.scope ?? "global"));
   const add = (note: StoredNote, reason: StaleReason, detail: string) => result.candidates.push({ id: note.id, title: note.title, scope: note.scope, reason, detail });
 
   // One git call per distinct commit, not one per anchor.
