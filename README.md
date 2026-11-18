@@ -69,8 +69,8 @@ highest.
   line when more than 5 notes are candidates.
 - **Rules move to an instruction file.** A rule you stated belongs where every session loads it
   whole. The audit card offers to move it: a repo audit moves a repo rule to the repo's `CLAUDE.md`
-  (or `AGENTS.md` when the repo has only that, and it creates `CLAUDE.md` when the repo has
-  neither), and the global audit moves a global rule to the global file. The card shows the lines it
+  (or `.claude/CLAUDE.md`, then `AGENTS.md`, when the repo keeps its rules there, and it creates
+  `CLAUDE.md` when the repo has none), and the global audit moves a global rule to the global file. The card shows the lines it
   adds. Apply writes the file and does not commit it. This is the only write `kb` makes inside a
   repo. A moved note is no longer injected.
 - **A missed checkpoint leaves a trace.** Nothing can run before `/clear`. So a session that ends

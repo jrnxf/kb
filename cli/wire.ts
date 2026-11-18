@@ -61,7 +61,7 @@ export interface NoteEdit {
 
 // ---- the audit page ----
 
-/** promote moves a global rule into the global instructions file. Only a global audit proposes it. */
+/** promote moves a rule into the instruction file of the audit's scope: the global file, or the repo's own file. */
 export type AuditAction = "rewrite" | "trash" | "merge" | "keep" | "promote";
 
 export interface AuditNote {

@@ -40,27 +40,38 @@ export function globalInstructions(store: Store): InstructionsFile {
   return { name, path, link: lstatSync(tilde(name)).isSymbolicLink() };
 }
 
-/** The files a repo can hold its rules in, in the order kb looks for them. */
-export const REPO_FILES = ["CLAUDE.md", "AGENTS.md"];
+/** The files a repo can hold its rules in, in the order kb looks for them. Claude Code loads each one. */
+export const REPO_FILES = ["CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md"];
 
 /**
- * The instruction file of a repo checkout: CLAUDE.md, or AGENTS.md when the repo has only that. A
- * link is resolved, as for the global file. With neither file, Apply creates CLAUDE.md.
+ * The instruction file of a repo checkout: the first of REPO_FILES that exists. A link is resolved,
+ * as for the global file. A link to nothing stops the move: kb would write outside the repo, or
+ * fail. With no file at all, Apply creates CLAUDE.md.
  */
 export function repoInstructions(root: string): InstructionsFile {
   for (const name of REPO_FILES) {
     const full = join(root, name);
-    if (existsSync(full)) return { name, path: realpathSync(full), link: lstatSync(full).isSymbolicLink() };
+    let link: boolean;
+    try {
+      link = lstatSync(full).isSymbolicLink();
+    } catch {
+      continue;
+    }
+    if (!existsSync(full)) throw new KbError(`${name} in ${shortPath(root)} is a link to a file that does not exist. Fix the link or remove it.`);
+    return { name, path: realpathSync(full), link };
   }
   return { name: REPO_FILES[0]!, path: join(root, REPO_FILES[0]!), link: false, create: true };
 }
 
-/** The instruction file of an audit scope: the global file, or the file of the repo's checkout. */
-export function instructionsFor(store: Store, scope: string): InstructionsFile {
+/**
+ * The instruction file of an audit scope: the global file, or the file of the checkout the audit
+ * ran in. Another checkout of the same repo, such as a worktree, can hold another file.
+ */
+export function instructionsFor(store: Store, scope: string, root: string | null): InstructionsFile {
   if (scope === "global") return globalInstructions(store);
-  const root = repoRoot(store, scope);
-  if (!root) throw new KbError(`the checkout of ${scope} is not on this machine, so kb cannot find its instruction file`);
-  return repoInstructions(root);
+  const checkout = root && existsSync(root) ? root : repoRoot(store, scope);
+  if (!checkout) throw new KbError(`the checkout of ${scope} is not on this machine, so kb cannot find its instruction file`);
+  return repoInstructions(checkout);
 }
 
 /** The file name a moved note records in promoted_to, such as CLAUDE.md. */

@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { type Browser, chromium } from "playwright";
-import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyAudit, auditData, openAudits, proposeAudit, readAudit } from "../cli/audit.ts";
 import { AGENT_ENV, auditPrompt, runState, startRun, waitRun } from "../cli/audit-run.ts";
@@ -342,6 +342,37 @@ describe("a repo audit moves a rule to the repo's own file", () => {
     expect(auditData(linked.store, SCOPE, "tok").cards[0]!.promote).toMatchObject({ file: "CLAUDE.md", link: true, path: expect.stringContaining("AGENTS.md") });
     applyAudit(linked.store, SCOPE, { picks: [{ id: "v", action: "promote" }] });
     expect(readFileSync(join(linked.root, "AGENTS.md"), "utf8")).toContain(MOVE.rule);
+  });
+
+  test("Apply writes the checkout the audit ran in, also after a session in another worktree", () => {
+    const { store, root } = repoSetup();
+    const other = tempDir();
+    rememberRepo(store, SCOPE, other);
+    applyAudit(store, SCOPE, { picks: [{ id: "v", action: "promote" }] });
+    expect(readFileSync(join(root, "CLAUDE.md"), "utf8")).toContain(MOVE.rule);
+    expect(existsSync(join(other, "CLAUDE.md"))).toBe(false);
+  });
+
+  test("takes .claude/CLAUDE.md when the repo keeps its rules there", () => {
+    const { store, root } = repoSetup((root) => {
+      mkdirSync(join(root, ".claude"));
+      writeFileSync(join(root, ".claude", "CLAUDE.md"), "# Rules\n");
+    });
+    expect(auditData(store, SCOPE, "tok").cards[0]!.promote).toMatchObject({ file: ".claude/CLAUDE.md" });
+    applyAudit(store, SCOPE, { picks: [{ id: "v", action: "promote" }] });
+    expect(readFileSync(join(root, ".claude", "CLAUDE.md"), "utf8")).toContain(MOVE.rule);
+    expect(existsSync(join(root, "CLAUDE.md"))).toBe(false);
+  });
+
+  test("a CLAUDE.md link to nothing stops the move, so kb never writes outside the repo", () => {
+    const outside = join(tempDir(), "elsewhere.md");
+    const { store, root } = repoSetup((root) => {
+      symlinkSync(outside, join(root, "CLAUDE.md"));
+      writeFileSync(join(root, "AGENTS.md"), "# Agents\n");
+    });
+    expect(() => auditData(store, SCOPE, "tok")).toThrow("is a link to a file that does not exist");
+    expect(() => applyAudit(store, SCOPE, { picks: [{ id: "v", action: "promote" }] })).toThrow("is a link to a file that does not exist");
+    expect([existsSync(outside), readFileSync(join(root, "AGENTS.md"), "utf8"), store.find("v")!.promoted_to]).toEqual([false, "# Agents\n", undefined]);
   });
 
   test("a checkout that kb does not know stops the page and Apply before any change", () => {

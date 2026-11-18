@@ -58,7 +58,7 @@ Rules:
 A rule the user states belongs in an instruction file, not in kb. Every `convention` of the scope is a candidate, also without a `kb stale` reason. Find them with `kb list --json` in a repo, or `kb list --scope global --json` outside any repo.
 
 The file depends on the scope:
-- A repo audit writes the repo's `CLAUDE.md`, or its `AGENTS.md` when the repo has only that. When the repo has neither, Apply creates `CLAUDE.md`. Move a rule there only when it holds for anyone who works in the repo.
+- A repo audit writes the first of the repo's `CLAUDE.md`, `.claude/CLAUDE.md` and `AGENTS.md` that exists. When the repo has none, Apply creates `CLAUDE.md`. Move a rule there only when it holds for anyone who works in the repo.
 - The global audit writes the global instructions file.
 
 1. Run `kb instructions` and read the whole file of the scope. It loads into every session, and it is often long already.

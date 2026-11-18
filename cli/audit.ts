@@ -206,7 +206,7 @@ export function auditData(store: Store, scope: string, token: string): AuditData
   let file: InstructionsFile | undefined;
   const promoting = items.filter((item) => item.action === "promote");
   if (promoting.length > 0) {
-    file = instructionsFor(store, audit.scope);
+    file = instructionsFor(store, audit.scope, audit.root);
     let content = readInstructions(file);
     for (const item of promoting) {
       const { content: after, above, added } = insertRule(content, item.rule!, item.section);
@@ -277,7 +277,7 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
 
   // The instruction file of the scope, resolved when the first promote pick needs it.
   let target: InstructionsFile | undefined;
-  const promotedTo = () => fileName((target ??= instructionsFor(store, audit.scope)));
+  const promotedTo = () => fileName((target ??= instructionsFor(store, audit.scope, audit.root)));
 
   const plan = (picks as AuditPick[]).map((pick, i) => {
     if (pick === null || typeof pick !== "object" || typeof pick.id !== "string") throw new KbError(`picks[${i}]: needs an id`);

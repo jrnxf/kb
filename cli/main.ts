@@ -456,8 +456,6 @@ async function cmdAudit(store: Store, args: Args, stdin: () => Promise<string>):
       throw new KbError('kb audit propose reads {"items": [...]} on stdin');
     }
     store.ensure();
-    // A move writes the repo's own instruction file at Apply, so the page must find the checkout.
-    if (repo.root && repo.scope) rememberRepo(store, scope, repo.root);
     const audit = proposeAudit(store, input, repo);
     return open(audit.items.length, `saved ${audit.items.length} cards for ${scope}`);
   }
