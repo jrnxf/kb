@@ -34,4 +34,10 @@ describe("the audit card's word diff", () => {
     const lines = diffLines(wordDiff("First.\nGone now.\nLast.", "First.\nLast."));
     expect(lines.map((line) => line.whole ?? null)).toEqual([null, "-", null]);
   });
+
+  test("keeps the blank lines both texts share around a new or removed paragraph", () => {
+    const text = (before: string, after: string) => diffLines(wordDiff(before, after)).map((line) => line.pieces.map((p) => p.text).join(""));
+    expect(text("a\n\nb", "a\n\nNEW\n\nb")).toEqual(["a", "", "NEW", "", "b"]);
+    expect(text("a\n\nOLD\n\nb", "a\n\nb")).toEqual(["a", "", "OLD", "", "b"]);
+  });
 });

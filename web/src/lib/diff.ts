@@ -95,10 +95,14 @@ export function wordDiff(before: string, after: string): Piece[] {
 
 /** Splits a diff at its line breaks, and marks lines that are wholly removed or wholly new. */
 export function diffLines(pieces: Piece[]): Line[] {
-  const lines: Line[] = [{ pieces: [] }];
+  // Each line remembers the op of the break before it and the break after it.
+  const lines: (Line & { from: Op; to: Op })[] = [{ pieces: [], from: "=", to: "=" }];
   for (const { op, text } of pieces) {
     text.split("\n").forEach((part, index) => {
-      if (index > 0) lines.push({ pieces: [] });
+      if (index > 0) {
+        lines.at(-1)!.to = op;
+        lines.push({ pieces: [], from: op, to: "=" });
+      }
       if (part) lines.at(-1)!.pieces.push({ op, text: part });
     });
   }
@@ -106,6 +110,8 @@ export function diffLines(pieces: Piece[]): Line[] {
     const ops = new Set(line.pieces.filter((piece) => piece.text.trim()).map((piece) => piece.op));
     if (ops.size === 1 && !ops.has("=")) line.whole = ops.has("-") ? "-" : "+";
   }
-  // A line break that only one side has leaves an empty line on the other; drop it.
-  return lines.filter((line, index) => line.pieces.length || (index > 0 && index < lines.length - 1 && !lines[index - 1]!.whole && !lines[index + 1]!.whole));
+  // An empty line is real when one side has both of its breaks. Between a removed break and a new one,
+  // it is only where the two texts meet, so it goes.
+  const real = (line: { from: Op; to: Op }) => (line.from !== "+" && line.to !== "+") || (line.from !== "-" && line.to !== "-");
+  return lines.filter((line) => line.pieces.length || real(line)).map(({ pieces, whole }) => (whole ? { pieces, whole } : { pieces }));
 }
