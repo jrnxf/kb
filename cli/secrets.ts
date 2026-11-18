@@ -22,16 +22,26 @@ const PATTERNS: { kind: string; re: RegExp }[] = [
   { kind: "a Hugging Face token", re: /\bhf_[A-Za-z]{34}\b/ },
   { kind: "a JSON web token", re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
   // A password in a URL, as in scheme://user:password@host. A placeholder such as <password> or
-  // ${PASSWORD} is not a secret, so the password must be plain characters.
-  { kind: "a password in a URL", re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:[A-Za-z0-9._~%!*+-]{6,}@/i },
+  // ${PASSWORD} is not a secret, so the password must be plain characters. The user can be empty,
+  // as in redis://:password@host. Bounded repeats keep a long line from a slow match.
+  { kind: "a password in a URL", re: /\b[a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,100}:[A-Za-z0-9._~%!*+-]{6,}@/i },
 ];
 
 /**
- * A secret given to a name, as in API_KEY=... or "password": "...". A value counts only when it is
- * long and mixes letters and digits, so prose and placeholders do not match.
+ * A secret given to a name, as in API_KEY=... or "password": "...". The name can be longer
+ * (GITHUB_TOKEN), and the keyword matches inside it, so the pattern needs no prefix.
  */
-const ASSIGNED = /\b[A-Za-z0-9_-]*(?:api[_-]?key|secret|token|passwd|password|access[_-]?key)["']?\s*[:=]\s*["']?([A-Za-z0-9/+_.=-]{20,})/gi;
-const looksRandom = (value: string) => /[A-Za-z]/.test(value) && /\d/.test(value);
+const ASSIGNED = /(?:api[_-]?key|secret|token|passwd|password|access[_-]?key)["']?\s*[:=]\s*["']?([A-Za-z0-9/+_.=-]{20,})/gi;
+
+/**
+ * A value counts only when it looks random: upper case, lower case and digits together, or a long
+ * hex string. A path, a UUID, a lowercase slug and a reference to an environment variable do not.
+ */
+function looksRandom(value: string): boolean {
+  if (/^(?:process\.env|import\.meta\.env|os\.environ)\./.test(value)) return false;
+  if (/^[0-9a-f]{32,}$/.test(value)) return true;
+  return /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value);
+}
 
 /** The first secret in a text: what kind, and on which line. */
 export function findSecret(text: string): { kind: string; line: number } | null {
@@ -44,15 +54,17 @@ export function findSecret(text: string): { kind: string; line: number } | null 
 }
 
 /**
- * Stop a write whose new text holds a secret. fields maps a name ("body", "rule") to its text. The
- * error names the kind and the place, never the secret itself.
+ * Stop a write whose new text holds a secret. fields maps a name ("body", "rule") to its text, or
+ * to a list such as the anchors. The error names the kind and the place, never the secret itself.
  */
 export function rejectSecrets(fields: Record<string, unknown>, what: string): void {
   for (const [field, value] of Object.entries(fields)) {
-    if (typeof value !== "string") continue;
-    const found = findSecret(value);
+    const list = Array.isArray(value);
+    const text = list ? value.filter((v) => typeof v === "string").join("\n") : value;
+    if (typeof text !== "string") continue;
+    const found = findSecret(text);
     if (!found) continue;
-    const where = value.includes("\n") ? `${field}, line ${found.line}` : field;
+    const where = list ? `${field}, item ${found.line}` : text.includes("\n") ? `${field}, line ${found.line}` : field;
     throw new KbError(
       `${what} looks like it holds ${found.kind} (${where}). kb syncs every note to git, so it saves no secret. ` +
         "Write a placeholder such as <token>, or say where the secret lives.",

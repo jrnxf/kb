@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyAudit, proposeAudit } from "../cli/audit.ts";
+import type { RepoInfo } from "../cli/scope.ts";
 import { findSecret } from "../cli/secrets.ts";
+import { updateNote } from "../cli/write.ts";
 import { kb, putNote, sh, tempStore } from "./helpers.ts";
 
 // Fake tokens are put together at run time, so this file holds no string that looks like a real secret.
@@ -19,13 +21,26 @@ const FAKES: Record<string, string> = {
   "a Google API key": `${"AIza"}${rand(35)}`,
   "an npm token": `//registry.npmjs.org/:_authToken=${"npm_"}${rand(36)}`,
   "a JSON web token": `Bearer ${"eyJ"}${rand(20)}.${"eyJ"}${rand(30)}.${rand(30)}`,
+  "a Slack webhook": `${"hooks.slack.com"}/services/T${upper(8)}/B${upper(8)}/${rand(24)}`,
+  "a SendGrid key": `${"SG."}${rand(22)}.${rand(43)}`,
+  "a Hugging Face token": `${"hf_"}${rand(34, "abcdefghijkLMNOPQRSTUVwxyz")}`,
   "a password in a URL": `DATABASE_URL=postgres://app:${rand(14)}@db.example.com/app`,
   "a secret value": `API_KEY="${rand(32)}"`,
 };
 
+/** More shapes of the kinds above. */
+const MORE: [string, string][] = [
+  ["a password in a URL", `REDIS_URL=redis://:${rand(14)}@cache.example.com:6379`],
+  ["a secret value", `client_secret: ${rand(40, "0123456789abcdef")}`],
+];
+
 describe("findSecret", () => {
   test.each(Object.entries(FAKES))("finds %s", (kind, text) => {
     expect(findSecret(`A line of prose.\n${text}\nMore prose.`)).toEqual({ kind, line: 2 });
+  });
+
+  test.each(MORE)("finds %s in another shape", (kind, text) => {
+    expect(findSecret(text)).toEqual({ kind, line: 1 });
   });
 
   test("lets a note talk about secrets without holding one", () => {
@@ -37,7 +52,16 @@ describe("findSecret", () => {
       "Pin it: commit 0123456789abcdef0123456789abcdef01234567 fixed it.",
       "password = hunter2 is a famous joke, and token: short-one.",
       "A long id like secret_rotation_is_handled_by_vault_every_day stays prose.",
+      "The secret: docs/how-to/rotate-keys-v2-in-vault.md has the steps.",
+      "Read it as API_KEY=process.env.OPENAI_API_KEY_V2_xx in the server.",
+      "The token: 123e4567-e89b-12d3-a456-426614174000 is the request id.",
     ]) expect(findSecret(text)).toBeNull();
+  });
+
+  test("a long line with no secret is fast", () => {
+    const start = performance.now();
+    for (const text of ["a-".repeat(50_000) + "token", "a_".repeat(50_000) + "secret=", "a-".repeat(50_000) + "://"]) expect(findSecret(text)).toBeNull();
+    expect(performance.now() - start).toBeLessThan(1000);
   });
 });
 
@@ -62,6 +86,16 @@ describe("a note with a secret is never written", () => {
     expect(store.find("n")!.body).toBe("clean");
   });
 
+  test("kb add refuses it in an anchor, and the page's edit refuses it too", () => {
+    const store = tempStore();
+    const r = kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Deploy", kind: "gotcha", scope: "global", body: "b", anchors: ["src/a.ts", secret] }) });
+    expect(r.json.error).toContain("a GitHub token (anchors, item 2)");
+    expect(store.notes()).toEqual([]);
+    putNote(store, { id: "n", body: "clean" });
+    expect(() => updateNote(store, { id: "n", body: secret }, { scope: null, head: null })).toThrow("a GitHub token (body)");
+    expect(store.find("n")!.body).toBe("clean");
+  });
+
   test("audit Apply refuses new text or a rule with a secret, before any change", () => {
     const store = tempStore();
     sh(store.home, "git", "init", "-q", "-b", "main");
@@ -72,5 +106,18 @@ describe("a note with a secret is never written", () => {
     expect(() => applyAudit(store, "global", { picks })).toThrow("a GitHub token");
     expect(store.find("r")!.body).toBe("old");
     expect(readdirSync(join(store.home, "notes", "global")).sort()).toEqual(["r.md", "t.md"]);
+  });
+
+  test("audit Apply refuses a rule with a secret, and the instructions file stays as it was", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    putNote(store, { id: "g", scope: "global", kind: "convention", body: "a rule" });
+    const file = join(store.home, "..", "CLAUDE.md");
+    writeFileSync(file, "# Rules\n");
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: file }));
+    proposeAudit(store, { items: [{ id: "g", action: "promote", why: "x", rule: "- A rule.", section: "Style" }] }, { scope: null, root: null, head: null } as unknown as RepoInfo);
+    expect(() => applyAudit(store, "global", { picks: [{ id: "g", action: "promote", rule: secret }] })).toThrow("the rule of g looks like it holds a GitHub token");
+    expect(readFileSync(file, "utf8")).toBe("# Rules\n");
+    expect(store.find("g")!.promoted_to).toBeUndefined();
   });
 });

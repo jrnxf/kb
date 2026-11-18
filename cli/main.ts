@@ -152,7 +152,7 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     throw new KbError(`${unknownScope(store, scope)} To start the notes of another repo, pass --repo <its directory>.`);
   }
   if (typeof input.title !== "string" || !input.title.trim()) throw new KbError("invalid note: title: required");
-  rejectSecrets({ title: input.title, body: input.body }, "the note");
+  rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors }, "the note");
   const slug = slugify(input.title);
   if (!slug) throw new KbError("invalid note: title: needs letters or digits");
 
