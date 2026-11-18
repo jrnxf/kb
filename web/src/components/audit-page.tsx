@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { type AuditCard, type AuditData, type AuditNote, type AuditResult, resultGroups } from "../../../cli/wire.ts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { MAC } from "@/hooks/use-media";
 import * as api from "@/lib/api";
 import { auditQuery, queryClient, reloadPage } from "@/lib/queries";
 import { type Choice, KEYS, type Pick, agentPick, choiceLabel, choices, pickLabel, steps, stillHidden, summary, toPicks } from "@/lib/audit";
+import { diffLines, wordDiff } from "@/lib/diff";
 import { cn } from "@/lib/utils";
 import { scopeName } from "@/lib/view";
 import { Dot } from "./bits";
@@ -359,6 +360,25 @@ function Meta({ note, reason }: { note: AuditNote; reason?: string }) {
 const textBlock = "rounded-lg border px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]";
 const label = "mb-1 block font-mono text-[10.5px] font-semibold tracking-wider uppercase";
 
+const removed = "rounded-sm bg-(--destructive)/12 text-(--destructive) line-through decoration-(--destructive)/50";
+const added = "rounded-sm bg-(--k-convention)/15 text-(--k-convention) no-underline [del+&]:ml-0.5";
+
+/** The note's text with only the changed words marked: removed ones struck through in red, new ones in green. */
+function Diff({ before, after }: { before: string; after: string }) {
+  return diffLines(wordDiff(before, after)).map((line, index) => (
+    <div key={index} data-diff-line={line.whole} className={cn("min-h-[1lh]", line.whole && "-mx-1.5 rounded-sm px-1.5", line.whole === "-" && "bg-(--destructive)/8", line.whole === "+" && "bg-(--k-convention)/10")}>
+      {line.pieces.map(({ op, text }, i) => {
+        if (op === "=") return text;
+        // Spaces at the edges stay plain, and normal white space inside drops a space where the line
+        // wraps, so no colored stub hangs at the end of a line.
+        const [, lead, core, trail] = text.match(/^(\s*)([\s\S]*?)(\s*)$/)!;
+        const Mark = op === "-" ? "del" : "ins";
+        return <Fragment key={i}>{lead}<Mark className={cn(op === "-" ? removed : added, "whitespace-normal", line.whole && "bg-transparent")}>{core}</Mark>{trail}</Fragment>;
+      })}
+    </div>
+  ));
+}
+
 /** The card's head: what kind of note, and its title. It stays put while the body scrolls. */
 function Head({ card }: { card: AuditCard }) {
   return (
@@ -389,17 +409,13 @@ function Card({ card, pick, seen, mode, keys, onCancel, onSave }: { card: AuditC
           ))}
         </div>
       ) : changed ? (
-        <div className="grid gap-2">
-          <div className={cn(textBlock, "border-(--destructive)/30 bg-(--destructive)/5 line-through decoration-(--destructive)/50")}>
-            <span className={cn(label, "text-(--destructive) no-underline")}>now</span>
-            {newTitle !== card.note.title && <b className="block">{card.note.title}</b>}
-            {card.note.body}
-          </div>
-          <div className={cn(textBlock, "border-(--k-convention)/35 bg-(--k-convention)/6 text-foreground")}>
-            <span className={cn(label, "text-(--k-convention)")}>{own ? "your text" : "proposed by the agent"}</span>
-            {newTitle !== card.note.title && <b className="block">{newTitle}</b>}
-            {newBody}
-          </div>
+        <div className={cn(textBlock, "text-foreground")}>
+          <span className={cn(label, "flex gap-3")}>
+            <span className="text-(--destructive)">− now</span>
+            <span className="text-(--k-convention)">+ {own ? "your text" : "proposed by the agent"}</span>
+          </span>
+          {newTitle !== card.note.title && <b className="block"><Diff before={card.note.title} after={newTitle} /></b>}
+          <Diff before={card.note.body} after={newBody} />
         </div>
       ) : (
         <div className={textBlock}>{card.note.body}</div>
