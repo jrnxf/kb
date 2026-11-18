@@ -45,9 +45,9 @@ export function steps(cards: AuditCard[]): Step[] {
  * The buttons of a card. The agent's pick comes first, as accept. Then the other picks, each once.
  */
 export function choices(card: AuditCard): Choice[] {
-  // A promote card with notes that move along has no trash, as a merge card has none.
-  const all: Choice[] = card.promote ? ["promote", "keep", ...(card.merge ? [] : (["trash"] as Choice[]))]
-    : card.merge ? ["merge", "keep"]
+  // Every card offers trash. On a card with several notes, trash takes every note on it.
+  const all: Choice[] = card.promote ? ["promote", "keep", "trash"]
+    : card.merge ? ["merge", "keep", "trash"]
     : [...(card.proposed ? (["rewrite"] as Choice[]) : []), "keep", "trash"];
   return [card.action, ...all.filter((c) => c !== card.action)];
 }
@@ -73,7 +73,7 @@ const placed = (note: AuditNote) => note.place !== "hidden";
 export function freed(cards: AuditCard[], picks: Pick[]): number {
   return cards.reduce((n, card, i) => {
     const pick = picks[i]!;
-    if (pick.action === "trash") return n + (placed(card.note) ? 1 : 0);
+    if (pick.action === "trash") return n + [card.note, ...(card.merge ?? [])].filter(placed).length;
     if (pick.action === "merge") return n + (card.merge ?? []).filter(placed).length;
     // A moved rule loads from the instructions file, so its notes leave the index.
     if (pick.action === "promote") return n + [card.note, ...(card.merge ?? [])].filter(placed).length;
@@ -88,7 +88,7 @@ const notesOf = (card: AuditCard) => 1 + (card.merge?.length ?? 0);
 export function changes(cards: AuditCard[], picks: Pick[]): { changed: number; total: number } {
   const changed = cards.reduce((n, card, i) => {
     const action = picks[i]!.action;
-    return n + (action === "keep" ? 0 : action === "merge" || action === "promote" ? notesOf(card) : 1);
+    return n + (action === "keep" ? 0 : action === "merge" || action === "promote" || action === "trash" ? notesOf(card) : 1);
   }, 0);
   return { changed, total: cards.reduce((n, card) => n + notesOf(card), 0) };
 }
@@ -110,6 +110,12 @@ export function promoteLines(card: AuditCard, pick: Pick): string[] {
   return [...heading, ...pick.rule.split("\n")];
 }
 
+/** The trash of a card, in words: it says when it takes more than one note. */
+const trashLabel = (card: AuditCard) => {
+  const n = notesOf(card);
+  return n === 1 ? "trash" : n === 2 ? "trash both" : `trash all ${n}`;
+};
+
 /** The keep of a card, in words: a merge keeps both notes, a promote keeps the note in kb. */
 const keepLabel = (card: AuditCard) => (card.promote ? "keep in kb" : card.merge ? "keep both" : "keep as is");
 
@@ -126,6 +132,8 @@ export function pickLabel(card: AuditCard, pick: Pick): string {
       return "ask the agent to rewrite";
     case "keep":
       return keepLabel(card);
+    case "trash":
+      return trashLabel(card);
     default:
       return pick.action;
   }
@@ -138,6 +146,7 @@ export function choiceLabel(card: AuditCard, choice: Choice): string {
   if (choice === "ask") return "ask the agent";
   if (choice === "edit") return "edit";
   if (choice === "keep") return keepLabel(card);
+  if (choice === "trash") return trashLabel(card);
   return choice;
 }
 
@@ -155,15 +164,19 @@ export function toPicks(cards: AuditCard[], picks: Pick[]): AuditPick[] {
   });
 }
 
-/** The summary before Apply: each pick with the cards that have it, in a fixed order. */
-export function summary(cards: AuditCard[], picks: Pick[]): { label: string; action: Pick["action"]; ids: string[] }[] {
-  const groups = new Map<string, { label: string; action: Pick["action"]; ids: string[] }>();
+/**
+ * The summary before Apply: each pick with the cards that have it, in a fixed order. titles names
+ * the notes: for a trash or a move, every note on the card, since each one leaves kb.
+ */
+export function summary(cards: AuditCard[], picks: Pick[]): { label: string; action: Pick["action"]; ids: string[]; titles: string[] }[] {
+  const groups = new Map<string, { label: string; action: Pick["action"]; ids: string[]; titles: string[] }>();
   const order = ["promote", "rewrite", "merge", "ask", "trash", "keep"];
   cards.forEach((card, i) => {
     const pick = picks[i]!;
-    const label = pick.action === "ask" ? "sent back to the agent to rewrite" : pickLabel(card, pick);
-    const group = groups.get(label) ?? { label, action: pick.action, ids: [] };
+    const label = pick.action === "ask" ? "sent back to the agent to rewrite" : pick.action === "trash" ? "trash" : pickLabel(card, pick);
+    const group = groups.get(label) ?? { label, action: pick.action, ids: [], titles: [] };
     group.ids.push(card.id);
+    group.titles.push(...(pick.action === "trash" || pick.action === "promote" ? [card.note, ...(card.merge ?? [])] : [card.note]).map((note) => note.title));
     groups.set(label, group);
   });
   return [...groups.values()].sort((a, b) => order.indexOf(a.action) - order.indexOf(b.action));

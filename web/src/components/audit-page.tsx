@@ -430,6 +430,14 @@ function Diff({ before, after }: { before: string; after: string }) {
   ));
 }
 
+/** What the current pick does to the i-th note of a card with several notes. */
+function fate(card: AuditCard, pick: Pick, i: number): string {
+  if (pick.action === "trash") return "goes to the trash";
+  if (pick.action === "promote") return `moves to ${promoteFile(card)}`;
+  if (pick.action === "merge") return i === 0 ? "stays, with every fact" : "goes to the trash";
+  return card.promote ? "stays in kb" : "stays";
+}
+
 /** The card's head: what kind of note, and its title. It stays put while the body scrolls. */
 function Head({ card }: { card: AuditCard }) {
   return (
@@ -497,7 +505,7 @@ function Card({ card, pick, seen, mode, keys, textKeys, onCancel, onSave }: { ca
             <div key={note.id} className="rounded-lg border px-3.5 py-2.5">
               <div className="text-[13.5px] font-semibold">{note.title}</div>
               <div className="mt-1 text-[13px] whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{note.body}</div>
-              <div className="mt-1.5 text-[11.5px] text-faint">{card.promote ? `moves to ${promoteFile(card)}` : i === 0 ? "stays, with every fact" : "goes to the trash"}</div>
+              <div className="mt-1.5 text-[11.5px] text-faint">{fate(card, pick, i)}</div>
             </div>
           ))}
         </div>
@@ -514,7 +522,7 @@ function Card({ card, pick, seen, mode, keys, textKeys, onCancel, onSave }: { ca
         <div className={cn(textBlock, "text-foreground")}>{card.note.body}</div>
       )}
 
-      {card.promote && <PromoteBox card={card} pick={pick} />}
+      {card.promote && pick.action === "promote" && <PromoteBox card={card} pick={pick} />}
 
       {card.merge && changed && !card.promote && (
         <div className={cn(textBlock, "mt-2.5 border-(--k-convention)/35 bg-(--k-convention)/6 text-foreground")}>
@@ -686,10 +694,10 @@ function End({ data, picks, left, applying, error, onApply }: { data: AuditData;
           <li key={group.label} className={cn("text-[13.5px]", `a-${group.action}`)}>
             <span className="flex items-center gap-2 font-semibold">
               <span className="size-2.5 rounded-[3px] bg-(--a)" />
-              {group.label} <span className="font-normal text-faint">{group.ids.length}</span>
+              {group.label} <span className="font-normal text-faint">{group.titles.length}</span>
             </span>
             <span className="mt-0.5 block pl-4.5 text-[12.5px] text-muted-foreground">
-              {group.ids.map((id) => data.cards.find((c) => c.id === id)!.note.title).join(" · ")}
+              {group.titles.join(" · ")}
             </span>
           </li>
         ))}

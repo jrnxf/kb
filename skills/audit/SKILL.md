@@ -98,11 +98,11 @@ KB_AUDIT
   - For a keep, say what you could not check or why no change is right.
 - Put the `ask` ids in the items too, as `keep`, with a `group`. Cards with the same group sit together after a divider, and the user can keep the whole group with one key. A group keep records no check.
 - What each card offers:
-  - Every card offers to accept your pick, edit the text and keep as is. Every card but a merge offers trash and asking you for a rewrite.
+  - Every card offers to accept your pick, edit the text, keep and trash. On a card with several notes, trash takes every note on it. Every card but a merge offers asking you for a rewrite.
   - When the user keeps a note on its card, kb records the check.
   - A card with your new text offers to use it.
   - A merge card offers merge and keep both.
-  - A promote card shows the lines it adds, under the lines above them in the file. It offers move, keep, edit and ask, and trash when no notes move with it.
+  - A promote card shows the lines it adds, under the lines above them in the file. It offers move, keep, edit, ask and trash.
 - Never propose delete. When the user asks for a note to be gone now, run `kb delete <id>` yourself, outside the audit.
 
 `kb audit propose` prints the page link. If it says kb serve is not running, start `kb serve` in the background. Give the user the link, and stop. Apply nothing yourself: the page applies the picks in one commit.

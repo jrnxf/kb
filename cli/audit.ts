@@ -286,11 +286,13 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
     const changed = drift(item, active);
     if (changed) throw new KbError(`${changed}. Reload the page, or run /kb:audit again.`);
     const note = active.get(pick.id)!;
-    // A promote card offers no rewrite: its text is the rule. With notes that move along, it offers no trash either.
-    const allowed = item.action === "promote" ? ["promote", "keep", "ask", ...(item.merge ? [] : ["trash"])] : ["rewrite", "trash", "keep", "ask", ...(item.merge ? ["merge"] : [])];
+    // A promote card offers no rewrite: its text is the rule.
+    const allowed = item.action === "promote" ? ["promote", "keep", "ask", "trash"] : ["rewrite", "trash", "keep", "ask", ...(item.merge ? ["merge"] : [])];
     if (!allowed.includes(pick.action)) throw new KbError(`picks[${i}].action: ${pick.action} is not an action for ${pick.id}`);
     if (pick.action === "ask" && (typeof pick.request !== "string" || !pick.request.trim())) throw new KbError(`picks[${i}]: say what is wrong with ${pick.id}`);
-    const leaving = pick.action === "trash" ? [note] : pick.action === "merge" ? item.merge!.map((id) => active.get(id)!) : [];
+    // A trash takes every note on the card: on a card with several notes, the user trashes them all.
+    const partners = (item.merge ?? []).map((id) => active.get(id)!);
+    const leaving = pick.action === "trash" ? [note, ...partners] : pick.action === "merge" ? partners : [];
     for (const each of leaving) if (existsSync(store.notePath(each, true))) throw new KbError(`cannot trash ${each.id}: the trash has a note with that id`);
     // A rewrite takes the user's text, or else the agent's. Without either there is nothing to write.
     const title = pick.title ?? item.title, body = pick.body ?? item.body;
@@ -307,9 +309,9 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
       : pick.action === "rewrite" ? { ...text, last_verified: now, ...verifiedAt(note) }
       : pick.action === "merge" ? { ...text, last_verified: now, ...verifiedAt(note), supersedes: [...new Set([...(note.supersedes ?? []), ...item.merge!])] }
       : null;
-    const moving = pick.action === "promote" ? [note, ...(item.merge ?? []).map((id) => active.get(id)!)] : [];
+    const moving = pick.action === "promote" ? [note, ...partners] : [];
     const written = fields ? [next(note, fields, i)] : moving.map((each) => next(each, { promoted_to: promotedTo() }, i));
-    return { pick, item, note, checked, written, rule };
+    return { pick, item, note, checked, written, rule, leaving };
   });
 
   // Every rule goes into the instructions file before the first note changes. A note marked as moved
@@ -326,19 +328,19 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
   }
 
   const trash = (note: StoredNote) => store.move(note, true, now);
-  for (const { pick, item, note, checked, written } of plan) {
+  for (const { pick, item, note, checked, written, leaving } of plan) {
     for (const each of written) store.writeNote(each);
     switch (pick.action) {
       case "rewrite":
         result.rewritten.push(note.id);
         break;
       case "merge":
-        for (const other of item.merge!) trash(active.get(other)!);
+        for (const other of leaving) trash(other);
         result.merged.push({ kept: note.id, trashed: item.merge! });
         break;
       case "trash":
-        trash(note);
-        result.trashed.push(note.id);
+        for (const each of leaving) trash(each);
+        result.trashed.push(...leaving.map((each) => each.id));
         break;
       case "ask":
         result.requests.push({ id: note.id, request: pick.request!.trim() });
