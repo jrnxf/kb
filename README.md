@@ -67,9 +67,12 @@ highest.
   leaves gotchas and conventions for you to name, because a rule that works leaves no use count.
   A session start says so in one
   line when more than 5 notes are candidates.
-- **Proven notes move to the repo.** `/kb:promote` proposes notes with high confidence and many
-  uses for the repo's `CLAUDE.md` or `AGENTS.md`, shows the exact text, and writes after you
-  confirm. This is the only write `kb` makes inside a repo. A promoted note is no longer injected.
+- **Rules move to an instruction file.** A rule you stated belongs where every session loads it
+  whole. The audit card offers to move it: a repo audit moves a repo rule to the repo's `CLAUDE.md`
+  (or `.claude/CLAUDE.md`, then `AGENTS.md`, when the repo keeps its rules there, and it creates
+  `CLAUDE.md` when the repo has none), and the global audit moves a global rule to the global file. The card shows the lines it
+  adds. Apply writes the file and does not commit it. This is the only write `kb` makes inside a
+  repo. A moved note is no longer injected.
 - **A missed checkpoint leaves a trace.** Nothing can run before `/clear`. So a session that ends
   with `/clear` and no checkpoint is recorded, and the next session in that directory gets one
   line with the path of its transcript, also when one of the two was in a subdirectory of the checkout. Before a compaction, a hook tells the summary what to
@@ -96,7 +99,7 @@ kb trash <id>...             kb restore <id>...
 kb delete <id>...            kb empty-trash
 kb trash|restore|delete|empty-trash --scope <repo id>   a whole project
 kb stale [--repo .]          kb verify <id>...
-kb budget [--repo .]         kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run]
+kb budget [--repo .]
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
 kb audit [--no-wait]         kb audit propose   kb audit status   (an agent audits the scope)
 kb instructions [--repo .]   kb sync      kb checkpointed <session-id>
@@ -130,7 +133,7 @@ and the text or rule of an audit Apply. It knows the shape of common tokens and 
 Anthropic, Slack and more), a password in a URL, and a long random value given to a name such as
 `API_KEY`. The error names the kind and the place, never the secret. Write a placeholder instead.
 
-Skills: `/kb:checkpoint`, `/kb:audit`, `/kb:promote`. Only you can start them. `/kb:note` writes a rule the
+Skills: `/kb:checkpoint`, `/kb:audit`. Only you can start them. `/kb:note` writes a rule the
 user states to an instruction file, and the agent starts it on its own.
 
 Every command accepts `--json`. The CLI knows nothing about Claude Code: only `hooks/` and `skills/` do.

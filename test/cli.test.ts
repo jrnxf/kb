@@ -282,7 +282,7 @@ describe("kb use, trash, show, list", () => {
   test("every command gives JSON with --json, also on an error", () => {
     const store = tempStore();
     putNote(store, { id: "a" });
-    for (const args of [["context"], ["scope"], ["show", "a"], ["search", "body"], ["list"], ["use", "a"], ["trash", "a"], ["restore", "a"], ["empty-trash"], ["html"], ["sync"], ["stale"], ["verify", "a"], ["budget"], ["promote", "a", "--to", "CLAUDE.md"], ["checkpointed", "s"], ["show", "zzz"], ["bogus"]]) {
+    for (const args of [["context"], ["scope"], ["show", "a"], ["search", "body"], ["list"], ["use", "a"], ["trash", "a"], ["restore", "a"], ["empty-trash"], ["html"], ["sync"], ["stale"], ["verify", "a"], ["budget"], ["checkpointed", "s"], ["show", "zzz"], ["bogus"]]) {
       const result = kb(store, [...args, "--json"]);
       expect(result.json, args.join(" ")).toBeDefined();
     }
