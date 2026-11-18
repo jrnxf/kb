@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>kb - memory for coding agents</title>
+<meta name="description" content="kb keeps what your coding agent learns as plain markdown notes, and gives every session the same small slice.">
+<link rel="canonical" href="https://kb.jrnxf.co/">
+<meta property="og:title" content="kb - memory for coding agents">
+<meta property="og:description" content="kb keeps what your coding agent learns as plain markdown notes, and gives every session the same small slice.">
+<meta property="og:url" content="https://kb.jrnxf.co/">
+<meta name="theme-color" content="#0a0a0b">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<!--FONT_PRELOADS-->
+<style>
+/*FONT_FACES*/
+/*SHARED_CSS*/
+/* The page is one agent session. Prompts type out and replies fade in as they scroll into view, once each. Green is the only accent. */
+:root { color-scheme: dark; --bg: #0a0a0b; --surface: #111113; --ink: #ededee; --soft: #c9c9ce; --mute: #85858c; --faint: #55555b; --line: #1f1f23; --line2: #2a2a2f; --sunk: #161619;
+  --body: #6fd39c; --index: #93acff; --gone: #f39a5c; --r: 8px;
+  --f-body: "Geist Variable", system-ui, sans-serif; --f-mono: "Geist Mono Variable", ui-monospace, Menlo, monospace; --f-display: var(--f-mono); --term-bg: #0c0c0e; --term-line: var(--line);
+  --z-bar: 10; }
+* { box-sizing: border-box; }
+html { background: var(--bg); scroll-padding-top: 72px; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.65 var(--f-body); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+::selection { background: color-mix(in oklab, var(--body) 30%, transparent); }
+a { color: inherit; }
+.pad { padding-inline: max(16px, env(safe-area-inset-left)) max(16px, env(safe-area-inset-right)); }
+.col { max-width: 820px; margin: 0 auto; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* session bar */
+.bar { position: sticky; top: 0; z-index: var(--z-bar); background: color-mix(in oklab, var(--bg) 94%, transparent); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top); }
+.bar .col { display: flex; align-items: center; gap: 14px; height: 52px; font: 13px var(--f-mono); color: var(--mute); }
+.bar .brand { display: flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 600; text-decoration: none; }
+.bar .live { width: 7px; height: 7px; border-radius: 50%; background: var(--body); }
+.bar .path { color: var(--faint); }
+.bar .sp { flex: 1; }
+.meter { display: flex; align-items: center; gap: 8px; }
+.meter i { width: 64px; height: 4px; border-radius: 2px; background: var(--line2); overflow: hidden; display: block; }
+.meter i::before { content: ""; display: block; height: 100%; width: 100%; background: var(--body); transform-origin: left; transform: scaleX(.883); }
+.bar nav { display: flex; gap: 16px; }
+.bar nav a { text-decoration: none; transition: color 150ms ease; }
+@media (hover: hover) and (pointer: fine) { .bar nav a:hover { color: var(--ink); } }
+
+/* hero */
+.hero { padding-block: 88px 24px; }
+h1 { font: 600 clamp(34px, 6vw, 60px)/1.04 var(--f-mono); margin: 0; text-wrap: balance; }
+h1 span { color: var(--faint); }
+.lede { color: var(--mute); font-size: 18px; max-width: 540px; text-wrap: pretty; margin: 22px 0 0; }
+.cta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 30px; align-items: center; }
+.cta .w-btn { height: 40px; padding: 0 16px; font-size: 14px; text-decoration: none; }
+.cta .w-btn kbd { font: 12px var(--f-mono); color: var(--mute); }
+.cta small { font: 12.5px var(--f-mono); color: var(--faint); margin-left: 6px; }
+
+/* the log */
+.log { list-style: none; margin: 0; padding: 40px 0 0; }
+.sep { display: flex; align-items: center; gap: 14px; font: 12px var(--f-mono); color: var(--faint); margin: 24px 0 8px; }
+.sep::before, .sep::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.turn { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 0 14px; margin-top: 36px; }
+.turn > .g { font: 600 14px/26px var(--f-mono); text-align: center; color: var(--faint); user-select: none; }
+.turn.ai > .g { color: var(--body); font-size: 11px; }
+.turn.you .msg { justify-self: start; max-width: 100%; font: 15px/26px var(--f-mono); color: var(--ink); background: var(--sunk); border: 1px solid var(--line); border-radius: 10px; padding: 7px 14px; }
+.turn.ai .msg > p { margin: 3px 0 14px; color: var(--soft); max-width: 64ch; text-wrap: pretty; }
+.turn.ai .msg > p:last-child { margin-bottom: 0; }
+.turn.ai .msg > p b { color: var(--ink); font-weight: 600; }
+code { font: .87em var(--f-mono); color: var(--ink); background: var(--sunk); border: 1px solid var(--line); padding: 1px 5px; border-radius: 5px; }
+
+/* tool results */
+.tool { margin: 4px 0 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.tool > .h { display: flex; gap: 10px; align-items: baseline; font: 12.5px/1.4 var(--f-mono); color: var(--faint); padding: 11px 16px; border-bottom: 1px solid var(--line); min-width: 0; }
+.tool > .h b { color: var(--soft); font-weight: 500; flex: none; }
+.tool > .h .args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tool > .h .ok { margin-left: auto; color: var(--body); flex: none; font-variant-numeric: tabular-nums; }
+.tool > .b { padding: 20px; }
+.tool > .b.flush { padding: 0; }
+.tool > .b.loop { padding: 0; --in: 32px; height: calc(400px + 2 * var(--in)); }
+.tool > .b.loop .orbit { top: calc(48px + var(--in)); bottom: calc(48px + var(--in)); }
+.tool .term { border: 0; border-radius: 0; background: transparent; }
+.tool .term-bar { display: none; }
+.tool .term-body { padding: 16px 18px 18px; }
+
+.cmds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin: 4px 0 0; }
+.cmds div { background: var(--surface); padding: 14px 16px; display: grid; gap: 2px; }
+.cmds b { font: 500 13.5px var(--f-mono); color: var(--ink); }
+.cmds span { color: var(--mute); font-size: 14.5px; text-wrap: pretty; }
+pre { margin: 0; font: 13px/1.8 var(--f-mono); overflow-x: auto; color: var(--soft); }
+pre .c { color: var(--faint); }
+
+/* the end: /clear, and the loop starts again */
+.turn.prompt .msg { background: transparent; border-color: var(--line2); }
+.again { margin-top: 18px; }
+.again .msg > p { color: var(--mute) !important; }
+.close { margin: 88px 0 0; padding: 40px 0 72px; border-top: 1px solid var(--line); display: grid; gap: 18px; justify-items: start; }
+.close h2 { font: 600 clamp(24px, 3.4vw, 32px)/1.15 var(--f-mono); margin: 0; text-wrap: balance; }
+.close p { margin: 0; color: var(--mute); text-wrap: pretty; }
+footer { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; font: 12.5px var(--f-mono); color: var(--faint); padding-block: 0 48px; padding-bottom: max(48px, env(safe-area-inset-bottom)); }
+footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { footer a:hover { color: var(--ink); } }
+
+/* Reveal. Only with JS, so the page reads fine without it. Opacity and transform only. */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.js .turn > .g, .js .turn.ai .msg > *, .js .turn.you .msg { opacity: 0; transform: translateY(6px); transition: opacity 320ms var(--ease-out), transform 320ms var(--ease-out); transition-delay: calc(min(var(--i, 0), 4) * 45ms); }
+.js .turn.shown > .g, .js .turn.shown .msg, .js .turn.ai.shown .msg > * { opacity: 1; transform: none; }
+/* Typing: a character takes space only once typed, so the bubble grows with the text. The cursor leaves when the prompt "submits". */
+.js .turn.you .msg .c { display: none; }
+.js .turn.you .msg .c.on { display: inline; }
+.js .turn.you .msg .cur { display: inline-block; width: .55em; height: 1.05em; margin-left: 1px; vertical-align: -.17em; background: var(--ink); }
+.js .turn.you.done .msg .cur { display: none; }
+
+@media (max-width: 640px) {
+  .hero { padding-block: 48px 8px; } .lede { font-size: 17px; }
+  .bar .path, .bar nav .h { display: none; }
+  .turn { grid-template-columns: 14px minmax(0, 1fr); gap: 0 10px; }
+  .tool > .b { padding: 14px; } .tool > .h { padding: 10px 12px; }
+  .tool > .b.loop { padding: 0; --in: 14px; height: calc(420px + 2 * var(--in)); } .tool > .b.loop .orbit { top: calc(52px + var(--in)); bottom: calc(52px + var(--in)); }
+  .cmds { grid-template-columns: minmax(0, 1fr); }
+  :root { --term-h: 420px; } .term { font-size: 11.5px; }
+}
+</style>
+</head>
+<body>
+<header class="bar pad"><div class="col">
+  <a class="brand" href="#top"><span class="live" aria-hidden="true"></span>kb</a>
+  <span class="path">~/acme/shop</span>
+  <span class="sp"></span>
+  <span class="meter num" title="Context loaded by kb at session start"><i aria-hidden="true"></i>7,232 / 8,192</span>
+  <nav><a class="h" href="#install">install</a><a href="https://github.com/jrnxf/kb">github</a></nav>
+</div></header>
+
+<main class="pad" id="top"><div class="col">
+  <section class="hero">
+    <h1>Your agent forgets at /clear. <span>kb does not.</span></h1>
+    <p class="lede">kb keeps what your coding agent learns as plain markdown notes, and hands every new session the ones that matter. This page is one session with it.</p>
+    <div class="cta"><a class="w-btn primary" href="#install">Install the plugin</a><a class="w-btn" href="#log">Read the session</a><small>Claude Code · Bun · git</small></div>
+  </section>
+
+  <ol class="log" id="log">
+    <li class="sep">tuesday · new session in ~/acme/shop</li>
+
+    <li class="turn ai" data-first><span class="g" aria-hidden="true">●</span><div class="msg">
+      <div class="tool"><div class="h"><b>SessionStart</b><span class="args">kb context</span><span class="ok">✓ 7,232 ch</span></div><div class="b flush" data-w="term"></div></div>
+    </div></li>
+
+    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how did you know to run the migrations first?</div></li>
+    <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
+      <p>A session last week found it out and saved a note. <b>Every later session starts with it.</b></p>
+      <p>When you state a rule, I save it in that turn. Before /clear, <code>/kb:checkpoint</code> saves the rest.</p>
+      <div class="tool"><div class="h"><b>loop</b><span class="args">how a note gets here</span></div><div class="b" data-w="loop"></div></div>
+    </div></li>
+
+    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">do all the notes load every time?</div></li>
+    <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
+      <p>No. The budget is fixed. The top notes load with their full body. The rest get one index line each: the id, the kind and the end of the title.</p>
+      <div class="tool"><div class="h"><b>note</b><span class="args">run-migrations-before-seeding-or-the-seed</span></div><div class="b" data-w="morph"></div></div>
+      <p>I rank them: open work, then gotchas, conventions, decisions and how-tos. These are the real sizes of the kb repo's own notes.</p>
+      <div class="tool" id="budget"><div class="h"><b>kb context</b><span class="args">--chars 8192 --lines 60</span><span class="ok">✓ 1 body · 60 lines</span></div><div class="b" data-w="packer"></div></div>
+    </div></li>
+
+    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">and when there are hundreds?</div></li>
+    <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
+      <p>The store grows. <b>The session does not.</b> A note below the line is one <code>kb search</code> away.</p>
+      <div class="tool"><div class="h"><b>growth</b><span class="args">store vs session</span></div><div class="b" data-w="growth"></div></div>
+      <p>Notes also go stale, and the store says so.</p>
+      <div class="cmds">
+        <div><b>/kb:audit</b><span>Changed anchors and old notes go up for review.</span></div>
+        <div><b>/kb:promote</b><span>Proven notes move into CLAUDE.md or AGENTS.md.</span></div>
+        <div><b>kb trash</b><span>Restore in one command. Gone after 30 days.</span></div>
+        <div><b>kb sync</b><span>Give the store a remote. Every machine shares it.</span></div>
+      </div>
+    </div></li>
+
+    <li class="turn you" id="install"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how do I install it?</div></li>
+    <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
+      <p>You need Bun and git. There is no build step and no dependency.</p>
+      <div class="tool"><div class="h"><b>install</b><span class="args">three steps</span></div><div class="b"><pre><span class="c"># a marketplace entry</span>
+{ "name": "kb", "source": { "source": "github", "repo": "jrnxf/kb" } }
+
+<span class="c"># in Claude Code</span>
+/plugin install kb --marketplace &lt;owner&gt;/&lt;marketplace&gt;
+
+<span class="c"># ~/.claude/settings.json - kb replaces auto memory</span>
+{ "autoMemoryEnabled": false }</pre></div></div>
+    </div></li>
+
+    <li class="turn you prompt"><span class="g" aria-hidden="true">&gt;</span><div class="msg">/clear</div></li>
+    <li class="turn ai again"><span class="g" aria-hidden="true">●</span><div class="msg">
+      <p>SessionStart · kb context · the same <span class="num">7,232</span> characters come back.</p>
+    </div></li>
+  </ol>
+
+  <section class="close">
+    <h2>Give your agent a memory that fits.</h2>
+    <p>Plain files. A fixed budget. Nothing lost at /clear.</p>
+    <div class="cta" style="margin:0"><a class="w-btn primary" href="#install">Install the plugin</a><a class="w-btn" href="https://github.com/jrnxf/kb">View on GitHub</a></div>
+  </section>
+  <footer><span>kb · memory for coding agents</span><a href="https://github.com/jrnxf/kb">github.com/jrnxf/kb</a></footer>
+</div></main>
+<script>
+/*SHARED_JS*/
+
+// ---------- the session reveal ----------
+// Each prompt types out once when it scrolls into view, then the reply under it fades in with a short stagger.
+// A turn that is already above the screen (a jump link, a reload) shows at once. Reduced motion shows all at once.
+(() => {
+  const root = document.documentElement;
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches || new URLSearchParams(location.search).has("still");
+  if (still || !("IntersectionObserver" in window)) return;
+  root.classList.add("js");
+  const turns = [...document.querySelectorAll(".turn")];
+  for (const t of turns.filter((t) => t.classList.contains("ai"))) [...t.querySelector(".msg").children].forEach((c, i) => c.style.setProperty("--i", i + 1));
+  for (const m of document.querySelectorAll(".turn.you .msg")) {
+    const text = m.textContent;
+    m.innerHTML = `<span class="sr">${text}</span><span aria-hidden="true">${[...text].map((ch) => `<span class="c">${ch.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</span>`).join("")}<span class="cur"></span></span>`;
+  }
+  const next = (t) => { const n = turns[turns.indexOf(t) + 1]; return n && n.classList.contains("ai") ? n : null; };
+  const showAi = (t) => t && t.classList.add("shown");
+  // A prompt that is typing can be finished early. rush() types the rest at once and shows the reply.
+  const rushes = new Map();
+  const rush = (t) => { const r = rushes.get(t); if (r) r(); };
+  function showYou(t, instant) {
+    if (t.classList.contains("shown")) return rush(t);
+    t.classList.add("shown");
+    const cs = [...t.querySelectorAll(".c")];
+    const finish = () => { rushes.delete(t); cs.forEach((c) => c.classList.add("on")); t.classList.add("done"); showAi(next(t)); };
+    if (instant) return finish();
+    // About 12 ms a character, and never more than about 0.36 s for a whole prompt.
+    const step = Math.min(12, 360 / cs.length); let i = 0, timer = 0;
+    rushes.set(t, () => { clearTimeout(timer); finish(); });
+    const tick = () => {
+      cs[i].classList.add("on");
+      if (++i < cs.length) timer = setTimeout(tick, step + (cs[i - 1].textContent === " " ? 6 : 0));
+      else { rushes.delete(t); timer = setTimeout(() => { t.classList.add("done"); timer = setTimeout(() => showAi(next(t)), 40); }, 90); }
+    };
+    timer = setTimeout(tick, 40);
+  }
+  // A reader who scrolls faster than the typing never waits for it: past about 1.2 px per ms, every prompt on screen finishes at once.
+  let lastY = scrollY, lastT = performance.now();
+  addEventListener("scroll", () => {
+    const now = performance.now(), v = Math.abs(scrollY - lastY) / Math.max(1, now - lastT);
+    lastY = scrollY; lastT = now;
+    if (v > 1.2) for (const t of [...rushes.keys()]) rush(t);
+  }, { passive: true });
+  const io = new IntersectionObserver((es) => {
+    for (const e of es) {
+      if (!e.isIntersecting && e.boundingClientRect.top > 0) continue;
+      io.unobserve(e.target);
+      const above = e.boundingClientRect.bottom < 0;
+      if (e.target.classList.contains("you")) showYou(e.target, above); else showAi(e.target);
+    }
+  }, { rootMargin: "0px 0px -6% 0px" });
+  // A reply waits for its prompt. Only the first card, and anything that is already above the screen, shows by itself.
+  for (const t of turns) if (t.classList.contains("you") || t.hasAttribute("data-first")) io.observe(t);
+  // Anything that scrolls past above the screen before its turn shows at once, so fast scrolling never leaves gaps.
+  const catchUp = new IntersectionObserver((es) => { for (const e of es) if (!e.isIntersecting && e.boundingClientRect.bottom < 0) { const t = e.target; t.classList.contains("you") ? showYou(t, true) : showAi(t); catchUp.unobserve(t); } });
+  turns.forEach((t) => catchUp.observe(t));
+  // When a reply comes into view while its prompt is still typing, the prompt finishes, so the reader never looks at an empty reply.
+  const replyIn = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { const p = turns[turns.indexOf(e.target) - 1]; if (p && p.classList.contains("you")) showYou(p, true); replyIn.unobserve(e.target); } }, { rootMargin: "0px 0px -10% 0px" });
+  for (const t of turns) if (t.classList.contains("ai") && !t.hasAttribute("data-first")) replyIn.observe(t);
+})();
+</script>
+</body>
+</html>
