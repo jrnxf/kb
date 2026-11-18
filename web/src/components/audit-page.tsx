@@ -434,7 +434,7 @@ function Card({ card, pick, seen, mode, keys, onCancel, onSave }: { card: AuditC
       )}
 
       <div className="mt-3.5 rounded-lg bg-muted px-3.5 py-2.5 text-[13.5px]">
-        <b className="font-semibold">Agent: {card.action}.</b> {card.why}
+        <b className="font-semibold">The agent suggests {card.action}:</b> {card.why}
       </div>
       <div className="mt-3 text-[13px] text-muted-foreground" data-pick-line>
         {seen ? "Your pick" : "Picked now"}: <b className={cn("font-semibold text-foreground")}>{pickLabel(card, pick)}</b>
