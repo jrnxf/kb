@@ -1,16 +1,16 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { type Browser, chromium } from "playwright";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyAudit, auditData, openAudits, proposeAudit, readAudit } from "../cli/audit.ts";
 import { AGENT_ENV, auditPrompt, runState, startRun, waitRun } from "../cli/audit-run.ts";
-import { buildContext } from "../cli/context.ts";
+import { buildContext, contextFor } from "../cli/context.ts";
 import { auditableScopes, rememberRepo, repoRoot } from "../cli/repos.ts";
 import type { RepoInfo } from "../cli/scope.ts";
 import { type Served, runningPort, serve } from "../cli/serve.ts";
 import type { Store } from "../cli/store.ts";
 import type { AuditCard } from "../cli/wire.ts";
-import { choiceForKey, choices, freed, steps, summary, toPicks } from "../web/src/lib/audit.ts";
+import { changes, choiceForKey, choices, freed, steps, summary, toPicks } from "../web/src/lib/audit.ts";
 import { MAIN, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const SCOPE = "example.com/team/app";
@@ -36,7 +36,6 @@ const ITEMS = [
   { id: "d", action: "keep", why: "could not check it" },
   { id: "ask", action: "keep", why: "probably true" },
   { id: "keepme", action: "keep", why: "a rule", group: "conventions" },
-  { id: "g", action: "keep", why: "still true" },
 ];
 
 describe("kb audit propose", () => {
@@ -51,6 +50,8 @@ describe("kb audit propose", () => {
     [{ items: [] }, "no items"],
     [{ items: [{ id: "nope", action: "keep", why: "x" }] }, 'no active note "nope"'],
     [{ items: [{ id: "other", action: "keep", why: "x" }] }, "belongs to example.com/team/other"],
+    [{ items: [{ id: "g", action: "keep", why: "x" }] }, "belongs to global. Run the global audit outside any repo"],
+    [{ items: [{ id: "v", action: "promote", why: "x", rule: "a rule" }] }, "only the global audit moves a rule"],
     [{ items: [{ id: "v", action: "archive", why: "x" }] }, "action: must be one of"],
     [{ items: [{ id: "v", action: "trash", checked: true, why: "x" }] }, "checked: only a keep has it"],
     [{ items: [{ id: "v", action: "keep", checked: "yes", why: "x" }] }, "checked: must be true or false"],
@@ -61,7 +62,7 @@ describe("kb audit propose", () => {
     [{ items: [{ id: "v", action: "keep", why: "x", body: "new" }] }, "only a rewrite or a merge has new text"],
     [{ items: [{ id: "m", action: "merge", why: "x" }] }, "a merge names the notes"],
     [{ items: [{ id: "m", action: "merge", why: "x", merge: ["m"] }] }, 'no other active note "m"'],
-    [{ items: [{ id: "v", action: "trash", why: "x", merge: ["m2"] }] }, "only a merge has it"],
+    [{ items: [{ id: "v", action: "trash", why: "x", merge: ["m2"] }] }, "only a merge or a promote has it"],
     [{ items: [{ id: "m", action: "merge", why: "x", merge: ["m2"] }, { id: "m2", action: "trash", why: "x" }] }, "m2 is in the audit twice"],
   ])("refuses a bad proposal: %j", (input, message) => {
     const store = setup();
@@ -87,7 +88,7 @@ describe("the audit page data", () => {
     proposeAudit(store, { items: ITEMS }, repo());
     store.move(store.find("t")!, true, "2026-01-02T00:00:00Z");
     const data = auditData(store, SCOPE, "tok");
-    expect(data.cards.map((c) => c.id)).toEqual(["v", "r", "m", "d", "ask", "keepme", "g"]);
+    expect(data.cards.map((c) => c.id)).toEqual(["v", "r", "m", "d", "ask", "keepme"]);
     const card = (id: string) => data.cards.find((c) => c.id === id)!;
     expect(card("r").proposed).toEqual({ title: "Title of r", body: "the new body" });
     expect(card("m").merge!.map((n) => n.id)).toEqual(["m2"]);
@@ -109,10 +110,9 @@ describe("Apply", () => {
         { id: "d", action: "keep", checked: true },
         { id: "ask", action: "ask", request: "the code moved" },
         { id: "keepme", action: "keep" },
-        { id: "g", action: "rewrite", title: "Your title", body: "your body" },
       ],
     });
-    expect(result).toMatchObject({ rewritten: ["r", "g"], merged: [{ kept: "m", trashed: ["m2"] }], trashed: ["t"], checked: ["v", "d"], kept: ["keepme"], requests: [{ id: "ask", request: "the code moved" }] });
+    expect(result).toMatchObject({ rewritten: ["r"], merged: [{ kept: "m", trashed: ["m2"] }], trashed: ["t"], checked: ["v", "d"], kept: ["keepme"], requests: [{ id: "ask", request: "the code moved" }] });
     expect(Number(sh(store.home, "git", "rev-list", "--count", "HEAD"))).toBe(before + 1);
     expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe(`kb: apply the audit of ${SCOPE}`);
     // The agent checked v, and the user kept d on its card: both record the check, at the repo's HEAD.
@@ -122,9 +122,6 @@ describe("Apply", () => {
     expect(store.find("keepme")).toMatchObject({ last_verified: "2026-01-01T00:00:00Z" });
     expect(store.find("keepme")!.verified_at_commit).toBeUndefined();
     expect(store.find("r")!.body).toBe("the new body");
-    expect(store.find("g")).toMatchObject({ title: "Your title", body: "your body" });
-    // A global note has no commit of this repo to be verified at.
-    expect(store.find("g")!.verified_at_commit).toBeUndefined();
     expect(store.find("m")).toMatchObject({ body: "merged body", supersedes: ["m2"] });
     expect(store.notes().map((n) => n.id)).not.toContain("m2");
     expect(store.notes().map((n) => n.id)).not.toContain("t");
@@ -203,15 +200,112 @@ describe("Apply", () => {
   });
 });
 
+describe("the global audit", () => {
+  const GLOBAL = { scope: null, root: null, head: null } as unknown as RepoInfo;
+  const RULES = "# Rules\n\n## Style\n\n- Never use the em dash.\n\n## Tools\n\n- Use gh-axi for GitHub.\n";
+
+  /** A store whose global instructions file is a link, as a dotfiles manager makes it. */
+  function globalSetup() {
+    const store = setup();
+    putNote(store, { id: "g2", kind: "convention", body: "short sentences" });
+    putNote(store, { id: "g3", kind: "convention", body: "active voice" });
+    const dir = tempDir();
+    const real = join(dir, "AGENTS.md");
+    writeFileSync(real, RULES);
+    symlinkSync(real, join(dir, "CLAUDE.md"));
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(dir, "CLAUDE.md") }));
+    sh(store.home, "git", "add", "-A");
+    sh(store.home, "git", "commit", "-q", "-m", "global");
+    return { store, real, link: join(dir, "CLAUDE.md") };
+  }
+  const MOVE = { id: "g2", action: "promote", why: "a rule the user stated", rule: "- Write short sentences in the active voice.", section: "Style", merge: ["g3"] };
+
+  test("covers the global notes only, and refuses a repo note", () => {
+    const { store } = globalSetup();
+    expect(() => proposeAudit(store, { items: [{ id: "v", action: "keep", why: "x" }] }, GLOBAL)).toThrow(`belongs to ${SCOPE}. Run the audit inside that repo`);
+    expect(() => proposeAudit(store, { items: [{ id: "g", action: "promote", why: "x" }] }, GLOBAL)).toThrow("a promote needs the text");
+    expect(() => proposeAudit(store, { items: [{ id: "g", action: "keep", why: "x", rule: "r" }] }, GLOBAL)).toThrow("only a promote has a rule");
+    proposeAudit(store, { items: [{ id: "g", action: "keep", why: "x" }] }, GLOBAL);
+    expect(openAudits(store)).toEqual(["global"]);
+  });
+
+  test("the card shows the lines Apply adds, at the end of the section, and nothing is written yet", () => {
+    const { store, real } = globalSetup();
+    proposeAudit(store, { items: [MOVE] }, GLOBAL);
+    const [card] = auditData(store, "global", "tok").cards;
+    expect(card!.merge!.map((n) => n.id)).toEqual(["g3"]);
+    expect(card!.promote).toEqual({ file: expect.stringContaining("CLAUDE.md"), path: expect.stringContaining("AGENTS.md"), link: true, section: "Style", above: ["## Style", "", "- Never use the em dash."], added: ["- Write short sentences in the active voice."], rule: MOVE.rule });
+    expect(readFileSync(real, "utf8")).toBe(RULES);
+  });
+
+  test("Apply writes the rule through the link, marks the notes moved, and sessions stop loading them", () => {
+    const { store, real, link } = globalSetup();
+    proposeAudit(store, { items: [MOVE, { id: "g", action: "keep", why: "x" }] }, GLOBAL);
+    const before = Number(sh(store.home, "git", "rev-list", "--count", "HEAD"));
+    const result = applyAudit(store, "global", { picks: [{ id: "g2", action: "promote", rule: "- Use short sentences." }, { id: "g", action: "keep" }] });
+    expect(result.promoted).toEqual(["g2", "g3"]);
+    expect(readFileSync(real, "utf8")).toBe("# Rules\n\n## Style\n\n- Never use the em dash.\n- Use short sentences.\n\n## Tools\n\n- Use gh-axi for GitHub.\n");
+    expect(Bun.spawnSync(["test", "-L", link]).exitCode).toBe(0);
+    expect(store.find("g2")!.promoted_to).toBe("CLAUDE.md");
+    expect(store.find("g3")!.promoted_to).toBe("CLAUDE.md");
+    expect(Number(sh(store.home, "git", "rev-list", "--count", "HEAD"))).toBe(before + 1);
+    expect(contextFor(store, null).text).not.toContain("g2");
+  });
+
+  test("two rules for one new section: the second card shows the heading the first one adds", () => {
+    const { store } = globalSetup();
+    const one = { id: "g2", action: "promote", why: "x", rule: "- One.", section: "Writing" };
+    const two = { id: "g3", action: "promote", why: "x", rule: "- Two.", section: "Writing" };
+    proposeAudit(store, { items: [one, two] }, GLOBAL);
+    const [first, second] = auditData(store, "global", "tok").cards;
+    expect(first!.promote!.added).toEqual(["", "## Writing", "", "- One."]);
+    expect(second!.promote!.above).toEqual(["", "## Writing", "", "- One."].slice(-3));
+    expect(second!.promote!.added).toEqual(["- Two."]);
+  });
+
+  test("a rule the file holds already is not added twice, so a failed Apply can run again", () => {
+    const { store, real } = globalSetup();
+    proposeAudit(store, { items: [MOVE] }, GLOBAL);
+    // As if the last Apply wrote the file and then failed before the notes changed.
+    const written = RULES.replace("- Never use the em dash.\n", `- Never use the em dash.\n${MOVE.rule}\n`);
+    writeFileSync(real, written);
+    applyAudit(store, "global", { picks: [{ id: "g2", action: "promote" }] });
+    expect(readFileSync(real, "utf8")).toBe(written);
+    expect(store.find("g2")!.promoted_to).toBe("CLAUDE.md");
+  });
+
+  test("a card whose rule the file holds already says Apply adds nothing", () => {
+    const { store } = globalSetup();
+    proposeAudit(store, { items: [{ ...MOVE, rule: "- Never use the em dash." }] }, GLOBAL);
+    expect(auditData(store, "global", "tok").cards[0]!.promote!.present).toBe(true);
+  });
+
+  test("a missing instructions file stops Apply before any change", () => {
+    const { store } = globalSetup();
+    proposeAudit(store, { items: [MOVE] }, GLOBAL);
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(tempDir(), "missing.md") }));
+    expect(() => applyAudit(store, "global", { picks: [{ id: "g2", action: "promote" }] })).toThrow("does not exist");
+    expect(store.find("g2")!.promoted_to).toBeUndefined();
+    expect(readAudit(store, "global")!.result).toBeUndefined();
+  });
+
+  test("a promote card with notes that move along offers no trash", () => {
+    const { store } = globalSetup();
+    proposeAudit(store, { items: [MOVE] }, GLOBAL);
+    expect(() => applyAudit(store, "global", { picks: [{ id: "g2", action: "trash" }] })).toThrow("trash is not an action for g2");
+    expect(() => applyAudit(store, "global", { picks: [{ id: "g2", action: "keep", rule: "x" }] })).toThrow("only a promote has it");
+  });
+});
+
 const FAKE = join(import.meta.dir, "fixtures", "fake-audit-agent.sh");
 const REMOTE = "https://example.com/team/app.git";
 
 /** Run the CLI in a checkout of the repo, with the fake agent in place of claude. */
-function cli(store: Store, dir: string, fake: string, args: string[]) {
+function cli(store: Store, dir: string, fake: string, args: string[], items: object[] = [ITEMS[0]!]) {
   const out = tempDir();
   const r = Bun.spawnSync(["bun", MAIN, ...args], {
     cwd: dir,
-    env: { ...process.env, KB_HOME: store.home, [AGENT_ENV]: FAKE, FAKE_AUDIT: fake, FAKE_OUT: out, FAKE_ITEMS: JSON.stringify({ items: [ITEMS[0]] }) },
+    env: { ...process.env, KB_HOME: store.home, [AGENT_ENV]: FAKE, FAKE_AUDIT: fake, FAKE_OUT: out, FAKE_ITEMS: JSON.stringify({ items }) },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -272,20 +366,29 @@ describe("kb audit starts an agent", () => {
     }
   });
 
-  test("outside a repo it refuses, since global notes are in every repo's audit", () => {
+  test("outside a repo it audits the global notes, in an empty folder that no repo reaches", () => {
     const store = setup();
-    const r = cli(store, tempDir(), "propose", ["audit"]);
-    expect(r.code).not.toBe(0);
-    expect(r.stderr).toContain("run it inside one");
+    const r = cli(store, tempDir(), "propose", ["audit"], [{ id: "g", action: "keep", why: "still true" }]);
+    expect(r.stderr).toContain("an agent audits the global notes");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`#audit=global`);
+    expect(readAudit(store, "global")!.items.map((i) => i.id)).toEqual(["g"]);
+    const cwd = readFileSync(join(r.out, "cwd.txt"), "utf8").trim();
+    expect(cwd).toContain("kb-audit-global-");
+    expect(readFileSync(join(r.out, "git.txt"), "utf8").trim()).toBe("none");
+    // The folder is removed when the agent ends.
+    expect(existsSync(cwd)).toBe(false);
   });
 
   test("a session start records where the repo is checked out", () => {
     const store = setup();
     const dir = tempRepo({ remote: REMOTE });
     buildContext(store, dir);
-    expect(auditableScopes(store)).toEqual([SCOPE]);
+    expect(auditableScopes(store)).toEqual(["global", SCOPE]);
     rememberRepo(store, "example.com/team/gone", join(tempDir(), "missing"));
-    expect(auditableScopes(store)).toEqual([SCOPE]);
+    // A repo with no remote whose folder is named global is not listed twice.
+    rememberRepo(store, "global", dir);
+    expect(auditableScopes(store)).toEqual(["global", SCOPE]);
   });
 
   test("the headless prompt is the skill without its frontmatter, and starts with the sent-back notes", () => {
@@ -322,6 +425,10 @@ describe("the deck", () => {
     expect(choices(card({ action: "trash" }))).toEqual(["trash", "keep"]);
     expect(choices(card({ action: "rewrite", proposed: { title: "T", body: "new" } }))).toEqual(["rewrite", "keep", "trash"]);
     expect(choices(card({ action: "merge", merge: [card({}).note] }))).toEqual(["merge", "keep"]);
+    const promote = { file: "~/.claude/CLAUDE.md", path: "~/dotfiles/AGENTS.md", link: true, above: [], added: ["- r"], rule: "- r" };
+    expect(choices(card({ action: "promote", promote }))).toEqual(["promote", "keep", "trash"]);
+    expect(choices(card({ action: "promote", promote, merge: [card({}).note] }))).toEqual(["promote", "keep"]);
+    expect(choiceForKey(card({ action: "promote", promote, merge: [card({}).note] }), "r")).toBe("ask");
   });
 
   test("a takes the agent's pick, and the text keys sit beside the buttons", () => {
@@ -336,6 +443,17 @@ describe("the deck", () => {
   test("counts the notes the picks take out of the index", () => {
     const cards = [card({}), card({}), card({ merge: [card({}).note, card({}).note] }), card({})];
     expect(freed(cards, [{ action: "trash" }, { action: "trash" }, { action: "merge" }, { action: "keep" }])).toBe(4);
+  });
+
+  test("a moved rule takes its notes and the notes that move with it out of the index", () => {
+    const promote = { file: "~/.claude/CLAUDE.md", path: "~/dotfiles/AGENTS.md", link: true, above: [], added: ["- r"], rule: "- r" };
+    const moving = card({ action: "promote", promote, merge: [card({}).note, { ...card({}).note, place: "hidden" }] });
+    expect(freed([moving], [{ action: "promote" }])).toBe(2);
+    // The summary counts notes, not cards: the move changes all three notes on its card.
+    expect(changes([moving, card({})], [{ action: "promote" }, { action: "keep" }])).toEqual({ changed: 3, total: 4 });
+    expect(changes([moving], [{ action: "keep" }])).toEqual({ changed: 0, total: 3 });
+    expect(summary([moving], [{ action: "promote", rule: "mine" }]).map((g) => g.label)).toEqual(["move to CLAUDE.md with your text"]);
+    expect(toPicks([moving], [{ action: "promote", rule: "mine" }])).toEqual([{ id: "x", action: "promote", rule: "mine" }]);
   });
 
   test("counts no line for a note that had none", () => {
@@ -441,6 +559,28 @@ describe("the audit page in a browser", () => {
       await page.getByTitle("Back to the notes").click();
       await page.locator(`[data-rail="scope:${SCOPE}"]`).click();
       await page.locator('[data-audit-start="open"]').waitFor();
+      await page.close();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    }
+  }, 30000);
+
+  test("the global notes have an Audit button too, and the agent runs outside any repo", async () => {
+    const store = setup();
+    const out = tempDir();
+    const env = { [AGENT_ENV]: FAKE, FAKE_AUDIT: "propose", FAKE_OUT: out, FAKE_ITEMS: JSON.stringify({ items: [{ id: "g", action: "keep", why: "still true" }] }), KB_HOME: store.home };
+    const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, env);
+    try {
+      served = serve(store, { port: 0 });
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      page.setDefaultTimeout(15000);
+      await page.goto(served.url);
+      await page.locator('[data-rail="scope:global"]').click();
+      await page.locator('[data-audit-start="start"]').click();
+      await page.locator('[data-card="g"]').waitFor();
+      expect(await page.evaluate(() => location.hash)).toBe("#audit=global");
+      expect(readFileSync(join(out, "git.txt"), "utf8").trim()).toBe("none");
       await page.close();
     } finally {
       for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v);

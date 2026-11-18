@@ -1,9 +1,10 @@
 // `kb audit` and the page's Audit button start one headless agent that runs the audit skill in the
-// repo. The agent saves its proposal with `kb audit propose`, as it does in a session, and the
+// repo, or outside any repo for the global notes. The agent saves its proposal with `kb audit propose`, as it does in a session, and the
 // user picks in the page. This file starts that agent and says where its run stands.
 
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readAudit } from "./audit.ts";
 import { KbError } from "./note.ts";
@@ -97,13 +98,17 @@ function agentCommand(prompt: string): string[] {
 
 /**
  * Start the agent for the scope in its checkout, or return the run that is already going. It runs
- * detached: it keeps going when the command or the server that started it stops.
+ * detached: it keeps going when the command or the server that started it stops. The global audit
+ * runs in a new empty folder, so no repo's scope or hooks reach it.
  */
-export function startRun(store: Store, scope: string, root: string): AuditRunState {
+export function startRun(store: Store, scope: string, root?: string): AuditRunState {
   if (process.env[RUN_ENV]) throw new KbError("an audit agent cannot start another audit");
   const now = runState(store, scope);
   if (now?.status === "running") return now;
   store.ensure();
+  if (scope !== "global" && !root) throw new KbError(`kb does not know where ${scope} is checked out`);
+  // The empty folder of a global audit is removed when the agent ends.
+  const cwd = root ?? mkdtempSync(join(tmpdir(), "kb-audit-global-"));
   const started = nowIso();
   const stamp = started.replace(/[^0-9]/g, "");
   const safe = scope.replace(/[^a-z0-9.-]/gi, "_");
@@ -115,16 +120,17 @@ export function startRun(store: Store, scope: string, root: string): AuditRunSta
   const out = openSync(log, "a");
   // The shell writes the exit code when the agent ends, so a later `kb audit` can tell a failure
   // from an agent that found nothing to change.
-  const child = spawn("/bin/sh", ["-c", '"$@"; echo $? > "$KB_AUDIT_EXIT"', "sh", command!, ...args], {
-    cwd: root,
+  const script = `"$@"; code=$?; ${root ? "" : 'rm -rf "$KB_AUDIT_TMP"; '}echo $code > "$KB_AUDIT_EXIT"`;
+  const child = spawn("/bin/sh", ["-c", script, "sh", command!, ...args], {
+    cwd,
     detached: true,
     stdio: ["ignore", out, out],
-    env: { ...process.env, [RUN_ENV]: scope, KB_AUDIT_EXIT: exit, PATH: `${join(PLUGIN, "bin")}:${process.env.PATH ?? ""}` },
+    env: { ...process.env, [RUN_ENV]: scope, KB_AUDIT_EXIT: exit, ...(root ? {} : { KB_AUDIT_TMP: cwd }), PATH: `${join(PLUGIN, "bin")}:${process.env.PATH ?? ""}` },
   });
   closeSync(out);
   child.unref();
   const runs = readJson<Run>(store, RUNS);
-  writeAtomic(store.statePath(RUNS), `${JSON.stringify({ ...runs, [scope]: { scope, root, pid: child.pid!, started, log, exit } }, null, 2)}\n`);
+  writeAtomic(store.statePath(RUNS), `${JSON.stringify({ ...runs, [scope]: { scope, root: cwd, pid: child.pid!, started, log, exit } }, null, 2)}\n`);
   return { scope, started, log, status: "running" };
 }
 

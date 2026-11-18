@@ -33,8 +33,8 @@ export function repoRoot(store: Store, scope: string): string | undefined {
   return root && existsSync(root) ? root : undefined;
 }
 
-/** The repos the page can audit: each has a checkout on disk. */
+/** The scopes the page can audit: the global notes, and each repo with a checkout on disk. */
 export function auditableScopes(store: Store): string[] {
-  return Object.keys(read(store)).filter((scope) => repoRoot(store, scope)).sort();
+  return ["global", ...Object.keys(read(store)).filter((scope) => scope !== "global" && repoRoot(store, scope)).sort()];
 }
 

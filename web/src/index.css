@@ -162,3 +162,4 @@ code {
 .a-trash { --a: var(--destructive); }
 .a-merge { --a: var(--k-decision); }
 .a-keep { --a: var(--faint); }
+.a-promote { --a: var(--k-convention); }

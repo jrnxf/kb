@@ -1,21 +1,23 @@
-// An audit: the changes /kb:audit proposes for the notes of one repo, and the picks the user makes
-// in the page. The agent writes the proposal with `kb audit propose`. The page shows one card per
+// An audit: the changes /kb:audit proposes for the notes of one scope, and the picks the user makes
+// in the page. A repo audit covers the repo's notes. A global audit, run outside any repo, covers
+// the global notes, and can move a global rule into the global instructions file. The agent writes the proposal with `kb audit propose`. The page shows one card per
 // note, and Apply makes every pick in one commit. A note the user sends back for a rewrite waits in
 // the audit file for the agent's next run.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { buildBudget } from "./context.ts";
+import { budgetOf } from "./context.ts";
+import { type InstructionsFile, checkWritable, fileName, globalInstructions, hasRule, insertRule, readInstructions, shortPath, writeInstructions } from "./instructions.ts";
 import { KbError, type Note, validateNote } from "./note.ts";
 import type { RepoInfo } from "./scope.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
-import type { AuditAction, AuditCard, AuditData, AuditNote, AuditPick, AuditResult } from "./wire.ts";
+import type { AuditAction, AuditCard, AuditData, AuditNote, AuditPick, AuditPromote, AuditResult } from "./wire.ts";
 import { afterWrite, nowIso } from "./write.ts";
 
 /** The card shows `why` as one short line, so it stays brief. */
 export const WHY_MAX = 140;
 
-export const ACTIONS = ["rewrite", "trash", "merge", "keep"] as const;
+export const ACTIONS = ["rewrite", "trash", "merge", "keep", "promote"] as const;
 
 /** One proposal, as the agent writes it. */
 export interface AuditItem {
@@ -32,8 +34,12 @@ export interface AuditItem {
   /** For a rewrite or a merge: the new text. A field left out keeps the note's own. */
   title?: string;
   body?: string;
-  /** For a merge: the notes that go to the trash. The note `id` keeps every fact. */
+  /** For a merge: the notes that go to the trash. The note `id` keeps every fact. For a promote: the notes whose rule the text holds too, so they move with it. */
   merge?: string[];
+  /** For a promote: the text to add to the global instructions file. */
+  rule?: string;
+  /** For a promote: the heading to add it under. */
+  section?: string;
   /** Each note on the card (the note and its merge partners) as it was at the proposal: a hash of its file. */
   revs?: Record<string, string>;
 }
@@ -115,10 +121,16 @@ export function proposeAudit(store: Store, input: unknown, repo: RepoInfo): Audi
     const id = item.id;
     if (typeof id !== "string" || !active.has(id)) throw new KbError(`items[${i}].id: no active note "${String(id)}"`);
     const note = active.get(id)!;
-    const inScope = (n: StoredNote) => n.scope === scope || n.scope === "global";
-    if (!inScope(note)) throw new KbError(`items[${i}]: ${id} belongs to ${note.scope}. Run the audit inside that repo.`);
+    // Each audit covers one scope: a repo audit has no global note, and the global audit has no repo note.
+    const where = (n: StoredNote) => (n.scope === "global" ? "Run the global audit outside any repo." : "Run the audit inside that repo.");
+    const check = (n: StoredNote, field: string) => {
+      if (n.scope !== scope) throw new KbError(`items[${i}]${field}: ${n.id} belongs to ${n.scope}. ${where(n)}`);
+      if (n.promoted_to) throw new KbError(`items[${i}]${field}: ${n.id} is in ${n.promoted_to} already`);
+    };
+    check(note, "");
     const action = item.action as AuditAction;
     if (!ACTIONS.includes(action)) throw new KbError(`items[${i}].action: must be one of ${ACTIONS.join(", ")}`);
+    if (action === "promote" && scope !== "global") throw new KbError(`items[${i}]: only the global audit moves a rule to an instruction file`);
     const why = text(item.why, "why", i);
     if (!why) throw new KbError(`items[${i}].why: required`);
     if (why.length > WHY_MAX) throw new KbError(`items[${i}].why: ${why.length} characters, at most ${WHY_MAX}. Say only the evidence for the pick.`);
@@ -126,16 +138,19 @@ export function proposeAudit(store: Store, input: unknown, repo: RepoInfo): Audi
     if (item.checked === true && action !== "keep") throw new KbError(`items[${i}].checked: only a keep has it`);
     const merge = item.merge;
     if (action === "merge" && (!Array.isArray(merge) || merge.length === 0)) throw new KbError(`items[${i}].merge: a merge names the notes that go to the trash`);
-    if (merge !== undefined && action !== "merge") throw new KbError(`items[${i}].merge: only a merge has it`);
+    if (merge !== undefined && action !== "merge" && action !== "promote") throw new KbError(`items[${i}].merge: only a merge or a promote has it`);
+    if (merge !== undefined && !Array.isArray(merge)) throw new KbError(`items[${i}].merge: must be a list of ids`);
     const others = (merge ?? []) as unknown[];
     for (const other of others) {
       if (typeof other !== "string" || !active.has(other) || other === id) throw new KbError(`items[${i}].merge: no other active note "${String(other)}"`);
-      const partner = active.get(other)!;
-      if (!inScope(partner)) throw new KbError(`items[${i}].merge: ${other} belongs to ${partner.scope}. Run the audit inside that repo.`);
+      check(active.get(other)!, ".merge");
     }
     const title = text(item.title, "title", i), body = text(item.body, "body", i);
     if (action === "rewrite" && title === undefined && body === undefined) throw new KbError(`items[${i}]: a rewrite needs the new title or body`);
     if ((title !== undefined || body !== undefined) && action !== "rewrite" && action !== "merge") throw new KbError(`items[${i}]: only a rewrite or a merge has new text`);
+    const rule = text(item.rule, "rule", i), section = text(item.section, "section", i);
+    if (action === "promote" && rule === undefined) throw new KbError(`items[${i}].rule: a promote needs the text to add to the instructions file`);
+    if ((rule !== undefined || section !== undefined) && action !== "promote") throw new KbError(`items[${i}]: only a promote has a rule or a section`);
     for (const each of [id, ...(others as string[])]) {
       if (seen.has(each)) throw new KbError(`items[${i}]: ${each} is in the audit twice`);
       seen.add(each);
@@ -149,7 +164,9 @@ export function proposeAudit(store: Store, input: unknown, repo: RepoInfo): Audi
       ...(text(item.group, "group", i) ? { group: item.group as string } : {}),
       ...(title !== undefined ? { title } : {}),
       ...(body !== undefined ? { body } : {}),
-      ...(action === "merge" ? { merge: others as string[] } : {}),
+      ...(others.length > 0 ? { merge: others as string[] } : {}),
+      ...(rule !== undefined ? { rule: rule.trim() } : {}),
+      ...(section !== undefined ? { section: section.trim() } : {}),
       revs: Object.fromEntries([id, ...(others as string[])].map((each) => [each, rev(active.get(each)!)])),
     };
   });
@@ -164,10 +181,10 @@ export function proposeAudit(store: Store, input: unknown, repo: RepoInfo): Audi
 /** What the page shows: each card with its note as it is now, and the index as it is now. */
 export function auditData(store: Store, scope: string, token: string): AuditData {
   const audit = readAudit(store, scope);
-  if (!audit) throw new KbError(`no audit for ${scope}. Run /kb:audit in that repo.`);
+  if (!audit) throw new KbError(`no audit for ${scope}. Run /kb:audit ${scope === "global" ? "outside any repo" : "in that repo"}.`);
   const usage = store.usage();
   const active = activeNotes(store);
-  const budget = buildBudget(store, audit.root && existsSync(audit.root) ? audit.root : store.home);
+  const budget = budgetOf(store, audit.scope === "global" ? null : audit.scope);
   const places = new Map(budget.notes.map((n) => [n.id, n.shown]));
   const shown = (n: StoredNote): AuditNote => ({
     id: n.id,
@@ -180,8 +197,32 @@ export function auditData(store: Store, scope: string, token: string): AuditData
   });
   // A note that changed or left since the proposal is not on a card: the proposal no longer fits it.
   // So is a card whose action this kb does not know: an older kb wrote it, and Apply would refuse it.
-  const cards: AuditCard[] = audit.items
-    .filter((item) => ACTIONS.includes(item.action) && live(item, active))
+  const items = audit.items.filter((item) => ACTIONS.includes(item.action) && live(item, active));
+  // A promote card shows the file as it will be when every card before it is accepted, as Apply
+  // adds the rules in this order. So two rules in one new section add its heading once. The file is
+  // read once, and only when a card needs it.
+  const previews = new Map<string, { above: string[]; added: string[]; present?: true }>();
+  let file: InstructionsFile | undefined;
+  const promoting = items.filter((item) => item.action === "promote");
+  if (promoting.length > 0) {
+    file = globalInstructions(store);
+    let content = readInstructions(file);
+    for (const item of promoting) {
+      const { content: after, above, added } = insertRule(content, item.rule!, item.section);
+      const present = hasRule(content, item.rule!);
+      previews.set(item.id, { above, added, ...(present ? { present: true as const } : {}) });
+      if (!present) content = after;
+    }
+  }
+  const promote = (item: AuditItem): AuditPromote => ({
+    file: file!.name,
+    path: shortPath(file!.path),
+    link: file!.link,
+    ...(item.section ? { section: item.section } : {}),
+    ...previews.get(item.id)!,
+    rule: item.rule!,
+  });
+  const cards: AuditCard[] = items
     .map((item) => ({
       id: item.id,
       action: item.action,
@@ -192,6 +233,7 @@ export function auditData(store: Store, scope: string, token: string): AuditData
       note: shown(active.get(item.id)!),
       proposed: item.title !== undefined || item.body !== undefined ? { title: item.title ?? active.get(item.id)!.title, body: item.body ?? active.get(item.id)!.body } : undefined,
       merge: item.merge?.map((id) => shown(active.get(id)!)),
+      ...(item.action === "promote" ? { promote: promote(item) } : {}),
     }));
   return {
     token,
@@ -217,7 +259,7 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
   if (!Array.isArray(picks)) throw new KbError('apply takes {"picks": [...]}');
   const items = new Map(audit.items.map((item) => [item.id, item]));
   const active = activeNotes(store);
-  const result: AuditResult = { at: nowIso(), rewritten: [], merged: [], trashed: [], kept: [], checked: [], requests: [] };
+  const result: AuditResult = { at: nowIso(), rewritten: [], merged: [], trashed: [], kept: [], checked: [], requests: [], promoted: [] };
   const done = new Set<string>();
   const now = nowIso();
   const verifiedAt = (note: StoredNote) => (note.scope !== "global" && note.scope === audit.scope && audit.head ? { verified_at_commit: audit.head } : {});
@@ -231,6 +273,10 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
     }
   };
 
+  // The global instructions file, resolved when the first promote pick needs it.
+  let target: ReturnType<typeof globalInstructions> | undefined;
+  const promotedTo = () => fileName((target ??= globalInstructions(store)));
+
   const plan = (picks as AuditPick[]).map((pick, i) => {
     if (pick === null || typeof pick !== "object" || typeof pick.id !== "string") throw new KbError(`picks[${i}]: needs an id`);
     const item = items.get(pick.id);
@@ -240,7 +286,8 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
     const changed = drift(item, active);
     if (changed) throw new KbError(`${changed}. Reload the page, or run /kb:audit again.`);
     const note = active.get(pick.id)!;
-    const allowed = ["rewrite", "trash", "keep", "ask", ...(item.merge ? ["merge"] : [])];
+    // A promote card offers no rewrite: its text is the rule. With notes that move along, it offers no trash either.
+    const allowed = item.action === "promote" ? ["promote", "keep", "ask", ...(item.merge ? [] : ["trash"])] : ["rewrite", "trash", "keep", "ask", ...(item.merge ? ["merge"] : [])];
     if (!allowed.includes(pick.action)) throw new KbError(`picks[${i}].action: ${pick.action} is not an action for ${pick.id}`);
     if (pick.action === "ask" && (typeof pick.request !== "string" || !pick.request.trim())) throw new KbError(`picks[${i}]: say what is wrong with ${pick.id}`);
     const leaving = pick.action === "trash" ? [note] : pick.action === "merge" ? item.merge!.map((id) => active.get(id)!) : [];
@@ -249,6 +296,8 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
     const title = pick.title ?? item.title, body = pick.body ?? item.body;
     if (pick.action === "rewrite" && title === undefined && body === undefined) throw new KbError(`picks[${i}]: ${pick.id} has no new text. Edit it, or ask the agent for a rewrite.`);
     const text = { ...(title !== undefined ? { title } : {}), ...(body !== undefined ? { body } : {}) };
+    if (pick.rule !== undefined && (pick.action !== "promote" || typeof pick.rule !== "string" || !pick.rule.trim())) throw new KbError(`picks[${i}].rule: only a promote has it, and it must be text`);
+    const rule = pick.action === "promote" ? (pick.rule ?? item.rule)!.trim() : undefined;
     // A keep records the check only when someone looked: the user picked it on the card, or the agent
     // checked the note. A group kept in one key, or a card the user never opened, records nothing.
     // Keep both on a merge card only says the notes differ.
@@ -258,12 +307,27 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
       : pick.action === "rewrite" ? { ...text, last_verified: now, ...verifiedAt(note) }
       : pick.action === "merge" ? { ...text, last_verified: now, ...verifiedAt(note), supersedes: [...new Set([...(note.supersedes ?? []), ...item.merge!])] }
       : null;
-    return { pick, item, note, checked, written: fields ? next(note, fields, i) : null };
+    const moving = pick.action === "promote" ? [note, ...(item.merge ?? []).map((id) => active.get(id)!)] : [];
+    const written = fields ? [next(note, fields, i)] : moving.map((each) => next(each, { promoted_to: promotedTo() }, i));
+    return { pick, item, note, checked, written, rule };
   });
+
+  // Every rule goes into the instructions file before the first note changes. A note marked as moved
+  // whose rule is not in the file would reach no session at all.
+  const promotes = plan.filter((p) => p.pick.action === "promote");
+  if (promotes.length > 0) {
+    const file = target!;
+    checkWritable(file);
+    let content = readInstructions(file);
+    // A rule the file holds already is not added again: an Apply that failed after this write and
+    // runs again must not add the same lines twice.
+    for (const { rule, item } of promotes) if (!hasRule(content, rule!)) content = insertRule(content, rule!, item.section).content;
+    writeInstructions(file, content);
+  }
 
   const trash = (note: StoredNote) => store.move(note, true, now);
   for (const { pick, item, note, checked, written } of plan) {
-    if (written) store.writeNote(written);
+    for (const each of written) store.writeNote(each);
     switch (pick.action) {
       case "rewrite":
         result.rewritten.push(note.id);
@@ -279,12 +343,15 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
       case "ask":
         result.requests.push({ id: note.id, request: pick.request!.trim() });
         break;
+      case "promote":
+        result.promoted!.push(...written.map((each) => each.id));
+        break;
       default:
         (checked ? result.checked : result.kept).push(note.id);
     }
   }
   audit.result = result;
   writeAll(store, all);
-  if (plan.some(({ pick, written }) => written || pick.action === "trash")) afterWrite(store, `kb: apply the audit of ${scope}`);
+  if (plan.some(({ pick, written }) => written.length > 0 || pick.action === "trash")) afterWrite(store, `kb: apply the audit of ${scope}`);
   return result;
 }

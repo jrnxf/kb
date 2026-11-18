@@ -9,12 +9,12 @@ import { plain, putNote, tempRepo, tempStore } from "./helpers.ts";
 const REMOTE = "git@github.com:acme/billing.git";
 const SCOPE = "github.com/acme/billing";
 
-function setConfig(home: string, budgets: { indexLines?: number; contextChars?: number }) {
+function setConfig(home: string, budgets: { indexLines?: number; contextChars?: number; globalIndexLines?: number }) {
   writeFileSync(join(home, "kb.config.json"), JSON.stringify({ budgets }));
 }
 
 describe("kb context ranking", () => {
-  test("orders by kind, then repo before global, then last_used, then last_verified", () => {
+  test("orders repo notes before global ones, then by kind, then last_used, then last_verified", () => {
     const store = tempStore();
     const repo = tempRepo({ remote: REMOTE });
     putNote(store, { id: "howto", kind: "how-to", scope: SCOPE });
@@ -29,8 +29,38 @@ describe("kb context ranking", () => {
 
     const result = buildContext(store, repo);
     expect(result.scope).toBe(SCOPE);
-    expect(result.bodies).toEqual(["open", "gotcha-used", "gotcha-new", "gotcha-old", "gotcha-global", "convention", "decision", "howto"]);
+    expect(result.bodies).toEqual(["open", "gotcha-used", "gotcha-new", "gotcha-old", "convention", "decision", "howto", "gotcha-global"]);
     expect(result.dropped).toEqual([]);
+  });
+
+  test("in a repo, global notes take at most globalIndexLines places: open work first, then the most used", () => {
+    const store = tempStore();
+    setConfig(store.home, { globalIndexLines: 3 });
+    const repo = tempRepo({ remote: REMOTE });
+    putNote(store, { id: "repo-note", kind: "how-to", scope: SCOPE });
+    for (const id of ["g-none", "g-one", "g-three", "g-five"]) putNote(store, { id, kind: "convention" });
+    putNote(store, { id: "g-open", kind: "open-work" });
+    store.bumpUsage(["g-one", "g-three", "g-five"], "2026-05-01T00:00:00Z");
+    store.bumpUsage(["g-three", "g-five"], "2026-05-01T00:00:00Z");
+    store.bumpUsage(["g-three", "g-five"], "2026-05-01T00:00:00Z");
+    store.bumpUsage(["g-five"], "2026-05-01T00:00:00Z");
+    store.bumpUsage(["g-five"], "2026-05-01T00:00:00Z");
+    const result = buildContext(store, repo);
+    expect(result.bodies).toEqual(["repo-note", "g-open", "g-five", "g-three"]);
+    expect(result.capped.sort()).toEqual(["g-none", "g-one"]);
+    expect(result.text).toContain("2 global notes with fewer uses are left out here. `kb show <id>` prints one note. `kb search <words>` searches every note.");
+    // Left out on purpose is not over the budget, so no session hears that notes are hidden.
+    expect(result.hiddenIndexLines).toBe(0);
+    // Outside any repo, the global notes are the session's own, and none is left out.
+    expect(buildContext(store, plain()).capped).toEqual([]);
+  });
+
+  test("a globalIndexLines that is not a number falls back to the default, so no global note is lost", () => {
+    const store = tempStore();
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { globalIndexLines: null } }));
+    expect(store.config().budgets.globalIndexLines).toBe(20);
+    setConfig(store.home, { globalIndexLines: 0 });
+    expect(store.config().budgets.globalIndexLines).toBe(0);
   });
 
   test("prints the index, then bodies, then the pointer", () => {
@@ -39,12 +69,14 @@ describe("kb context ranking", () => {
     const repo = tempRepo({ remote: REMOTE });
     putNote(store, { id: "one", scope: SCOPE, title: "First fact", body: "The body of one.", anchors: ["src/a.ts#run"], verified_at_commit: "abc1234" });
     putNote(store, { id: "two", kind: "convention", title: "A global fact", body: "w".repeat(600) });
-    putNote(store, { id: "three", kind: "how-to", scope: SCOPE, title: "A repo fact" });
+    putNote(store, { id: "three", kind: "how-to", scope: SCOPE, title: "A repo fact", body: "w".repeat(600) });
     const { text, bodies } = buildContext(store, repo);
     expect(bodies).toEqual(["one"]);
     expect(text).toContain(`# kb: saved knowledge for ${SCOPE}`);
     expect(text).toContain("### global (1)\n- two [convention] A global fact");
     expect(text).toContain(`### ${SCOPE} (1)\n- three [how-to] A repo fact`);
+    // The repo's own notes come first, so global notes never crowd them out.
+    expect(text.indexOf(`### ${SCOPE} (1)`)).toBeLessThan(text.indexOf("### global (1)"));
     expect(text).toContain("### one [gotcha] First fact\nverified 2026-01-01 at abc1234 | confidence medium | anchors: src/a.ts#run\nThe body of one.");
     expect(text.indexOf("## Index")).toBeLessThan(text.indexOf("## Notes"));
     expect(text.trimEnd().endsWith("`kb search <words>` searches every note.")).toBe(true);

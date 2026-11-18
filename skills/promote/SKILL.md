@@ -24,7 +24,7 @@ A candidate has all of these:
 - `promoted_to` is null
 - the fact concerns everybody who works in the repo, not only this user
 
-Read each candidate with `kb show <id>`. Drop a note when the repo's instruction files already say the same thing. If no note qualifies, say so and stop.
+Read each candidate with `kb show <id> --no-use`. Drop a note when the repo's instruction files already say the same thing. If no note qualifies, say so and stop.
 
 ## 2. Choose the file
 

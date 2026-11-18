@@ -564,7 +564,7 @@ export function App() {
             audits={data.audits}
           />
           <NoteList notes={shown.notes} current={current} q={view.q} onQ={(q) => setView((v) => ({ ...v, q }))} searchRef={search} onOpen={pickRow} empty={empty} trash={shown.trash ? { days: data.trashDays, onEmpty: askEmpty } : undefined}
-            project={!shown.trash && view.scope && view.scope !== "global" ? { onTrash: () => askTrashProject(view.scope!), audit: auditButton(view.scope) } : undefined}
+            project={shown.trash || !view.scope ? undefined : view.scope === "global" ? { audit: auditButton("global") } : { onTrash: () => askTrashProject(view.scope!), audit: auditButton(view.scope) }}
           />
         </DrawerIndent>
         {!phone && (

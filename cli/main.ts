@@ -7,6 +7,7 @@ import { openAudits, proposeAudit, readAudit } from "./audit.ts";
 import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
+import { globalInstructions } from "./instructions.ts";
 import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { searchNotes } from "./search.ts";
@@ -22,12 +23,14 @@ const USAGE = `kb - a personal knowledge store for coding agents
 
   kb context [--repo .]                  text for a session start: index, top notes, pointer
   kb add [--repo .]                      create or update a note from JSON on stdin
-  kb show <id>                           print one note. A part of the id is enough when one note has it
+  kb show <id> [--no-use]                print one note, and count a use of it. A part of the id is
+                                         enough when one note has it. --no-use for a check, not a use
   kb search <words> [--scope s] [--trash]
                                          notes that have every word, in any order, this repo first
   kb list [--scope s] [--trash]          every note with kind, uses and verified date
                                          --scope takes "repo", "global" or a repo id
-  kb use <id>...                         record that these notes changed what you did
+  kb use <id>...                         record that these notes changed what you did, when you did not
+                                         read them with kb show
   kb trash <id>... | kb restore <id>...  trash retires a note: restore brings it back. A note in the
                                          trash for more than trashDays (30) is deleted for good
   kb delete <id>...                      remove notes for good, active or in the trash. When the user
@@ -40,10 +43,13 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb stale [--repo .]                    notes that may no longer be true, each with a reason
   kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
   kb budget [--repo .]                   what a session loads, and what reaches no session
-  kb audit [--repo .] [--no-wait]        start an agent that audits this repo, and print the page link
+  kb audit [--repo .] [--no-wait]        start an agent that audits this repo's notes, and print the
+                                         page link. Outside any repo, it audits the global notes
   kb audit propose [--repo .]            save /kb:audit's proposal from JSON on stdin, for the page
-  kb audit status [--repo .]             where the audit of this repo stands, and the notes the user
+  kb audit status [--repo .]             where the audit of this scope stands, and the notes the user
                                          sent back for a rewrite
+  kb instructions [--repo .]             the instruction files for a rule the user states: the global
+                                         one, and the repo's CLAUDE.md and AGENTS.md
   kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run] [--repo .]
                                          append a note to the repo's own file
   kb checkpointed <session-id>           record that this session saved its knowledge
@@ -207,11 +213,17 @@ function scopeFilter(store: Store, args: Args): string | undefined {
 
 function cmdShow(store: Store, args: Args): Output {
   const given = args.positional[0];
-  if (!given) throw new KbError("usage: kb show <id>");
+  if (!given) throw new KbError("usage: kb show <id> [--no-use]");
   // Ids are long. A part of one is enough to read a note, when only one note has it.
   const close = store.find(given) ? [] : closeIds(store, given);
   const note = requireNote(store, close.length === 1 ? close[0]! : given);
   const id = note.id;
+  // An agent reads a note because it needs it now: that is a use. A check (an audit, a search
+  // before a write) passes --no-use, so it does not count.
+  if (!note.trashed && !args.flags.has("no-use")) {
+    store.bumpUsage([id], nowIso());
+    afterWrite(store, `kb: show ${id}`);
+  }
   const usage = store.usage().get(id) ?? { uses: 0 };
   const header = `# ${relative(store.home, note.path)} | uses ${usage.uses}${usage.last_used ? `, last used ${usage.last_used}` : ""}`;
   return { json: { ...note, ...usage }, text: `${header}\n${readFileSync(note.path, "utf8").trimEnd()}` };
@@ -365,6 +377,7 @@ function cmdBudget(store: Store, args: Args): Output {
   // One long body ends the list of bodies, so the longest ones are the first to shorten.
   const longest = b.notes.filter((n) => n.shown === "body").sort((x, y) => y.chars - x.chars).slice(0, 3);
   if (b.context.dropped > 0 && longest.length > 0) lines.push(`longest  ${longest.map((n) => `${n.id} (${n.chars})`).join(", ")}`);
+  if (b.index.capped > 0) lines.push(`global   ${b.index.globalBudget} global notes load here, the most used. ${count(b.index.capped)} with fewer uses stay out, on purpose.`);
   if (b.over) {
     lines.push(`${count(b.index.hidden)} ${b.index.hidden === 1 ? "reaches" : "reach"} no session, because the index is full.`);
     if (b.trim.length > 0) lines.push(`Trash or merge first: ${b.trim.map((d) => `${d.id} (${d.reason})`).join(", ")}`);
@@ -476,13 +489,13 @@ async function cmdAudit(store: Store, args: Args, stdin: () => Promise<string>):
     return open(audit.items.length, `saved ${audit.items.length} cards for ${scope}`);
   }
   if (sub === undefined) {
-    if (!repo.root || !repo.scope) throw new KbError("kb audit audits a repo: run it inside one. Its global notes are in every repo's audit.");
     const waiting = readAudit(store, scope);
     if (waiting && !waiting.result && openAudits(store).includes(scope)) return open(waiting.items.length, `the audit of ${scope} waits for your picks`);
-    rememberRepo(store, scope, repo.root);
-    let state = startRun(store, scope, repo.root);
-    if (args.flags.has("no-wait")) return { json: state, text: `an agent audits ${scope} now. Run kb audit again to see where it stands. Log: ${state.log}` };
-    if (!args.flags.has("json")) process.stderr.write(`an agent audits ${scope} and its global notes. This takes a few minutes.\nlog: ${state.log}\n`);
+    if (repo.root && repo.scope) rememberRepo(store, scope, repo.root);
+    let state = startRun(store, scope, repo.root ?? undefined);
+    const what = scope === "global" ? "the global notes" : `the notes of ${scope}`;
+    if (args.flags.has("no-wait")) return { json: state, text: `an agent audits ${what} now. Run kb audit again to see where it stands. Log: ${state.log}` };
+    if (!args.flags.has("json")) process.stderr.write(`an agent audits ${what}. This takes a few minutes.\nlog: ${state.log}\n`);
     state = await waitRun(store, scope);
     if (state.status === "proposed") return open(state.cards ?? 0, `the agent proposed ${state.cards} cards for ${scope}`);
     if (state.status === "nothing") return { json: state, text: `the agent found nothing to change in ${scope}${state.said ? `:\n${state.said}` : ""}` };
@@ -495,6 +508,23 @@ async function cmdAudit(store: Store, args: Args, stdin: () => Promise<string>):
   const lines = [`the audit of ${scope} was applied at ${r.at}`, ...resultGroups(r).filter(([, ids]) => ids.length).map(([name, ids]) => `${name}: ${ids.join(", ")}`)];
   if (r.requests.length) lines.push("sent back for a rewrite:", ...r.requests.map((q) => `  ${q.id}: ${q.request}`));
   return { json: { scope, status: "applied", ...r }, text: lines.join("\n") };
+}
+
+/** Where a rule the user states goes. The note skill writes it there, never to kb. */
+function cmdInstructions(store: Store, args: Args): Output {
+  const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
+  let global: { file: string; path: string; link: boolean } | { file: string; error: string };
+  try {
+    const found = globalInstructions(store);
+    global = { file: found.name, path: found.path, link: found.link };
+  } catch (error) {
+    global = { file: store.config().globalInstructions, error: (error as Error).message };
+  }
+  const files = repo.root ? PROMOTE_FILES.map((name) => ({ file: name, path: join(repo.root!, name), exists: existsSync(join(repo.root!, name)) })) : [];
+  const lines = [`global  ${"path" in global ? `${global.path}${global.link ? ` (${global.file} links here)` : ""}` : global.error}`];
+  if (repo.root) for (const f of files) lines.push(`repo    ${f.path}${f.exists ? "" : " (does not exist yet)"}`);
+  else lines.push("repo    none: this directory is not in a git repo");
+  return { json: { global, repo: repo.root ? { scope: repo.scope, root: repo.root, files } : null }, text: lines.join("\n") };
 }
 
 function cmdSync(store: Store): Output {
@@ -541,6 +571,7 @@ async function main(): Promise<number> {
       case "verify": out = cmdVerify(store, args); break;
       case "budget": out = cmdBudget(store, args); break;
       case "promote": out = cmdPromote(store, args); break;
+      case "instructions": out = cmdInstructions(store, args); break;
       case "checkpointed": out = cmdCheckpointed(store, args); break;
       case "serve": out = await cmdServe(store, args, json); break;
       case "audit": out = await cmdAudit(store, args, () => Bun.stdin.text()); break;
