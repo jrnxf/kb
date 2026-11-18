@@ -10,7 +10,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { MAC } from "@/hooks/use-media";
 import * as api from "@/lib/api";
 import { auditQuery, queryClient, reloadPage } from "@/lib/queries";
-import { ACCEPT_KEY, type Choice, KEYS, type Pick, agentPick, choiceForKey, choiceLabel, choices, pickLabel, steps, stillHidden, summary, textChoices, toPicks } from "@/lib/audit";
+import { ACCEPT_KEY, ACCEPT_REST_KEY, type Choice, KEYS, type Pick, agentPick, choiceForKey, choiceLabel, choices, pickLabel, steps, stillHidden, summary, textChoices, toPicks } from "@/lib/audit";
 import { diffLines, wordDiff } from "@/lib/diff";
 import { cn } from "@/lib/utils";
 import { scopeName } from "@/lib/view";
@@ -175,6 +175,18 @@ function Deck({ data }: { data: AuditData }) {
     decide([[step.i, onCard({ action: choice })]]);
   }
 
+  /** The cards the user has not picked yet. */
+  const rest = data.cards.flatMap((_, i) => (seen[i] ? [] : [i]));
+
+  /**
+   * Take the agent's pick on every card the user has not picked, and go to the summary. Picks the
+   * user made stay. A keep taken this way records no check of its own: nobody looked at the card.
+   */
+  function acceptRest() {
+    if (rest.length === 0) return;
+    decide(rest.map((i) => [i, agentPick(data.cards[i]!)]), flow.length);
+  }
+
   function apply() {
     applyPicks.mutate(picks);
   }
@@ -186,6 +198,7 @@ function Deck({ data }: { data: AuditData }) {
     if (key === "ArrowRight") go(pos + 1);
     else if (key === "ArrowLeft") go(pos - 1);
     else if (key === "z") undo();
+    else if (key === ACCEPT_REST_KEY && !end && rest.length > 0) acceptRest();
     else if (end) {
       if (key === "Enter" && !applying) void apply();
       else return;
@@ -222,6 +235,18 @@ function Deck({ data }: { data: AuditData }) {
         <span className="h-1 flex-1 overflow-hidden rounded-full bg-secondary">
           <span className="block h-full rounded-full bg-muted-foreground/60 transition-[width] duration-200" style={{ width: `${(Math.min(pos + 1, flow.length) / flow.length) * 100}%` }} />
         </span>
+        {!end && rest.length > 0 && (
+          <Button
+            variant="outline"
+            size="xs"
+            data-accept-rest
+            title="Take the agent's pick on every card you have not picked, then see the summary. Nothing changes until Apply."
+            className="-my-1 text-muted-foreground hover:text-foreground"
+            onClick={acceptRest}
+          >
+            accept the rest ({rest.length}) <Kbd>⇧A</Kbd>
+          </Button>
+        )}
       </div>
       <Strip data={data} flow={flow} picks={picks} seen={seen} pos={pos} onJump={go} />
 
