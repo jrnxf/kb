@@ -158,10 +158,7 @@ code {
 }
 
 /* The colour of an audit pick, as --a, for its square, its key and its summary line. */
-.a-verify { --a: var(--k-convention); }
 .a-rewrite, .a-ask { --a: var(--link); }
 .a-trash { --a: var(--destructive); }
 .a-merge { --a: var(--k-decision); }
-.a-demote { --a: var(--k-open-work); }
-.a-index { --a: var(--k-how-to); }
 .a-keep { --a: var(--faint); }

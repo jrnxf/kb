@@ -39,15 +39,16 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 - **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: an
   anchored file changed since the note was verified, an anchor is gone, the verified commit left
   the history, nobody verified the note for `decayDays` (180), or two titles are close.
-  `/kb:audit` reads the code for each candidate, checks both budgets, and proposes verify, rewrite,
-  merge, shorten, demote or trash with `kb audit propose`. You decide in the `kb serve` page, one
+  `/kb:audit` reads the code for each candidate, checks both budgets, and proposes keep, rewrite,
+  merge, shorten or trash with `kb audit propose`. You decide in the `kb serve` page, one
   card per note: each card shows the note, the new text struck against the old, and the agent's
-  pick. A key takes a pick, a meter counts the notes that still reach no session, and Apply makes
-  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` in a repo starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. The Audit button on a project in the page does the same for any repo a session has opened once. `kb budget` asks for a
-  demotion only when the index is full and a note reaches no session. A body that became an
-  index line is the normal state. It names decisions and how-tos to demote, and leaves gotchas and
-  conventions for you to name, because a rule that works leaves no use count. It also lists the
-  demoted notes, which no session loads. A session start says so in one
+  pick with its reason. `a` accepts the agent's pick, `k` keeps the note as is and records that
+  you checked it, `t` trashes it, a meter counts the notes that still reach no session, and Apply makes
+  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` in a repo starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. The Audit button on a project in the page does the same for any repo a session has opened once. `kb budget` asks for
+  room only when the index is full and a note reaches no session. A body that became an
+  index line is the normal state. It names decisions and how-tos to trash or merge, and
+  leaves gotchas and conventions for you to name, because a rule that works leaves no use count.
+  A session start says so in one
   line when more than 5 notes are candidates.
 - **Proven notes move to the repo.** `/kb:promote` proposes notes with high confidence and many
   uses for the repo's `CLAUDE.md` or `AGENTS.md`, shows the exact text, and writes after you

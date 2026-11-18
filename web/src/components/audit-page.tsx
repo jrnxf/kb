@@ -10,7 +10,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { MAC } from "@/hooks/use-media";
 import * as api from "@/lib/api";
 import { auditQuery, queryClient, reloadPage } from "@/lib/queries";
-import { type Choice, KEYS, type Pick, agentPick, choiceLabel, choices, pickLabel, steps, stillHidden, summary, toPicks } from "@/lib/audit";
+import { ACCEPT_KEY, type Choice, KEYS, type Pick, agentPick, choiceForKey, choiceLabel, choices, pickLabel, steps, stillHidden, summary, textChoices, toPicks } from "@/lib/audit";
 import { diffLines, wordDiff } from "@/lib/diff";
 import { cn } from "@/lib/utils";
 import { scopeName } from "@/lib/view";
@@ -22,6 +22,9 @@ type Mode = null | "edit" | "ask";
 const storageKey = (data: AuditData) => `kb-audit:${data.scope}:${data.created}`;
 
 /** What survives a reload: each card's pick and whether the user has seen it, by note id. */
+/** A keep the user picks on the card itself says they looked, so the note records the check. A group keep does not. */
+const onCard = (pick: Pick): Pick => (pick.action === "keep" ? { ...pick, checked: true } : pick);
+
 type Saved = Record<string, { pick: Pick; seen: boolean }>;
 
 function saved(data: AuditData): { picks: Pick[]; seen: boolean[] } {
@@ -30,8 +33,13 @@ function saved(data: AuditData): { picks: Pick[]; seen: boolean[] } {
     const raw = JSON.parse(sessionStorage.getItem(storageKey(data)) ?? "null") as Saved | null;
     if (raw && typeof raw === "object" && !Array.isArray(raw)) store = raw;
   } catch {}
-  // A card that left since the reload drops out. The other cards keep the user's picks.
-  return { picks: data.cards.map((card) => store[card.id]?.pick ?? agentPick(card)), seen: data.cards.map((card) => store[card.id]?.seen ?? false) };
+  // A card that left since the reload drops out. The other cards keep the user's picks, if the card still offers them.
+  const pick = (card: AuditCard): Pick => {
+    const old = store[card.id]?.pick;
+    const offered: string[] = [...choices(card), ...textChoices(card)];
+    return old && offered.includes(old.action) ? old : agentPick(card);
+  };
+  return { picks: data.cards.map(pick), seen: data.cards.map((card) => store[card.id]?.seen ?? false) };
 }
 
 /** The audit as a deck: one note per card, the agent's pick on each, and Apply at the end. */
@@ -80,7 +88,7 @@ function Meter({ data, left }: { data: AuditData; left: number }) {
   return (
     <span
       className="flex items-center gap-3 text-[13px]"
-      title={`A session lists at most ${data.index.budget} notes. ${data.index.hidden} did not fit, so no session sees them. Each trash, demote or merge gives one of them a line.`}
+      title={`A session lists at most ${data.index.budget} notes. ${data.index.hidden} did not fit, so no session sees them. Each trash or merge gives one of them a line.`}
     >
       <span className={cn("tabular-nums", done ? "text-(--k-convention)" : "text-muted-foreground")}>
         {done ? (
@@ -100,7 +108,6 @@ function Meter({ data, left }: { data: AuditData; left: number }) {
 
 function Deck({ data }: { data: AuditData }) {
   const flow = useMemo(() => steps(data.cards), [data.cards]);
-  const over = data.index.hidden > 0;
   const [initial] = useState(() => saved(data));
   const [picks, setPicks] = useState<Pick[]>(initial.picks);
   const [seen, setSeen] = useState<boolean[]>(initial.seen);
@@ -165,7 +172,7 @@ function Deck({ data }: { data: AuditData }) {
   function choose(choice: Choice) {
     if (step?.type !== "card") return;
     if (choice === "edit" || choice === "ask") return setMode(choice);
-    decide([[step.i, { action: choice }]]);
+    decide([[step.i, onCard({ action: choice })]]);
   }
 
   function apply() {
@@ -183,13 +190,13 @@ function Deck({ data }: { data: AuditData }) {
       if (key === "Enter" && !applying) void apply();
       else return;
     } else if (key === "Enter") {
-      if (step!.type === "card") decide([[step!.i, picks[step!.i]!]]);
+      if (step!.type === "card") decide([[step!.i, onCard(picks[step!.i]!)]]);
       else go(pos + 1);
     } else if (step!.type === "divider") {
-      if (key !== "a") return;
+      if (key !== KEYS.keep) return;
       decide(step!.cards.map((i) => [i, { action: "keep" }]), pos + step!.cards.length + 1);
     } else {
-      const choice = choices(step!.card, over).find((c) => KEYS[c] === key);
+      const choice = choiceForKey(step!.card, key);
       if (!choice) return;
       choose(choice);
     }
@@ -238,8 +245,23 @@ function Deck({ data }: { data: AuditData }) {
             mode={mode}
             onCancel={() => setMode(null)}
             onSave={(pick) => decide([[step!.i, pick]])}
-            keys={choices(step!.card, over).map((choice) => (
-              <KeyButton key={choice} k={KEYS[choice]} label={choiceLabel(step!.card, choice)} on={picks[step!.i]!.action === choice} action={choice} onClick={() => choose(choice)} />
+            keys={choices(step!.card).map((choice, at) => (
+              <KeyButton
+                key={choice}
+                k={at === 0 ? ACCEPT_KEY : KEYS[choice]}
+                label={at === 0 ? `accept: ${choiceLabel(step!.card, choice)}` : choiceLabel(step!.card, choice)}
+                on={picks[step!.i]!.action === choice}
+                action={choice}
+                onClick={() => choose(choice)}
+              />
+            ))}
+            textKeys={textChoices(step!.card).map((choice, at) => (
+              <Fragment key={choice}>
+                {at > 0 && " · "}
+                <button type="button" className="cursor-pointer text-muted-foreground hover:text-foreground hover:underline" data-choice={choice} onClick={() => choose(choice)}>
+                  {choiceLabel(step!.card, choice)} <Kbd>{KEYS[choice]}</Kbd>
+                </button>
+              </Fragment>
             ))}
           />
         )}
@@ -313,7 +335,7 @@ function Strip({ data, flow, picks, seen, pos, onJump }: { data: AuditData; flow
         {used.map((action) => (
           <span key={action} className={cn("flex items-center gap-1.5", `a-${action}`)}>
             <span className="size-2 rounded-[2px] bg-(--a)" />
-            {action === "ask" ? "ask for rewrite" : action}
+            {action === "ask" ? "ask the agent" : action === "keep" ? "keep as is" : action}
           </span>
         ))}
       </div>
@@ -329,7 +351,7 @@ function Divider({ group, count, onOneByOne, onKeepAll }: { group: string; count
       footer={
         <div className="flex flex-wrap justify-center gap-2">
           <KeyButton k="Enter" label="one by one" on onClick={onOneByOne} />
-          <KeyButton k="a" label={`keep all ${count}`} onClick={onKeepAll} />
+          <KeyButton k="k" label={`keep all ${count} as is`} onClick={onKeepAll} />
         </div>
       }
     >
@@ -393,7 +415,7 @@ function Head({ card }: { card: AuditCard }) {
   );
 }
 
-function Card({ card, pick, seen, mode, keys, onCancel, onSave }: { card: AuditCard; pick: Pick; seen: boolean; mode: Mode; keys: React.ReactNode; onCancel: () => void; onSave: (pick: Pick) => void }) {
+function Card({ card, pick, seen, mode, keys, textKeys, onCancel, onSave }: { card: AuditCard; pick: Pick; seen: boolean; mode: Mode; keys: React.ReactNode; textKeys: React.ReactNode; onCancel: () => void; onSave: (pick: Pick) => void }) {
   const own = pick.title !== undefined || pick.body !== undefined;
   const newTitle = pick.title ?? card.proposed?.title ?? card.note.title;
   const newBody = pick.body ?? card.proposed?.body ?? card.note.body;
@@ -433,7 +455,12 @@ function Card({ card, pick, seen, mode, keys, onCancel, onSave }: { card: AuditC
         </div>
       )}
 
-      <div className={cn("mt-3.5 rounded-lg bg-muted px-3.5 py-3 text-[13.5px]", `a-${card.action}`)} data-recommendation>
+      <div className="mt-1.5 flex justify-end gap-1 text-[12.5px] text-faint" data-text-keys>
+        <span className="mr-auto">Not right?</span>
+        {textKeys}
+      </div>
+
+      <div className={cn("mt-3 rounded-lg bg-muted px-3.5 py-3 text-[13.5px]", `a-${card.action}`)} data-recommendation>
         <div className="flex items-center gap-2">
           <span className="size-2 flex-none rounded-[2px] bg-(--a)" aria-hidden />
           <span className="text-muted-foreground">The agent suggests</span>

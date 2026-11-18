@@ -6,7 +6,7 @@ const fmt = (n) => n.toLocaleString("en-US");
 const KSHADE = [88, 68, 50, 34, 22];
 const kshade = (k) => `color-mix(in oklab, var(--ink) ${KSHADE[k]}%, var(--sunk))`;
 const mkNotes = (n) => Array.from({ length: n }, (_, i) => { const [k, g, blk, ll] = RAW.notes[i % RAW.notes.length];
-  return { id: "n" + String(i).padStart(4, "0"), kind: RAW.kinds[k], k, scope: g ? "global" : SCOPE, blk, line: "x".repeat(ll), indexed: true, last_used: String(9999 - i).padStart(4, "0"), verified: "" }; });
+  return { id: "n" + String(i).padStart(4, "0"), kind: RAW.kinds[k], k, scope: g ? "global" : SCOPE, blk, line: "x".repeat(ll), last_used: String(9999 - i).padStart(4, "0"), verified: "" }; });
 const runOn = (notes, chars, lines) => session({ kinds: RAW.kinds, save: RAW.save, budgets: { chars, lines }, notes }, SCOPE);
 const DEF = { chars: 8192, lines: 60 };
 const onView = (el, fn, opts) => new IntersectionObserver(([e]) => fn(e.isIntersecting), opts).observe(el);

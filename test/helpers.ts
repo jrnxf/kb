@@ -57,7 +57,6 @@ export function putNote(store: Store, fields: Partial<Note> & { id: string }, tr
     last_verified: "2026-01-01T00:00:00Z",
     anchors: [],
     confidence: "medium",
-    indexed: true,
     body: `Body of ${fields.id}, note number ${counter}.`,
     ...fields,
   };

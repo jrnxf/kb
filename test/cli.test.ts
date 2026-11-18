@@ -15,7 +15,7 @@ describe("kb add", () => {
     expect(result.code).toBe(0);
     expect(result.json).toMatchObject({ status: "created", id: "stripe-needs-the-raw-body" });
     const note = parseNote(readFileSync(join(home, "notes/global/stripe-needs-the-raw-body.md"), "utf8"));
-    expect(note).toMatchObject({ kind: "gotcha", confidence: "medium", indexed: true, anchors: [], body: "Mount express.raw() first." });
+    expect(note).toMatchObject({ kind: "gotcha", confidence: "medium", anchors: [], body: "Mount express.raw() first." });
     expect(readFileSync(join(home, "INDEX.md"), "utf8")).toContain("[stripe-needs-the-raw-body](notes/global/stripe-needs-the-raw-body.md) [gotcha]");
   });
 
@@ -319,12 +319,12 @@ describe("kb search", () => {
     expect(kb(store, ["search", "cents"], { cwd: repo }).stdout.trimEnd().split("\n")).toEqual([
       "web-cents | github.com/acme/web | Amounts are integer cents",
       "global-cents | global | Print cents with two digits",
-      "  12: cents 1",
-      "  13: cents 2",
-      "  14: cents 3",
+      "  11: cents 1",
+      "  12: cents 2",
+      "  13: cents 3",
       "  ...",
       "api-cents | github.com/acme/api | Amounts are integer cents",
-      "  12: No cents as floats.",
+      "  11: No cents as floats.",
     ]);
   });
 
@@ -336,11 +336,11 @@ describe("kb search", () => {
     putNote(store, { id: "old", body: "signature rotation, trashed" }, true);
 
     const hits = search(store, "signature");
-    expect(hits).toEqual([{ id: "raw-body", title: "Stripe needs the raw body", scope: "global", trashed: false, line: 13, text: "The JSON parser breaks the Signature." }]);
+    expect(hits).toEqual([{ id: "raw-body", title: "Stripe needs the raw body", scope: "global", trashed: false, line: 12, text: "The JSON parser breaks the Signature." }]);
     expect(search(store, "signature", { trash: true }).map((h) => h.id)).toEqual(["raw-body", "old"]);
     expect(search(store, "nothing", { scope: "global" })).toEqual([]);
     // A title match counts once. The id line does not double it.
-    expect(search(store, "raw").map((h) => h.line)).toEqual([3, 12]);
+    expect(search(store, "raw").map((h) => h.line)).toEqual([3, 11]);
   });
 
   // The checkpoint skill searches with two or three key words before it writes. A phrase match

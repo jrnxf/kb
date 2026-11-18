@@ -93,7 +93,7 @@ export function buildContext(store: Store, repoPath: string): ContextResult {
   const config = store.config();
 
   // Promoted notes are already loaded by the repo's own CLAUDE.md or AGENTS.md.
-  const visible = store.notes().filter((n) => n.indexed && !n.promoted_to && (n.scope === "global" || n.scope === scope));
+  const visible = store.notes().filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === scope));
   const syncError = store.syncError();
   if (visible.length === 0 && !syncError) return { ...EMPTY, scope };
 
@@ -162,15 +162,13 @@ export interface BudgetResult {
   over: boolean;
   /** Every note a session of this scope can see, in rank order. */
   notes: { id: string; kind: string; scope: string; uses: number; last_used: string | null; chars: number; shown: "body" | "index" | "hidden" }[];
-  /** Notes to take out of the index first, at most as many as are hidden: fewest uses, longest unused, lowest rank. Only decisions and how-tos. Empty when no note is hidden. */
-  demote: { id: string; reason: string }[];
+  /** Notes to look at first to make room, at most as many as are hidden: fewest uses, longest unused, lowest rank. Only decisions and how-tos. Each may be trashed or merged. Shortening one frees nothing, because it ranks low. Empty when no note is hidden. */
+  trim: { id: string; reason: string }[];
   /** The rest of the hidden count, as gotchas and conventions in the same order. A rule that works leaves no use count, so only the user can remove one. */
   ask: { id: string; kind: string; reason: string }[];
-  /** Notes of this scope that were demoted (`indexed: false`): no session loads them. */
-  demoted: string[];
 }
 
-/** `kb budget`: what a session loads, which notes reach no session, and what to demote for them. */
+/** `kb budget`: what a session loads, which notes reach no session, and which notes to look at to make room. */
 export function buildBudget(store: Store, repoPath: string): BudgetResult {
   const context = buildContext(store, repoPath);
   const config = store.config();
@@ -190,7 +188,7 @@ export function buildBudget(store: Store, repoPath: string): BudgetResult {
     shown: bodies.has(n.id) ? ("body" as const) : index.has(n.id) ? ("index" as const) : ("hidden" as const),
   }));
   // A body that did not fit still reaches the session as an index line: that is how the store
-  // stays small, not a fault. Only a note with neither is a reason to demote something.
+  // stays small, not a fault. Only a note with neither is a reason to make room.
   const over = context.hiddenIndexLines > 0;
   const position = new Map(notes.map((n, i) => [n.id, i]));
   // Open work is never a candidate: it leaves the index when it is done. A gotcha or a convention
@@ -200,21 +198,19 @@ export function buildBudget(store: Store, repoPath: string): BudgetResult {
   const order = (a: (typeof notes)[number], b: (typeof notes)[number]) =>
     a.uses - b.uses || (a.last_used ?? "").localeCompare(b.last_used ?? "") || position.get(b.id)! - position.get(a.id)!;
   const rule = (kind: string) => kind === "gotcha" || kind === "convention";
-  const demote = over
+  const trim = over
     ? notes.filter((n) => n.kind !== "open-work" && !rule(n.kind)).sort(order).slice(0, context.hiddenIndexLines).map((n) => ({ id: n.id, reason: reason(n) }))
     : [];
   const ask = over
-    ? notes.filter((n) => rule(n.kind)).sort(order).slice(0, context.hiddenIndexLines - demote.length).map((n) => ({ id: n.id, kind: n.kind, reason: reason(n) }))
+    ? notes.filter((n) => rule(n.kind)).sort(order).slice(0, context.hiddenIndexLines - trim.length).map((n) => ({ id: n.id, kind: n.kind, reason: reason(n) }))
     : [];
-  const demoted = all.filter((n) => !n.indexed && !n.promoted_to && (n.scope === "global" || n.scope === context.scope)).map((n) => n.id);
   return {
     scope: context.scope,
     index: { lines: context.index.length, budget: config.budgets.indexLines, hidden: context.hiddenIndexLines },
     context: { chars: context.chars, budget: contextBudget(config.budgets.contextChars), bodies: context.bodies.length, dropped: context.dropped.length },
     over,
     notes,
-    demote,
+    trim,
     ask,
-    demoted,
   };
 }
