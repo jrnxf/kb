@@ -27,6 +27,9 @@ export const KEYS: Record<Choice, string> = { rewrite: "u", ask: "r", edit: "e",
 /** The key that takes the agent's pick, whatever it is. */
 export const ACCEPT_KEY = "a";
 
+/** The key that takes the agent's pick on every card the user has not picked yet. */
+export const ACCEPT_REST_KEY = "A";
+
 /** The steps in order: cards with no group first, then each group after its divider, in the order the agent gave. */
 export function steps(cards: AuditCard[]): Step[] {
   const groups = new Map<string, number[]>();

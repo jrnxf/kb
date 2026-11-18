@@ -400,6 +400,27 @@ describe("the audit page in a browser", () => {
     await page.close();
   });
 
+  test("accept the rest takes the agent's pick on every card not picked yet, and keeps the user's picks", async () => {
+    const store = setup();
+    proposeAudit(store, { items: [ITEMS[0], ITEMS[3], ITEMS[6]] }, repo());
+    served = serve(store, { port: 0 });
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    page.setDefaultTimeout(3000);
+    await page.goto(`${served.url}#audit=${encodeURIComponent(SCOPE)}`);
+    await page.locator('[data-card="v"]').waitFor();
+    await page.keyboard.press("t"); // v: trash, not the agent's keep
+    await page.locator('[data-card="t"]').waitFor();
+    expect(await page.locator("[data-accept-rest]").textContent()).toContain("accept the rest (2)");
+    await page.keyboard.press("Shift+A");
+    await page.getByRole("heading", { name: "Ready to apply" }).waitFor();
+    expect(await page.locator("[data-accept-rest]").count()).toBe(0);
+    await page.keyboard.press("Enter");
+    await page.getByRole("heading", { name: "Applied" }).waitFor();
+    // keepme was never opened: its keep records no check.
+    expect(readAudit(store, SCOPE)!.result).toMatchObject({ trashed: ["v", "t"], kept: ["keepme"], checked: [] });
+    await page.close();
+  });
+
   test("the Audit button starts an agent for the project, then opens its cards", async () => {
     const store = setup();
     const dir = tempRepo({ remote: REMOTE });
