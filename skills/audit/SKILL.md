@@ -86,7 +86,7 @@ KB_AUDIT
 
 ## 4. After the user applies
 
-When the user says it is applied, run `kb audit`. It lists what the page did, and the notes the user sent back with what is wrong with each.
+When the user says it is applied, run `kb audit status`. It lists what the page did, and the notes the user sent back with what is wrong with each.
 
 For each note sent back, read it and the code again, and rewrite it with `kb add --json`:
 

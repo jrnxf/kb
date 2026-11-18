@@ -1,6 +1,7 @@
 // `kb context`: the text a session gets at start. Ranking and both budgets live here.
 
 import { KINDS, normalizeTitle } from "./note.ts";
+import { rememberRepo } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
 import { HARD_CONTEXT_CAP, type Store, type StoredNote, type Usage } from "./store.ts";
 
@@ -86,7 +87,8 @@ function pointer(dropped: number): string {
 
 export function buildContext(store: Store, repoPath: string): ContextResult {
   if (!store.exists()) return EMPTY;
-  const { scope } = resolveRepo(repoPath, store);
+  const { scope, root } = resolveRepo(repoPath, store);
+  if (scope && root) rememberRepo(store, scope, root);
   const usage = store.usage();
   const config = store.config();
 

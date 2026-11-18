@@ -1,12 +1,17 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { type Browser, chromium } from "playwright";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { applyAudit, auditData, openAudits, proposeAudit, readAudit } from "../cli/audit.ts";
+import { AGENT_ENV, auditPrompt, runState, startRun, waitRun } from "../cli/audit-run.ts";
+import { buildContext } from "../cli/context.ts";
+import { auditableScopes, rememberRepo, repoRoot } from "../cli/repos.ts";
 import type { RepoInfo } from "../cli/scope.ts";
 import { type Served, runningPort, serve } from "../cli/serve.ts";
 import type { Store } from "../cli/store.ts";
 import type { AuditCard } from "../cli/wire.ts";
 import { choices, freed, steps, summary, toPicks } from "../web/src/lib/audit.ts";
-import { MAIN, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
+import { MAIN, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const SCOPE = "example.com/team/app";
 const repo = (head = "abc1234"): RepoInfo => ({ scope: SCOPE, root: null, head });
@@ -188,6 +193,99 @@ describe("Apply", () => {
   });
 });
 
+const FAKE = join(import.meta.dir, "fixtures", "fake-audit-agent.sh");
+const REMOTE = "https://example.com/team/app.git";
+
+/** Run the CLI in a checkout of the repo, with the fake agent in place of claude. */
+function cli(store: Store, dir: string, fake: string, args: string[]) {
+  const out = tempDir();
+  const r = Bun.spawnSync(["bun", MAIN, ...args], {
+    cwd: dir,
+    env: { ...process.env, KB_HOME: store.home, [AGENT_ENV]: FAKE, FAKE_AUDIT: fake, FAKE_OUT: out, FAKE_ITEMS: JSON.stringify({ items: [ITEMS[0]] }) },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return { code: r.exitCode, stdout: r.stdout.toString(), stderr: r.stderr.toString(), out };
+}
+
+describe("kb audit starts an agent", () => {
+  test("waits for the agent's proposal and prints the page link, and the agent's own kb audit only reports", () => {
+    const store = setup();
+    const dir = tempRepo({ remote: REMOTE });
+    const r = cli(store, dir, "propose", ["audit"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`#audit=${encodeURIComponent(SCOPE)}`);
+    expect(r.stdout).toContain("proposed 1 cards");
+    expect(readAudit(store, SCOPE)!.items.map((i) => i.id)).toEqual(["v"]);
+    expect(readFileSync(join(r.out, "status.txt"), "utf8")).toContain(`no audit for ${SCOPE}`);
+    // The page can now start an audit of this repo too.
+    expect(repoRoot(store, SCOPE)).toBe(dir);
+  });
+
+  test("an audit that waits for picks opens as it is, with no new agent", () => {
+    const store = setup();
+    const dir = tempRepo({ remote: REMOTE });
+    proposeAudit(store, { items: [ITEMS[0]] }, repo());
+    const r = cli(store, dir, "fail", ["audit"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("waits for your picks");
+    expect(runState(store, SCOPE)).toBeUndefined();
+  });
+
+  test("says when the agent found nothing to change, and shows its last lines when it fails", () => {
+    const store = setup();
+    const dir = tempRepo({ remote: REMOTE });
+    const nothing = cli(store, dir, "nothing", ["audit"]);
+    expect(nothing.code).toBe(0);
+    expect(nothing.stdout).toContain("found nothing to change");
+    expect(nothing.stdout).toContain("every note still holds");
+    const failed = cli(store, dir, "fail", ["audit"]);
+    expect(failed.code).not.toBe(0);
+    expect(failed.stderr).toContain("boom");
+  });
+
+  test("starts one agent per repo: a second start while it runs returns the same run", async () => {
+    const store = setup();
+    const dir = tempRepo({ remote: REMOTE });
+    const env = { [AGENT_ENV]: FAKE, FAKE_AUDIT: "slow", FAKE_OUT: tempDir(), KB_HOME: store.home };
+    const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, env);
+    try {
+      const first = startRun(store, SCOPE, dir);
+      expect(runState(store, SCOPE)!.status).toBe("running");
+      expect(startRun(store, SCOPE, dir).started).toBe(first.started);
+      const runs = JSON.parse(readFileSync(store.statePath("audit-runs.json"), "utf8"));
+      process.kill(-runs[SCOPE].pid, "SIGTERM");
+      expect((await waitRun(store, SCOPE, 50)).status).toBe("failed");
+    } finally {
+      for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    }
+  });
+
+  test("outside a repo it refuses, since global notes are in every repo's audit", () => {
+    const store = setup();
+    const r = cli(store, tempDir(), "propose", ["audit"]);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("run it inside one");
+  });
+
+  test("a session start records where the repo is checked out", () => {
+    const store = setup();
+    const dir = tempRepo({ remote: REMOTE });
+    buildContext(store, dir);
+    expect(auditableScopes(store)).toEqual([SCOPE]);
+    rememberRepo(store, "example.com/team/gone", join(tempDir(), "missing"));
+    expect(auditableScopes(store)).toEqual([SCOPE]);
+  });
+
+  test("the headless prompt is the skill without its frontmatter, and starts with the sent-back notes", () => {
+    const prompt = auditPrompt();
+    expect(prompt).not.toContain("disable-model-invocation");
+    expect(prompt).toContain("kb audit status");
+    expect(prompt).toContain("kb audit propose");
+  });
+});
+
 describe("the page link", () => {
   test("goes to the port the running kb serve recorded", async () => {
     const store = setup();
@@ -289,6 +387,32 @@ describe("the audit page in a browser", () => {
     expect(readAudit(store, SCOPE)!.result).toMatchObject({ verified: ["v"], rewritten: ["r"], kept: ["t", "keepme"] });
     await page.close();
   });
+
+  test("the Audit button starts an agent for the project, then opens its cards", async () => {
+    const store = setup();
+    const dir = tempRepo({ remote: REMOTE });
+    rememberRepo(store, SCOPE, dir);
+    const env = { [AGENT_ENV]: FAKE, FAKE_AUDIT: "propose", FAKE_OUT: tempDir(), FAKE_ITEMS: JSON.stringify({ items: [ITEMS[0]] }), KB_HOME: store.home };
+    const saved = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, env);
+    try {
+      served = serve(store, { port: 0 });
+      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+      page.setDefaultTimeout(15000);
+      await page.goto(served.url);
+      await page.locator(`[data-rail="scope:${SCOPE}"]`).click();
+      await page.locator('[data-audit-start="start"]').click();
+      await page.locator('[data-card="v"]').waitFor();
+      expect(await page.evaluate(() => location.hash)).toBe(`#audit=${encodeURIComponent(SCOPE)}`);
+      // Back on the notes, the button opens the audit that waits for the picks.
+      await page.getByTitle("Back to the notes").click();
+      await page.locator(`[data-rail="scope:${SCOPE}"]`).click();
+      await page.locator('[data-audit-start="open"]').waitFor();
+      await page.close();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    }
+  }, 30000);
 
   test("the sidebar links to an open audit, and the page goes there and back", async () => {
     const store = setup();

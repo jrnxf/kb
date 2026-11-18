@@ -43,7 +43,7 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
   merge, shorten, demote or trash with `kb audit propose`. You decide in the `kb serve` page, one
   card per note: each card shows the note, the new text struck against the old, and the agent's
   pick. A key takes a pick, a meter counts the notes that still reach no session, and Apply makes
-  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit`. `kb budget` asks for a
+  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` in a repo starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. The Audit button on a project in the page does the same for any repo a session has opened once. `kb budget` asks for a
   demotion only when the index is full and a note reaches no session. A body that became an
   index line is the normal state. It names decisions and how-tos to demote, and leaves gotchas and
   conventions for you to name, because a rule that works leaves no use count. It also lists the
@@ -80,7 +80,7 @@ kb trash|restore|delete|empty-trash --scope <repo id>   a whole project
 kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]         kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run]
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
-kb audit propose             kb audit   (the open audit, or what its Apply did)
+kb audit [--no-wait]         kb audit propose   kb audit status   (an agent audits the repo)
 kb sync                      kb checkpointed <session-id>
 ```
 

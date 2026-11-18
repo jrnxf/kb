@@ -36,6 +36,21 @@ export interface PageData {
   notes: PageNote[];
   /** The scopes with an audit that waits for the user's picks. */
   audits: string[];
+  /** The repos with a checkout on disk: the page can start an audit for each. */
+  auditable: string[];
+  /** The last audit agent of each repo that has one. */
+  runs: Record<string, AuditRunState>;
+}
+
+/** Where an audit agent stands: running, done with cards, done with nothing to change, or failed. */
+export interface AuditRunState {
+  scope: string;
+  started: string;
+  log: string;
+  status: "running" | "proposed" | "nothing" | "failed";
+  cards?: number;
+  /** The last lines the agent wrote, when it ended with no proposal. */
+  said?: string;
 }
 
 export interface NoteEdit {

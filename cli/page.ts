@@ -1,6 +1,8 @@
 // The data behind the page that `kb serve` shows. The page itself is a React app in web/.
 
 import { openAudits } from "./audit.ts";
+import { runState } from "./audit-run.ts";
+import { auditableScopes } from "./repos.ts";
 import { rank } from "./context.ts";
 import { KINDS, byTrashedAt } from "./note.ts";
 import type { Store, StoredNote } from "./store.ts";
@@ -21,7 +23,17 @@ export function renderBody(markdown: string): string {
 /** Changes whenever a note, the trash or a usage counter changes. The page refreshes when it differs. */
 export function storeVersion(store: Store): string {
   const strip = ({ path: _path, ...note }: StoredNote) => note;
-  return Bun.hash(JSON.stringify([store.notes().map(strip), store.notes({ trashed: true }).map(strip), [...store.usage()]])).toString(36);
+  // An audit agent that ends changes the page too: its repo gets an audit to open.
+  const audits = auditableScopes(store).map((scope) => runState(store, scope)?.status);
+  return Bun.hash(JSON.stringify([store.notes().map(strip), store.notes({ trashed: true }).map(strip), [...store.usage()], openAudits(store), audits])).toString(36);
+}
+
+/** The last audit agent of each repo the page can audit. */
+function runs(store: Store) {
+  return Object.fromEntries(auditableScopes(store).flatMap((scope) => {
+    const state = runState(store, scope);
+    return state ? [[scope, state]] : [];
+  }));
 }
 
 export function pageData(store: Store, token: string): PageData {
@@ -54,5 +66,5 @@ export function pageData(store: Store, token: string): PageData {
       last_used: used?.last_used,
     };
   });
-  return { version: storeVersion(store), token, kinds: [...KINDS], trashDays: days, notes, audits: openAudits(store) };
+  return { version: storeVersion(store), token, kinds: [...KINDS], trashDays: days, notes, audits: openAudits(store), auditable: auditableScopes(store), runs: runs(store) };
 }

@@ -6,8 +6,10 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
 import { applyAudit, auditData } from "./audit.ts";
-import { pageData, storeVersion } from "./page.ts";
+import { startRun } from "./audit-run.ts";
 import { KbError } from "./note.ts";
+import { pageData, storeVersion } from "./page.ts";
+import { repoRoot } from "./repos.ts";
 import { type Store, writeAtomic } from "./store.ts";
 import { deleteNotes, emptyTrash, moveNotes, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
@@ -69,6 +71,16 @@ async function handle(store: Store, token: string, port: number, request: Reques
 
   // An audit: the agent's proposal as cards, and Apply, which makes the user's picks.
   if (request.method === "GET" && url.pathname === "/api/audit") return json(auditData(store, url.searchParams.get("scope") ?? "", token));
+  // The page's Audit button: one agent audits the repo in its checkout, and the page opens its cards.
+  if (url.pathname === "/api/audit/start") {
+    if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
+    if (request.method !== "POST") return json({ error: "not found" }, 404);
+    const scope = (await body(request))?.scope;
+    if (typeof scope !== "string") throw new KbError("scope: must be a repo id");
+    const root = repoRoot(store, scope);
+    if (!root) throw new KbError(`kb does not know where ${scope} is checked out. Start a session in it once, or run kb audit there.`);
+    return json(startRun(store, scope, root));
+  }
   if (url.pathname === "/api/audit/apply") {
     if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
