@@ -125,6 +125,11 @@ global, then other repos. `kb show` accepts a part of an id when only one note h
 has no notes is an error in `kb add`, `kb search` and `kb list`, so a typing error cannot put a
 note where no session loads it. The first note of a repo is written from inside that repo, or with `--repo`.
 
+kb syncs every note to git, so it refuses new text that holds a secret: `kb add`, an edit on the page,
+and the text or rule of an audit Apply. It knows the shape of common tokens and keys (GitHub, AWS,
+Anthropic, Slack and more), a password in a URL, and a long random value given to a name such as
+`API_KEY`. The error names the kind and the place, never the secret. Write a placeholder instead.
+
 Skills: `/kb:checkpoint`, `/kb:audit`, `/kb:promote`. Only you can start them. `/kb:note` writes a rule the
 user states to an instruction file, and the agent starts it on its own.
 
