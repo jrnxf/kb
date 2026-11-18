@@ -41,6 +41,9 @@ export interface StoredNote extends Note {
  */
 export const HARD_CONTEXT_CAP = 8800;
 
+/** A count of days from the config: a number of 1 or more, else the default. */
+const days = (value: unknown, fallback: number): number => (typeof value === "number" && Number.isFinite(value) && value >= 1 ? value : fallback);
+
 const DEFAULT_CONFIG: Config = {
   budgets: { indexLines: 60, contextChars: 8000, globalIndexLines: 20 },
   decayDays: 180,
@@ -117,8 +120,10 @@ export class Store {
         // 0 is a choice: no global notes in a repo session. A value that is not a number is a mistake.
         globalIndexLines: Number.isFinite(raw.budgets?.globalIndexLines) && raw.budgets!.globalIndexLines! >= 0 ? Math.floor(raw.budgets!.globalIndexLines!) : DEFAULT_CONFIG.budgets.globalIndexLines,
       },
-      // A wrong value must not empty the trash or stop every command.
-      trashDays: Number.isFinite(raw.trashDays) && raw.trashDays! >= 1 ? raw.trashDays! : DEFAULT_CONFIG.trashDays,
+      // A wrong value must not empty the trash, expire every note or stop every command.
+      trashDays: days(raw.trashDays, DEFAULT_CONFIG.trashDays),
+      decayDays: days(raw.decayDays, DEFAULT_CONFIG.decayDays),
+      expireDays: days(raw.expireDays, DEFAULT_CONFIG.expireDays),
     };
   }
 

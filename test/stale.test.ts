@@ -44,6 +44,31 @@ describe("kb stale", () => {
     expect(findStale(store, repo, NOW).candidates[1]!.detail).toBe(`changed since ${head}: src/ledger.ts`);
   });
 
+  test("a gone symbol does not hide a change to another anchor, also on the same file", () => {
+    const { repo, store, head } = fixture();
+    mkdirSync(join(repo, "b"));
+    writeFileSync(join(repo, "b/x.ts"), "x\n");
+    commit(repo, "add b");
+    const base = sh(repo, "git", "rev-parse", "--short", "HEAD");
+    putNote(store, { id: "same-file", scope: SCOPE, verified_at_commit: base, anchors: ["src/ledger.ts#gone", "src/ledger.ts#append"], last_verified: FRESH });
+    putNote(store, { id: "same-word", scope: SCOPE, verified_at_commit: base, anchors: ["src/rates.ts#b", "b"], last_verified: FRESH });
+    writeFileSync(join(repo, "src/ledger.ts"), "export function append() { return 1; }\n");
+    writeFileSync(join(repo, "b/x.ts"), "y\n");
+    commit(repo, "change both");
+    expect(reasons(store, repo)).toEqual(["same-file:anchor-changed", "same-file:anchor-missing", "same-word:anchor-changed", "same-word:anchor-missing"]);
+    expect(head).not.toBe(base);
+  });
+
+  test("a symbol check reads only a regular file of a sane size, so a pipe never blocks it", () => {
+    const { repo, store } = fixture();
+    sh(repo, "mkfifo", "pipe");
+    writeFileSync(join(repo, "huge.txt"), "x".repeat(2_000_001));
+    putNote(store, { id: "pipe", scope: SCOPE, anchors: ["pipe#x"], last_verified: FRESH });
+    putNote(store, { id: "huge", scope: SCOPE, anchors: ["huge.txt#nothing"], last_verified: FRESH });
+    putNote(store, { id: "dir", scope: SCOPE, anchors: ["src#nothing"], last_verified: FRESH });
+    expect(reasons(store, repo)).toEqual([]);
+  });
+
   test("anchor-missing: the path is gone, or the symbol left the file", () => {
     const { repo, store, head } = fixture();
     putNote(store, { id: "path", scope: SCOPE, verified_at_commit: head, anchors: ["src/gone.ts"], last_verified: FRESH });
@@ -81,6 +106,19 @@ describe("kb stale", () => {
     expect(reasons(store, repo)).toEqual(["used:decayed"]);
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ decayDays: 365, expireDays: 30 }));
     expect(reasons(store, repo)).toEqual(["checked:expired"]);
+  });
+
+  test("a note expires after expireDays whole days, and a wrong window falls back to the default", () => {
+    const { repo, store } = fixture();
+    const daysBefore = (days: number, hours = 0) => new Date(NOW.getTime() - (days * 24 + hours) * 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    putNote(store, { id: "edge", scope: SCOPE, last_verified: daysBefore(90, 23) });
+    putNote(store, { id: "over", scope: SCOPE, last_verified: daysBefore(91) });
+    expect(reasons(store, repo)).toEqual(["over:expired"]);
+    for (const expireDays of [null, 0, -1, "abc"]) {
+      writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ expireDays, decayDays: expireDays }));
+      expect(store.config()).toMatchObject({ expireDays: 90, decayDays: 180 });
+      expect(reasons(store, repo)).toEqual(["over:expired"]);
+    }
   });
 
   test("duplicate: two titles share most of their words, and the newer note is the candidate", () => {

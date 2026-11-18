@@ -1,9 +1,9 @@
 // `kb context`: the text a session gets at start. Ranking and both budgets live here.
 
 import { KINDS, normalizeTitle } from "./note.ts";
-import { rememberRepo } from "./repos.ts";
+import { rememberRepo, repoRoot } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
-import { missingAnchors } from "./stale.ts";
+import { anchorReader, missingAnchors } from "./stale.ts";
 import { HARD_CONTEXT_CAP, type Store, type StoredNote, type Usage } from "./store.ts";
 
 export interface ContextResult {
@@ -109,6 +109,9 @@ export function buildContext(store: Store, repoPath: string): ContextResult {
 /** At most this many characters say what is gone from one note, so one note cannot fill the budget. */
 const GONE_DETAIL_CHARS = 120;
 
+/** At most this many notes are listed under "Anchors gone". A checkout that lacks many files must not push notes out of the index. */
+const GONE_LINES = 5;
+
 /**
  * The context of a scope: a repo id, or null for a session outside any repo. With the checkout at
  * `root`, each repo note in the session has its anchors checked, and a note whose file or symbol is
@@ -134,9 +137,10 @@ export function contextFor(store: Store, scope: string | null, root: string | nu
   const charBudget = contextBudget(config.budgets.contextChars);
   const goneOf = new Map<string, string>();
   if (scope && root) {
+    const read = anchorReader();
     for (const note of ranked) {
       if (note.scope !== scope || note.anchors.length === 0) continue;
-      const missing = missingAnchors(note, root).join("; ");
+      const missing = missingAnchors(note, root, read).map((m) => m.detail).join("; ");
       if (missing) goneOf.set(note.id, missing.length > GONE_DETAIL_CHARS ? `${missing.slice(0, GONE_DETAIL_CHARS - 3)}...` : missing);
     }
   }
@@ -153,7 +157,8 @@ export function contextFor(store: Store, scope: string | null, root: string | nu
     // A note whose file or symbol is gone may be wrong now. The session checks it before it acts on it.
     const gone = goneIn([...bodies, ...listed]);
     if (gone.length > 0) {
-      lines.push("", "## Anchors gone", "These notes name a file or a symbol that is not in the checkout now. Check a note before you act on it, then update it or trash it.", ...gone.map((g) => `- ${g.id}: ${g.detail}`));
+      lines.push("", "## Anchors gone", "These notes name a file or a symbol that is not in the checkout now. Check a note before you act on it, then update it or trash it.", ...gone.slice(0, GONE_LINES).map((g) => `- ${g.id}: ${g.detail}`));
+      if (gone.length > GONE_LINES) lines.push(`${gone.length - GONE_LINES} more. \`kb stale\` lists them.`);
     }
     if (listed.length > 0) {
       lines.push("", "## Index");
@@ -225,7 +230,7 @@ export function buildBudget(store: Store, repoPath: string): BudgetResult {
 
 /** The budget of a scope: a repo id, or null for global notes only. */
 export function budgetOf(store: Store, scope: string | null): BudgetResult {
-  return budgetFor(store, contextFor(store, scope));
+  return budgetFor(store, contextFor(store, scope, scope ? repoRoot(store, scope) : null));
 }
 
 function budgetFor(store: Store, context: ContextResult): BudgetResult {

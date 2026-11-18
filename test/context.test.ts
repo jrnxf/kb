@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SAVE_RULE, buildContext, contextBudget, indexLine } from "../cli/context.ts";
+import { SAVE_RULE, budgetOf, buildContext, contextBudget, indexLine } from "../cli/context.ts";
+import { rememberRepo } from "../cli/repos.ts";
 import { slugify } from "../cli/note.ts";
 import { HARD_CONTEXT_CAP, type StoredNote } from "../cli/store.ts";
 import { plain, putNote, tempRepo, tempStore } from "./helpers.ts";
@@ -169,6 +170,20 @@ describe("kb context visibility", () => {
     expect(text).toContain("- renamed: post is no longer in src/ledger.ts\n");
     // Outside the repo nothing is checked: a global note's anchors name no checkout.
     expect(buildContext(store, plain()).gone).toEqual([]);
+  });
+
+  test("a checkout that lacks many anchored files lists five notes, so the index keeps its room", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: REMOTE });
+    for (let i = 0; i < 40; i++) putNote(store, { id: `gone-${String(i).padStart(2, "0")}`, scope: SCOPE, anchors: [`src/file-${i}.ts`] });
+    const result = buildContext(store, repo);
+    expect(result.gone).toHaveLength(result.bodies.length + result.index.length);
+    const section = result.text.slice(result.text.indexOf("## Anchors gone"), result.text.indexOf("## Index"));
+    expect(section.match(/^- gone-/gm)).toHaveLength(5);
+    expect(section).toContain(`${result.gone.length - 5} more. \`kb stale\` lists them.`);
+    // The kb budget of the scope sees the same session as the session start.
+    rememberRepo(store, SCOPE, repo);
+    expect(budgetOf(store, SCOPE).context.chars).toBe(result.chars);
   });
 
   test("prints nothing when no note is visible", () => {
