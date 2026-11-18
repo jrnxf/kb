@@ -10,7 +10,7 @@ import type { RepoInfo } from "../cli/scope.ts";
 import { type Served, runningPort, serve } from "../cli/serve.ts";
 import type { Store } from "../cli/store.ts";
 import type { AuditCard } from "../cli/wire.ts";
-import { changes, choiceForKey, choices, freed, steps, summary, toPicks } from "../web/src/lib/audit.ts";
+import { changes, choiceForKey, choiceLabel, choices, freed, steps, summary, toPicks } from "../web/src/lib/audit.ts";
 import { MAIN, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const SCOPE = "example.com/team/app";
@@ -97,6 +97,13 @@ describe("the audit page data", () => {
 });
 
 describe("Apply", () => {
+  test("trash on a merge card takes both notes", () => {
+    const store = setup();
+    proposeAudit(store, { items: [ITEMS[2]!] }, repo());
+    expect(applyAudit(store, SCOPE, { picks: [{ id: "m", action: "trash" }] }).trashed).toEqual(["m", "m2"]);
+    expect([store.find("m")!.trashed_at, store.find("m2")!.trashed_at]).toEqual([expect.any(String), expect.any(String)]);
+  });
+
   test("makes every pick in one commit, and records the requests for the agent", () => {
     const store = setup();
     proposeAudit(store, { items: ITEMS }, repo("abc1234"));
@@ -289,11 +296,13 @@ describe("the global audit", () => {
     expect(readAudit(store, "global")!.result).toBeUndefined();
   });
 
-  test("a promote card with notes that move along offers no trash", () => {
-    const { store } = globalSetup();
+  test("trash on a promote card takes every note on it, and the file stays as it was", () => {
+    const { store, real } = globalSetup();
     proposeAudit(store, { items: [MOVE] }, GLOBAL);
-    expect(() => applyAudit(store, "global", { picks: [{ id: "g2", action: "trash" }] })).toThrow("trash is not an action for g2");
     expect(() => applyAudit(store, "global", { picks: [{ id: "g2", action: "keep", rule: "x" }] })).toThrow("only a promote has it");
+    expect(applyAudit(store, "global", { picks: [{ id: "g2", action: "trash" }] }).trashed).toEqual(["g2", "g3"]);
+    expect([store.find("g2")!.trashed_at, store.find("g3")!.trashed_at]).toEqual([expect.any(String), expect.any(String)]);
+    expect(readFileSync(real, "utf8")).toBe(RULES);
   });
 });
 
@@ -424,10 +433,10 @@ describe("the deck", () => {
     expect(choices(card({}))).toEqual(["keep", "trash"]);
     expect(choices(card({ action: "trash" }))).toEqual(["trash", "keep"]);
     expect(choices(card({ action: "rewrite", proposed: { title: "T", body: "new" } }))).toEqual(["rewrite", "keep", "trash"]);
-    expect(choices(card({ action: "merge", merge: [card({}).note] }))).toEqual(["merge", "keep"]);
+    expect(choices(card({ action: "merge", merge: [card({}).note] }))).toEqual(["merge", "keep", "trash"]);
     const promote = { file: "~/.claude/CLAUDE.md", path: "~/dotfiles/AGENTS.md", link: true, above: [], added: ["- r"], rule: "- r" };
     expect(choices(card({ action: "promote", promote }))).toEqual(["promote", "keep", "trash"]);
-    expect(choices(card({ action: "promote", promote, merge: [card({}).note] }))).toEqual(["promote", "keep"]);
+    expect(choices(card({ action: "promote", promote, merge: [card({}).note] }))).toEqual(["promote", "keep", "trash"]);
     expect(choiceForKey(card({ action: "promote", promote, merge: [card({}).note] }), "r")).toBe("ask");
   });
 
@@ -454,6 +463,15 @@ describe("the deck", () => {
     expect(changes([moving], [{ action: "keep" }])).toEqual({ changed: 0, total: 3 });
     expect(summary([moving], [{ action: "promote", rule: "mine" }]).map((g) => g.label)).toEqual(["move to CLAUDE.md with your text"]);
     expect(toPicks([moving], [{ action: "promote", rule: "mine" }])).toEqual([{ id: "x", action: "promote", rule: "mine" }]);
+  });
+
+  test("trash on a card with several notes takes, counts and names every note on it", () => {
+    const two = card({ action: "merge", merge: [{ ...card({}).note, id: "y", title: "U" }] });
+    const three = card({ action: "merge", merge: [card({}).note, { ...card({}).note, place: "hidden" }] });
+    expect([two, three].map((c) => choiceLabel(c, "trash"))).toEqual(["trash both", "trash all 3"]);
+    expect(freed([three], [{ action: "trash" }])).toBe(2);
+    expect(changes([two, three], [{ action: "trash" }, { action: "keep" }])).toEqual({ changed: 2, total: 5 });
+    expect(summary([two], [{ action: "trash" }])).toMatchObject([{ label: "trash", titles: ["T", "U"] }]);
   });
 
   test("counts no line for a note that had none", () => {
