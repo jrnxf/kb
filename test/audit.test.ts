@@ -53,6 +53,7 @@ describe("kb audit propose", () => {
     [{ items: [{ id: "other", action: "verify", why: "x" }] }, "belongs to example.com/team/other"],
     [{ items: [{ id: "v", action: "delete", why: "x" }] }, "action: must be one of"],
     [{ items: [{ id: "v", action: "verify" }] }, "why: required"],
+    [{ items: [{ id: "v", action: "verify", why: "x".repeat(141) }] }, "why: 141 characters, at most 140"],
     [{ items: [{ id: "r", action: "rewrite", why: "x" }] }, "a rewrite needs the new title or body"],
     [{ items: [{ id: "v", action: "verify", why: "x", body: "new" }] }, "only a rewrite or a merge has new text"],
     [{ items: [{ id: "m", action: "merge", why: "x" }] }, "a merge names the notes"],

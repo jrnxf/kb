@@ -52,7 +52,7 @@ Rules:
 - Do not verify a note you did not check against the code or a source. For a `global` note with no anchor, verify only when you know the fact still holds. If you cannot tell, propose `keep` and say what is unknown.
 - Demote only when `over` is true, and at most as many notes as `demote` lists. Prefer merge, trash and shorten before demote. Never demote `open-work`.
 - A demoted note leaves every session without a trace there. So never demote a `gotcha` or a `convention` because it has no uses: a rule that works leaves no use count. Demote one only when the user names it.
-- For each note you propose to demote, write "or trash" in the why. The user picks demote or trash on the card.
+- For each note you propose to demote, write "You can also trash it." in the why. The user picks demote or trash on the card.
 - For a rewrite, a merge or a shorten, write the new text now, so the user sees it on the card.
 
 ## 3. Propose in the page, then stop
@@ -62,18 +62,26 @@ The user decides in the `kb serve` page, one card per note. Write the proposal a
 ```bash
 kb audit propose <<'KB_AUDIT'
 { "items": [
-  { "id": "<id>", "action": "verify", "why": "<one line>", "reason": "anchor-changed" },
-  { "id": "<id>", "action": "rewrite", "why": "<one line>", "body": "<new body>" },
-  { "id": "<id>", "action": "merge", "why": "<one line>", "merge": ["<other id>"], "body": "<merged body>" },
-  { "id": "<id>", "action": "demote", "why": "Rarely used. Or trash it.", "reason": "0 uses" },
-  { "id": "<id>", "action": "keep", "why": "A use counts only when a checkpoint names the note. A rule that quietly prevents a mistake is rarely named. Keep it if it is still true. Trash it if not.", "group": "Rules with few uses: only you can remove one to make room" }
+  { "id": "<id>", "action": "verify", "why": "I read cli/serve.ts. The port is still 4173.", "reason": "anchor-changed" },
+  { "id": "<id>", "action": "rewrite", "why": "The flag is now --repo, not --dir.", "body": "<new body>" },
+  { "id": "<id>", "action": "trash", "why": "PR #12 is merged. This work is done." },
+  { "id": "<id>", "action": "merge", "why": "The two notes give the same rule: pin the bunx version.", "merge": ["<other id>"], "body": "<merged body>" },
+  { "id": "<id>", "action": "demote", "why": "Sessions used this note one time, in August. You can also trash it.", "reason": "1 use" },
+  { "id": "<id>", "action": "keep", "why": "A use counts only when a checkpoint names the note. So 0 uses does not show that the rule is not useful.", "group": "Rules with few uses: only you can remove one to make room" },
+  { "id": "<id>", "action": "keep", "why": "I could not check this note. It has no anchor, and the tap repo is not on this machine." }
 ] }
 KB_AUDIT
 ```
 
 - `action` is one of verify, rewrite, trash, merge, demote and keep. A shorten is a rewrite.
 - A rewrite needs the new `title` or `body`, or both. A merge needs `merge`, the notes that go to the trash. The note `id` keeps every fact, so give it the merged text.
-- `reason` is what `kb stale` or `kb budget` said. `why` is one line from you. The user reads it on the card with no other context, so say why in full words and what the pick changes for the note. No shorthand like "A rule."
+- `reason` is what `kb stale` or `kb budget` said.
+- `why` is the evidence for your pick, in 140 characters or fewer. The user reads it on the card with no other context.
+  - Say what you checked or found: the file, the commit, the PR, the date. "Still true" alone is not evidence.
+  - Do not repeat the action name or the note title. The card shows both.
+  - Write it in ASD-STE100 Simplified Technical English: sentences of 20 words or fewer, active voice, simple tenses, no phrasal verbs, no semicolons, and keep the articles.
+  - Use full words. No shorthand like "A rule."
+  - For a keep, say what you could not check or why no change is right.
 - Put the `ask` ids and the `demoted` ids in the items too, as `keep`, with a `group`. Cards with the same group sit together after a divider, and the user can keep the whole group with one key.
 - What each card offers:
   - Every card but a merge offers trash.

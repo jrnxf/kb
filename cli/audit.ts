@@ -12,6 +12,9 @@ import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import type { AuditAction, AuditCard, AuditData, AuditNote, AuditPick, AuditResult } from "./wire.ts";
 import { afterWrite, nowIso } from "./write.ts";
 
+/** The card shows `why` as one short line, so it stays brief. */
+export const WHY_MAX = 140;
+
 export const ACTIONS = ["verify", "rewrite", "trash", "merge", "demote", "keep"] as const;
 
 /** One proposal, as the agent writes it. */
@@ -116,6 +119,7 @@ export function proposeAudit(store: Store, input: unknown, repo: RepoInfo): Audi
     if (!ACTIONS.includes(action)) throw new KbError(`items[${i}].action: must be one of ${ACTIONS.join(", ")}`);
     const why = text(item.why, "why", i);
     if (!why) throw new KbError(`items[${i}].why: required`);
+    if (why.length > WHY_MAX) throw new KbError(`items[${i}].why: ${why.length} characters, at most ${WHY_MAX}. Say only the evidence for the pick.`);
     const merge = item.merge;
     if (action === "merge" && (!Array.isArray(merge) || merge.length === 0)) throw new KbError(`items[${i}].merge: a merge names the notes that go to the trash`);
     if (merge !== undefined && action !== "merge") throw new KbError(`items[${i}].merge: only a merge has it`);
