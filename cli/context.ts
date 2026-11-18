@@ -93,7 +93,7 @@ export function buildContext(store: Store, repoPath: string): ContextResult {
   const config = store.config();
 
   // Promoted notes are already loaded by the repo's own CLAUDE.md or AGENTS.md.
-  const visible = store.notes().filter((n) => n.indexed && !n.promoted_to && (n.scope === "global" || n.scope === scope));
+  const visible = store.notes().filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === scope));
   const syncError = store.syncError();
   if (visible.length === 0 && !syncError) return { ...EMPTY, scope };
 
@@ -162,12 +162,10 @@ export interface BudgetResult {
   over: boolean;
   /** Every note a session of this scope can see, in rank order. */
   notes: { id: string; kind: string; scope: string; uses: number; last_used: string | null; chars: number; shown: "body" | "index" | "hidden" }[];
-  /** Notes to look at first to make room, at most as many as are hidden: fewest uses, longest unused, lowest rank. Only decisions and how-tos. Each may be trashed, merged or shortened. Empty when no note is hidden. */
+  /** Notes to look at first to make room, at most as many as are hidden: fewest uses, longest unused, lowest rank. Only decisions and how-tos. Each may be trashed or merged. Shortening one frees nothing, because it ranks low. Empty when no note is hidden. */
   trim: { id: string; reason: string }[];
   /** The rest of the hidden count, as gotchas and conventions in the same order. A rule that works leaves no use count, so only the user can remove one. */
   ask: { id: string; kind: string; reason: string }[];
-  /** Notes of this scope that were demoted (`indexed: false`): no session loads them. */
-  demoted: string[];
 }
 
 /** `kb budget`: what a session loads, which notes reach no session, and which notes to look at to make room. */
@@ -206,7 +204,6 @@ export function buildBudget(store: Store, repoPath: string): BudgetResult {
   const ask = over
     ? notes.filter((n) => rule(n.kind)).sort(order).slice(0, context.hiddenIndexLines - trim.length).map((n) => ({ id: n.id, kind: n.kind, reason: reason(n) }))
     : [];
-  const demoted = all.filter((n) => !n.indexed && !n.promoted_to && (n.scope === "global" || n.scope === context.scope)).map((n) => n.id);
   return {
     scope: context.scope,
     index: { lines: context.index.length, budget: config.budgets.indexLines, hidden: context.hiddenIndexLines },
@@ -215,6 +212,5 @@ export function buildBudget(store: Store, repoPath: string): BudgetResult {
     notes,
     trim,
     ask,
-    demoted,
   };
 }

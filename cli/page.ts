@@ -53,7 +53,6 @@ export function pageData(store: Store, token: string): PageData {
       kind: note.kind,
       confidence: note.confidence,
       trashed: note.trashed,
-      indexed: note.indexed,
       last_verified: note.last_verified,
       trashed_at: note.trashed_at,
       clears_at: note.trashed_at ? clearsAt(note.trashed_at, days) : undefined,

@@ -42,13 +42,13 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
   `/kb:audit` reads the code for each candidate, checks both budgets, and proposes keep, rewrite,
   merge, shorten or trash with `kb audit propose`. You decide in the `kb serve` page, one
   card per note: each card shows the note, the new text struck against the old, and the agent's
-  pick with its reason. `a` accepts the agent's pick, `k` keeps the note as is and records that it
-  is still true, `t` trashes it, a meter counts the notes that still reach no session, and Apply makes
+  pick with its reason. `a` accepts the agent's pick, `k` keeps the note as is and records that
+  you checked it, `t` trashes it, a meter counts the notes that still reach no session, and Apply makes
   every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` in a repo starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. The Audit button on a project in the page does the same for any repo a session has opened once. `kb budget` asks for
   room only when the index is full and a note reaches no session. A body that became an
-  index line is the normal state. It names decisions and how-tos to trash, merge or shorten, and
+  index line is the normal state. It names decisions and how-tos to trash or merge, and
   leaves gotchas and conventions for you to name, because a rule that works leaves no use count.
-  It also lists the notes demoted by hand (`kb add` with `"indexed": false`), which no session loads. A session start says so in one
+  A session start says so in one
   line when more than 5 notes are candidates.
 - **Proven notes move to the repo.** `/kb:promote` proposes notes with high confidence and many
   uses for the repo's `CLAUDE.md` or `AGENTS.md`, shows the exact text, and writes after you

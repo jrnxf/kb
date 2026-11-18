@@ -52,7 +52,7 @@ test("git tracks every file the built page loads: `git add web/dist` when this f
 
 describe("what the page shows", () => {
   const note = (id: string, fields: Partial<PageNote> = {}): PageNote => ({
-    id, title: `Title of ${id}`, scope: "global", kind: "gotcha", confidence: "high", trashed: false, indexed: true,
+    id, title: `Title of ${id}`, scope: "global", kind: "gotcha", confidence: "high", trashed: false,
     last_verified: "2026-01-01T00:00:00Z", anchors: [], body: "body", html: "", uses: 0, ...fields,
   });
   const notes = [

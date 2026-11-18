@@ -7,7 +7,6 @@ export interface PageNote {
   kind: string;
   confidence: string;
   trashed: boolean;
-  indexed: boolean;
   last_verified: string;
   /** When the note went to the trash. */
   trashed_at?: string;
@@ -71,8 +70,6 @@ export interface AuditNote {
   scope: string;
   body: string;
   uses: number;
-  /** False when the note was demoted (`kb add` with "indexed": false): no session lists it. */
-  indexed: boolean;
   /** What the note takes in a session now: its body, an index line, or nothing. */
   place: "body" | "index" | "hidden";
 }
@@ -82,6 +79,8 @@ export interface AuditCard {
   /** The agent's pick. */
   action: AuditAction;
   why: string;
+  /** True when the agent checked the note against the code or a source. A keep then records the check. */
+  checked?: boolean;
   reason?: string;
   group?: string;
   note: AuditNote;
@@ -93,16 +92,13 @@ export interface AuditCard {
 
 export interface AuditResult {
   at: string;
-  /** Only in results applied before keep took over verify. */
-  verified?: string[];
   rewritten: string[];
   merged: { kept: string; trashed: string[] }[];
   trashed: string[];
-  /** Only in results applied before demote left the audit. */
-  demoted?: string[];
-  /** Demoted notes the user put back in the index. */
-  indexed: string[];
+  /** Kept as is, with nobody's check recorded. */
   kept: string[];
+  /** Kept as is after the user or the agent looked, so each records the check. */
+  checked: string[];
   /** Notes the user sent back to the agent, with what is wrong. */
   requests: { id: string; request: string }[];
 }
@@ -122,7 +118,9 @@ export interface AuditData {
 /** "ask" sends the note back to the agent with a request. A rewrite may carry the user's text. */
 export interface AuditPick {
   id: string;
-  action: AuditAction | "ask" | "index";
+  action: AuditAction | "ask";
+  /** For keep: the user picked it on the card, so the note records the check. */
+  checked?: boolean;
   title?: string;
   body?: string;
   request?: string;
@@ -131,12 +129,10 @@ export interface AuditPick {
 /** The result as named groups of note ids, in a fixed order. The CLI and the page both print it this way. */
 export function resultGroups(r: AuditResult, arrow = "<-"): [string, string[]][] {
   return [
-    ["verified", r.verified ?? []],
     ["rewritten", r.rewritten],
     ["merged", r.merged.map((m) => `${m.kept} ${arrow} ${m.trashed.join(", ")}`)],
     ["trashed", r.trashed],
-    ["demoted", r.demoted ?? []],
-    ["put back in the index", r.indexed ?? []],
-    ["kept as is", r.kept],
+    ["checked and kept", r.checked],
+    ["kept, not checked", r.kept],
   ];
 }

@@ -17,15 +17,14 @@ export const WHY_MAX = 140;
 
 export const ACTIONS = ["rewrite", "trash", "merge", "keep"] as const;
 
-/** Proposals saved before verify became part of keep, and before demote left the audit. Both now propose keep. */
-const LEGACY: Record<string, AuditAction> = { verify: "keep", demote: "keep" };
-
 /** One proposal, as the agent writes it. */
 export interface AuditItem {
   id: string;
   action: AuditAction;
   /** One line: why this action. */
   why: string;
+  /** For a keep: the agent checked the note against the code or a source, so a keep records the check. */
+  checked?: boolean;
   /** What `kb stale` or `kb budget` said about the note. */
   reason?: string;
   /** Cards with the same group sit together, after a divider with this name. */
@@ -54,9 +53,7 @@ const FILE = "audits.json";
 
 function readAll(store: Store): Record<string, Audit> {
   try {
-    const all = JSON.parse(readFileSync(store.statePath(FILE), "utf8")) as Record<string, Audit>;
-    for (const audit of Object.values(all)) for (const item of audit.items) item.action = LEGACY[item.action] ?? item.action;
-    return all;
+    return JSON.parse(readFileSync(store.statePath(FILE), "utf8")) as Record<string, Audit>;
   } catch {
     return {};
   }
@@ -125,6 +122,8 @@ export function proposeAudit(store: Store, input: unknown, repo: RepoInfo): Audi
     const why = text(item.why, "why", i);
     if (!why) throw new KbError(`items[${i}].why: required`);
     if (why.length > WHY_MAX) throw new KbError(`items[${i}].why: ${why.length} characters, at most ${WHY_MAX}. Say only the evidence for the pick.`);
+    if (item.checked !== undefined && typeof item.checked !== "boolean") throw new KbError(`items[${i}].checked: must be true or false`);
+    if (item.checked === true && action !== "keep") throw new KbError(`items[${i}].checked: only a keep has it`);
     const merge = item.merge;
     if (action === "merge" && (!Array.isArray(merge) || merge.length === 0)) throw new KbError(`items[${i}].merge: a merge names the notes that go to the trash`);
     if (merge !== undefined && action !== "merge") throw new KbError(`items[${i}].merge: only a merge has it`);
@@ -145,6 +144,7 @@ export function proposeAudit(store: Store, input: unknown, repo: RepoInfo): Audi
       id,
       action,
       why,
+      ...(item.checked === true ? { checked: true } : {}),
       ...(text(item.reason, "reason", i) ? { reason: item.reason as string } : {}),
       ...(text(item.group, "group", i) ? { group: item.group as string } : {}),
       ...(title !== undefined ? { title } : {}),
@@ -176,16 +176,17 @@ export function auditData(store: Store, scope: string, token: string): AuditData
     scope: n.scope,
     body: n.body,
     uses: usage.get(n.id)?.uses ?? 0,
-    indexed: n.indexed !== false,
     place: places.get(n.id) ?? "hidden",
   });
   // A note that changed or left since the proposal is not on a card: the proposal no longer fits it.
+  // So is a card whose action this kb does not know: an older kb wrote it, and Apply would refuse it.
   const cards: AuditCard[] = audit.items
-    .filter((item) => live(item, active))
+    .filter((item) => ACTIONS.includes(item.action) && live(item, active))
     .map((item) => ({
       id: item.id,
       action: item.action,
       why: item.why,
+      ...(item.checked ? { checked: true } : {}),
       reason: item.reason,
       group: item.group,
       note: shown(active.get(item.id)!),
@@ -216,7 +217,7 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
   if (!Array.isArray(picks)) throw new KbError('apply takes {"picks": [...]}');
   const items = new Map(audit.items.map((item) => [item.id, item]));
   const active = activeNotes(store);
-  const result: AuditResult = { at: nowIso(), rewritten: [], merged: [], trashed: [], indexed: [], kept: [], requests: [] };
+  const result: AuditResult = { at: nowIso(), rewritten: [], merged: [], trashed: [], kept: [], checked: [], requests: [] };
   const done = new Set<string>();
   const now = nowIso();
   const verifiedAt = (note: StoredNote) => (note.scope !== "global" && note.scope === audit.scope && audit.head ? { verified_at_commit: audit.head } : {});
@@ -239,7 +240,7 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
     const changed = drift(item, active);
     if (changed) throw new KbError(`${changed}. Reload the page, or run /kb:audit again.`);
     const note = active.get(pick.id)!;
-    const allowed = ["rewrite", "trash", "keep", "ask", ...(item.merge ? ["merge"] : []), ...(note.indexed === false ? ["index"] : [])];
+    const allowed = ["rewrite", "trash", "keep", "ask", ...(item.merge ? ["merge"] : [])];
     if (!allowed.includes(pick.action)) throw new KbError(`picks[${i}].action: ${pick.action} is not an action for ${pick.id}`);
     if (pick.action === "ask" && (typeof pick.request !== "string" || !pick.request.trim())) throw new KbError(`picks[${i}]: say what is wrong with ${pick.id}`);
     const leaving = pick.action === "trash" ? [note] : pick.action === "merge" ? item.merge!.map((id) => active.get(id)!) : [];
@@ -248,18 +249,20 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
     const title = pick.title ?? item.title, body = pick.body ?? item.body;
     if (pick.action === "rewrite" && title === undefined && body === undefined) throw new KbError(`picks[${i}]: ${pick.id} has no new text. Edit it, or ask the agent for a rewrite.`);
     const text = { ...(title !== undefined ? { title } : {}), ...(body !== undefined ? { body } : {}) };
+    // A keep records the check only when someone looked: the user picked it on the card, or the agent
+    // checked the note. A group kept in one key, or a card the user never opened, records nothing.
+    // Keep both on a merge card only says the notes differ.
+    const checked = pick.action === "keep" && !item.merge && (pick.checked === true || item.checked === true);
     const fields: Partial<Note> | null =
-      // Keep as is says the note is still true, so it records the check. Keep both on a merge card only says the notes differ.
-      pick.action === "keep" ? (item.merge ? null : { last_verified: now, ...verifiedAt(note) })
+      pick.action === "keep" ? (checked ? { last_verified: now, ...verifiedAt(note) } : null)
       : pick.action === "rewrite" ? { ...text, last_verified: now, ...verifiedAt(note) }
       : pick.action === "merge" ? { ...text, last_verified: now, ...verifiedAt(note), supersedes: [...new Set([...(note.supersedes ?? []), ...item.merge!])] }
-      : pick.action === "index" ? { indexed: true }
       : null;
-    return { pick, item, note, written: fields ? next(note, fields, i) : null };
+    return { pick, item, note, checked, written: fields ? next(note, fields, i) : null };
   });
 
   const trash = (note: StoredNote) => store.move(note, true, now);
-  for (const { pick, item, note, written } of plan) {
+  for (const { pick, item, note, checked, written } of plan) {
     if (written) store.writeNote(written);
     switch (pick.action) {
       case "rewrite":
@@ -273,14 +276,11 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
         trash(note);
         result.trashed.push(note.id);
         break;
-      case "index":
-        result.indexed.push(note.id);
-        break;
       case "ask":
         result.requests.push({ id: note.id, request: pick.request!.trim() });
         break;
       default:
-        result.kept.push(note.id);
+        (checked ? result.checked : result.kept).push(note.id);
     }
   }
   audit.result = result;

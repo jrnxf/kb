@@ -29,7 +29,6 @@ kb budget --json
   - Bodies that did not fit (`context.dropped`) are normal: each of these notes still reaches the session as an index line. This alone is no reason to take a note out. The notes with the most `chars` are the bodies to shorten, so that more notes load whole.
   - `over` is true only when notes reach no session, because the index is full (`index.hidden`). Then `trim` lists decisions and how-tos to look at first, least used first. Treat each one as a candidate too.
   - `ask` fills the rest of the hidden count with gotchas and conventions, least used first. Only the user can trash one of them.
-  - `demoted` lists the notes taken out of every session by hand or by an earlier audit.
 
 A candidate is a reason to look, not a verdict. If `kb stale` has no candidate and `over` is false, say so and stop.
 
@@ -43,12 +42,12 @@ Read the note with `kb show <id>`. For an anchor reason, read the anchored code 
 | trash | The fact is obsolete, the work is done, or the user no longer needs the note. `kb restore` brings it back. The trash deletes it after 30 days. |
 | merge | Two or more notes cover one idea. One note keeps everything, the others go to the trash. |
 | shorten | The note is true but long. Cut it to the fact, the reason and how to apply it. |
-| keep | The note is still true as written, or you cannot tell. Also a `duplicate` candidate that is in fact a different idea. When the user keeps a note, kb records it as checked today. |
+| keep | The note is still true as written, or you cannot tell. Also a `duplicate` candidate that is in fact a different idea. |
 
 Rules:
 
-- Check a note against the code or a source before you say that it is still true. If you cannot tell, propose `keep` and say what is unknown.
-- When `over` is true, make room with merge, shorten and trash. Propose trash for a `trim` note only when it is obsolete or adds nothing. Never trash `open-work` that is not done.
+- Check a note against the code or a source before you say that it is still true. When you checked it, set `"checked": true` on the keep, and kb records the check. If you cannot tell, propose `keep` without `checked` and say what is unknown.
+- When `over` is true, make room with merge and trash. Shortening a `trim` note frees nothing, because it ranks low. Propose trash for a `trim` note only when it is obsolete or adds nothing. Never trash `open-work` that is not done.
 - Never propose trash for a `gotcha` or a `convention` because it has no uses: a rule that works leaves no use count. Propose `keep`, and the user decides.
 - For a rewrite, a merge or a shorten, write the new text now, so the user sees it on the card.
 
@@ -59,7 +58,7 @@ The user decides in the `kb serve` page, one card per note. Write the proposal a
 ```bash
 kb audit propose <<'KB_AUDIT'
 { "items": [
-  { "id": "<id>", "action": "keep", "why": "I read cli/serve.ts. The port is still 4173.", "reason": "anchor-changed" },
+  { "id": "<id>", "action": "keep", "checked": true, "why": "I read cli/serve.ts. The port is still 4173.", "reason": "anchor-changed" },
   { "id": "<id>", "action": "rewrite", "why": "The flag is now --repo, not --dir.", "body": "<new body>" },
   { "id": "<id>", "action": "trash", "why": "PR #12 is merged. This work is done." },
   { "id": "<id>", "action": "merge", "why": "The two notes give the same rule: pin the bunx version.", "merge": ["<other id>"], "body": "<merged body>" },
@@ -73,17 +72,18 @@ KB_AUDIT
 - `action` is one of keep, rewrite, trash and merge. A shorten is a rewrite.
 - A rewrite needs the new `title` or `body`, or both. A merge needs `merge`, the notes that go to the trash. The note `id` keeps every fact, so give it the merged text.
 - `reason` is what `kb stale` or `kb budget` said.
+- `checked` is only for a keep, and only when you read the code or a source and the note is still true.
 - `why` is the evidence for your pick, in 140 characters or fewer. The user reads it on the card with no other context.
   - Say what you checked or found: the file, the commit, the PR, the date. "Still true" alone is not evidence.
   - Do not repeat the action name or the note title. The card shows both.
   - Write it in ASD-STE100 Simplified Technical English: sentences of 20 words or fewer, active voice, simple tenses, no phrasal verbs, no semicolons, and keep the articles.
   - Use full words. No shorthand like "A rule."
   - For a keep, say what you could not check or why no change is right.
-- Put the `ask` ids and the `demoted` ids in the items too, as `keep`, with a `group`. Cards with the same group sit together after a divider, and the user can keep the whole group with one key.
+- Put the `ask` ids in the items too, as `keep`, with a `group`. Cards with the same group sit together after a divider, and the user can keep the whole group with one key. A group keep records no check.
 - What each card offers:
   - Every card offers to accept your pick, edit the text and keep as is. Every card but a merge offers trash and asking you for a rewrite.
+  - When the user keeps a note on its card, kb records the check.
   - A card with your new text offers to use it.
-  - A demoted note offers to put it back in the index.
   - A merge card offers merge and keep both.
 - Never propose delete. When the user asks for a note to be gone now, run `kb delete <id>` yourself, outside the audit.
 
@@ -108,11 +108,11 @@ Never save a secret, token, password, key or credential in a note.
 Run `kb budget` again, then end with this and nothing after it:
 
 ```
-kept: <ids>
+checked and kept: <ids>
+kept, not checked: <ids>
 rewritten: <ids>
 merged: <kept id> <- <trashed ids>
 trashed: <ids>
-put back in the index: <ids>
 budget: <chars> of <budget> characters, <bodies> bodies, <lines> notes in the index only, <hidden> in no session
 ```
 

@@ -106,10 +106,9 @@ describe("kb context visibility", () => {
     expect(outside.bodies).toEqual(["global-note"]);
   });
 
-  test("excludes promoted, unindexed and trashed notes", () => {
+  test("excludes promoted and trashed notes", () => {
     const store = tempStore();
     putNote(store, { id: "promoted", promoted_to: "CLAUDE.md" });
-    putNote(store, { id: "hidden", indexed: false });
     putNote(store, { id: "gone" }, true);
     putNote(store, { id: "kept" });
     const result = buildContext(store, plain());

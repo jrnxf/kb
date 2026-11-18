@@ -161,5 +161,4 @@ code {
 .a-rewrite, .a-ask { --a: var(--link); }
 .a-trash { --a: var(--destructive); }
 .a-merge { --a: var(--k-decision); }
-.a-index { --a: var(--k-how-to); }
 .a-keep { --a: var(--faint); }

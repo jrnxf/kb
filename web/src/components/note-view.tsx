@@ -25,7 +25,6 @@ export function NoteView({ note, onEdit, onTrash, onRestore, onDelete }: Props) 
     `${note.uses} ${note.uses === 1 ? "use" : "uses"}${note.last_used ? `, last ${day(note.last_used)}` : ""}`,
     note.trashed && (note.trashed_at ? `trashed ${day(note.trashed_at)}` : "in the trash"),
     note.clears_at && `deleted ${clearsIn(note.clears_at)}`,
-    !note.indexed && "not indexed",
     note.promoted_to && `promoted to ${note.promoted_to}`,
   ].filter(Boolean);
   return (

@@ -29,11 +29,11 @@ function setup(): Store {
 }
 
 const ITEMS = [
-  { id: "v", action: "keep", why: "still true", reason: "anchor-changed" },
+  { id: "v", action: "keep", checked: true, why: "still true", reason: "anchor-changed" },
   { id: "r", action: "rewrite", why: "drifted", body: "the new body" },
   { id: "m", action: "merge", why: "one idea", merge: ["m2"], body: "merged body" },
   { id: "t", action: "trash", why: "done" },
-  { id: "d", action: "keep", why: "rare, but true" },
+  { id: "d", action: "keep", why: "could not check it" },
   { id: "ask", action: "keep", why: "probably true" },
   { id: "keepme", action: "keep", why: "a rule", group: "conventions" },
   { id: "g", action: "keep", why: "still true" },
@@ -51,8 +51,9 @@ describe("kb audit propose", () => {
     [{ items: [] }, "no items"],
     [{ items: [{ id: "nope", action: "keep", why: "x" }] }, 'no active note "nope"'],
     [{ items: [{ id: "other", action: "keep", why: "x" }] }, "belongs to example.com/team/other"],
-    [{ items: [{ id: "v", action: "verify", why: "x" }] }, "action: must be one of"],
-    [{ items: [{ id: "v", action: "demote", why: "x" }] }, "action: must be one of"],
+    [{ items: [{ id: "v", action: "archive", why: "x" }] }, "action: must be one of"],
+    [{ items: [{ id: "v", action: "trash", checked: true, why: "x" }] }, "checked: only a keep has it"],
+    [{ items: [{ id: "v", action: "keep", checked: "yes", why: "x" }] }, "checked: must be true or false"],
     [{ items: [{ id: "v", action: "delete", why: "x" }] }, "action: must be one of"],
     [{ items: [{ id: "v", action: "keep" }] }, "why: required"],
     [{ items: [{ id: "v", action: "keep", why: "x".repeat(141) }] }, "why: 141 characters, at most 140"],
@@ -105,17 +106,21 @@ describe("Apply", () => {
         { id: "r", action: "rewrite" },
         { id: "m", action: "merge" },
         { id: "t", action: "trash" },
-        { id: "d", action: "keep" },
+        { id: "d", action: "keep", checked: true },
         { id: "ask", action: "ask", request: "the code moved" },
         { id: "keepme", action: "keep" },
         { id: "g", action: "rewrite", title: "Your title", body: "your body" },
       ],
     });
-    expect(result).toMatchObject({ rewritten: ["r", "g"], merged: [{ kept: "m", trashed: ["m2"] }], trashed: ["t"], kept: ["v", "d", "keepme"], requests: [{ id: "ask", request: "the code moved" }] });
+    expect(result).toMatchObject({ rewritten: ["r", "g"], merged: [{ kept: "m", trashed: ["m2"] }], trashed: ["t"], checked: ["v", "d"], kept: ["keepme"], requests: [{ id: "ask", request: "the code moved" }] });
     expect(Number(sh(store.home, "git", "rev-list", "--count", "HEAD"))).toBe(before + 1);
     expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe(`kb: apply the audit of ${SCOPE}`);
-    // Keep as is records the check, at the repo's HEAD.
+    // The agent checked v, and the user kept d on its card: both record the check, at the repo's HEAD.
     expect(store.find("v")!.verified_at_commit).toBe("abc1234");
+    expect(store.find("d")!.verified_at_commit).toBe("abc1234");
+    // Nobody looked at keepme: a keep from a group or an unopened card records nothing.
+    expect(store.find("keepme")).toMatchObject({ last_verified: "2026-01-01T00:00:00Z" });
+    expect(store.find("keepme")!.verified_at_commit).toBeUndefined();
     expect(store.find("r")!.body).toBe("the new body");
     expect(store.find("g")).toMatchObject({ title: "Your title", body: "your body" });
     // A global note has no commit of this repo to be verified at.
@@ -123,16 +128,15 @@ describe("Apply", () => {
     expect(store.find("m")).toMatchObject({ body: "merged body", supersedes: ["m2"] });
     expect(store.notes().map((n) => n.id)).not.toContain("m2");
     expect(store.notes().map((n) => n.id)).not.toContain("t");
-    expect(store.find("d")!.indexed).toBe(true);
     expect(store.find("ask")!.body).toBe("body of ask");
     expect(openAudits(store)).toEqual([]);
     expect(() => applyAudit(store, SCOPE, { picks: [] })).toThrow("applied already");
   });
 
-  test("an ask alone makes no commit", () => {
+  test("an ask and an unchecked keep make no commit", () => {
     const store = setup();
-    proposeAudit(store, { items: ITEMS.slice(5, 6) }, repo());
-    applyAudit(store, SCOPE, { picks: [{ id: "ask", action: "ask", request: "why" }] });
+    proposeAudit(store, { items: ITEMS.slice(5, 7) }, repo());
+    applyAudit(store, SCOPE, { picks: [{ id: "ask", action: "ask", request: "why" }, { id: "keepme", action: "keep" }] });
     expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe("init");
   });
 
@@ -145,12 +149,12 @@ describe("Apply", () => {
     expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe("init");
   });
 
-  test("reads a proposal saved before verify and demote left as keep", () => {
+  test("a card with an action this kb does not know drops out", () => {
     const store = setup();
-    proposeAudit(store, { items: [ITEMS[0]!, ITEMS[4]!] }, repo());
+    proposeAudit(store, { items: [ITEMS[0]!, ITEMS[3]!] }, repo());
     const path = store.statePath("audits.json");
-    writeFileSync(path, readFileSync(path, "utf8").replace('"action": "keep"', '"action": "verify"').replace('"action": "keep"', '"action": "demote"'));
-    expect(auditData(store, SCOPE, "tok").cards.map((c) => c.action)).toEqual(["keep", "keep"]);
+    writeFileSync(path, readFileSync(path, "utf8").replace('"action": "trash"', '"action": "archive"'));
+    expect(auditData(store, SCOPE, "tok").cards.map((c) => c.id)).toEqual(["v"]);
   });
 
   test.each([
@@ -196,21 +200,6 @@ describe("Apply", () => {
     expect(() => applyAudit(store, SCOPE, { picks: [{ id: "t", action: "trash" }, { id: "r", action: "rewrite", body: "  " }] })).toThrow("picks[1]: r:");
     expect(store.find("t")).toBeDefined();
     expect(readAudit(store, SCOPE)!.result).toBeUndefined();
-  });
-
-  test("puts a demoted note back in the index", () => {
-    const store = setup();
-    putNote(store, { id: "d", scope: SCOPE, indexed: false });
-    proposeAudit(store, { items: [{ id: "d", action: "keep", why: "demoted earlier", group: "demoted" }] }, repo());
-    expect(auditData(store, SCOPE, "tok").cards[0]!.note.indexed).toBe(false);
-    expect(applyAudit(store, SCOPE, { picks: [{ id: "d", action: "index" }] }).indexed).toEqual(["d"]);
-    expect(store.find("d")!.indexed).toBe(true);
-  });
-
-  test("refuses to put back a note that is in the index", () => {
-    const store = setup();
-    proposeAudit(store, { items: [ITEMS[0]!] }, repo());
-    expect(() => applyAudit(store, SCOPE, { picks: [{ id: "v", action: "index" }] })).toThrow("index is not an action for v");
   });
 });
 
@@ -321,7 +310,7 @@ describe("the page link", () => {
 });
 
 describe("the deck", () => {
-  const card = (fields: Partial<AuditCard>): AuditCard => ({ id: "x", action: "keep", why: "w", note: { id: "x", title: "T", kind: "gotcha", scope: SCOPE, body: "b", uses: 0, indexed: true, place: "index" }, ...fields });
+  const card = (fields: Partial<AuditCard>): AuditCard => ({ id: "x", action: "keep", why: "w", note: { id: "x", title: "T", kind: "gotcha", scope: SCOPE, body: "b", uses: 0, place: "index" }, ...fields });
 
   test("puts loose cards first, then each group after its divider", () => {
     const cards = [card({ id: "a", group: "G" }), card({ id: "b" }), card({ id: "c", group: "G" })];
@@ -344,28 +333,20 @@ describe("the deck", () => {
     expect(choiceForKey(card({ action: "merge", merge: [card({}).note] }), "r")).toBeUndefined();
   });
 
-  test("offers a demoted note a way back into the index", () => {
-    const demoted = card({ note: { ...card({}).note, indexed: false, place: "hidden" } });
-    expect(choices(demoted)).toContain("index");
-    expect(choices(card({}))).not.toContain("index");
-  });
-
   test("counts the notes the picks take out of the index", () => {
     const cards = [card({}), card({}), card({ merge: [card({}).note, card({}).note] }), card({})];
     expect(freed(cards, [{ action: "trash" }, { action: "trash" }, { action: "merge" }, { action: "keep" }])).toBe(4);
   });
 
-  test("counts no line for a note that had none, and one line less for a note put back", () => {
+  test("counts no line for a note that had none", () => {
     const out = card({ note: { ...card({}).note, place: "hidden" } });
-    const demoted = card({ note: { ...card({}).note, indexed: false, place: "hidden" } });
-    expect(freed([out, demoted], [{ action: "trash" }, { action: "trash" }])).toBe(0);
-    expect(freed([card({}), demoted], [{ action: "trash" }, { action: "index" }])).toBe(0);
+    expect(freed([out, card({})], [{ action: "trash" }, { action: "trash" }])).toBe(1);
   });
 
   test("sends every card to Apply, keep too, with the user's text", () => {
     const cards = [card({ id: "a" }), card({ id: "b" })];
-    expect(toPicks(cards, [{ action: "keep" }, { action: "rewrite", body: "mine" }])).toEqual([
-      { id: "a", action: "keep" },
+    expect(toPicks(cards, [{ action: "keep", checked: true }, { action: "rewrite", body: "mine" }])).toEqual([
+      { id: "a", action: "keep", checked: true },
       { id: "b", action: "rewrite", body: "mine" },
     ]);
     expect(summary(cards, [{ action: "keep" }, { action: "ask", request: "r" }]).map((g) => g.label)).toEqual(["sent back to the agent to rewrite", "keep as is"]);
@@ -413,7 +394,9 @@ describe("the audit page in a browser", () => {
     expect(store.find("v")!.verified_at_commit).toBe("abc1234");
     expect(store.find("r")!.body).toBe("typed in the page");
     expect(store.find("t")).toBeDefined();
-    expect(readAudit(store, SCOPE)!.result).toMatchObject({ rewritten: ["r"], kept: ["v", "t", "keepme"] });
+    expect(readAudit(store, SCOPE)!.result).toMatchObject({ rewritten: ["r"], checked: ["v", "t"], kept: ["keepme"] });
+    // keepme went with its group: nobody looked, so it records no check.
+    expect(store.find("keepme")!.verified_at_commit).toBeUndefined();
     await page.close();
   });
 

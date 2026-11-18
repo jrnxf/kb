@@ -55,12 +55,12 @@ const USAGE = `kb - a personal knowledge store for coding agents
 
 Every command accepts --json. The store is ~/.kb, or KB_HOME.
 
-kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence"?, "indexed"?, "supersedes"?}
+kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence"?, "supersedes"?}
   scope: "repo" (the default inside a git repo), "global", or the id of a repo that has notes
   kind: ${KINDS.join(" | ")}
   confidence: ${CONFIDENCES.join(" | ")} (default medium)
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
-  {"id", "indexed": false} takes a note out of the session index. Without "id", a note with the same title in the same scope
+  Without "id", a note with the same title in the same scope
   is not overwritten: the result is {"status": "exists", "id"}.`;
 
 interface Args {
@@ -155,7 +155,6 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
 
   const raw: Record<string, unknown> = {
     confidence: "medium",
-    indexed: true,
     anchors: [],
     ...input,
     // An id with counters on any machine belongs to a deleted note: a new note must not inherit its uses.
@@ -263,7 +262,6 @@ function cmdList(store: Store, args: Args): Output {
     last_used: usage.get(n.id)?.last_used ?? null,
     last_verified: n.last_verified,
     confidence: n.confidence,
-    indexed: n.indexed,
     promoted_to: n.promoted_to ?? null,
     ...(trash ? { trashed_at: n.trashed_at ?? null, clears_at: n.trashed_at ? clearsAt(n.trashed_at, days) : null } : {}),
   }));
@@ -274,7 +272,7 @@ function cmdList(store: Store, args: Args): Output {
   const text =
     rows.length === 0
       ? trash ? "the trash is empty" : "no notes"
-      : [line("id", "kind", "scope", "uses", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, String(r.uses), r.last_verified.slice(0, 10), `${r.title}${r.indexed ? "" : " (demoted)"}${r.clears_at ? ` (deleted ${r.clears_at.slice(0, 10)})` : ""}`))].join("\n");
+      : [line("id", "kind", "scope", "uses", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, String(r.uses), r.last_verified.slice(0, 10), `${r.title}${r.clears_at ? ` (deleted ${r.clears_at.slice(0, 10)})` : ""}`))].join("\n");
   return { json: rows, text };
 }
 
@@ -367,10 +365,9 @@ function cmdBudget(store: Store, args: Args): Output {
   // One long body ends the list of bodies, so the longest ones are the first to shorten.
   const longest = b.notes.filter((n) => n.shown === "body").sort((x, y) => y.chars - x.chars).slice(0, 3);
   if (b.context.dropped > 0 && longest.length > 0) lines.push(`longest  ${longest.map((n) => `${n.id} (${n.chars})`).join(", ")}`);
-  if (b.demoted.length > 0) lines.push(`demoted  ${count(b.demoted.length)}, in no session: ${b.demoted.join(", ")}`);
   if (b.over) {
     lines.push(`${count(b.index.hidden)} ${b.index.hidden === 1 ? "reaches" : "reach"} no session, because the index is full.`);
-    if (b.trim.length > 0) lines.push(`Trash, merge or shorten first: ${b.trim.map((d) => `${d.id} (${d.reason})`).join(", ")}`);
+    if (b.trim.length > 0) lines.push(`Trash or merge first: ${b.trim.map((d) => `${d.id} (${d.reason})`).join(", ")}`);
     if (b.ask.length > 0) lines.push(`Then ask the user, because these are rules: ${b.ask.map((d) => `${d.id} (${d.kind}, ${d.reason})`).join(", ")}`);
     if (b.trim.length === 0 && b.ask.length === 0) lines.push("Nothing to take out: only open work is left.");
   } else lines.push(b.notes.length === 0 ? "no notes load here" : "every note reaches a session, as a body or as an index line");

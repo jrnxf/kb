@@ -22,6 +22,9 @@ type Mode = null | "edit" | "ask";
 const storageKey = (data: AuditData) => `kb-audit:${data.scope}:${data.created}`;
 
 /** What survives a reload: each card's pick and whether the user has seen it, by note id. */
+/** A keep the user picks on the card itself says they looked, so the note records the check. A group keep does not. */
+const onCard = (pick: Pick): Pick => (pick.action === "keep" ? { ...pick, checked: true } : pick);
+
 type Saved = Record<string, { pick: Pick; seen: boolean }>;
 
 function saved(data: AuditData): { picks: Pick[]; seen: boolean[] } {
@@ -30,12 +33,11 @@ function saved(data: AuditData): { picks: Pick[]; seen: boolean[] } {
     const raw = JSON.parse(sessionStorage.getItem(storageKey(data)) ?? "null") as Saved | null;
     if (raw && typeof raw === "object" && !Array.isArray(raw)) store = raw;
   } catch {}
-  // A card that left since the reload drops out. The other cards keep the user's picks.
-  // Picks saved before verify became keep, and before demote left the audit.
+  // A card that left since the reload drops out. The other cards keep the user's picks, if the card still offers them.
   const pick = (card: AuditCard): Pick => {
-    const old = store[card.id]?.pick as { action: string } | undefined;
-    if (!old || old.action === "demote") return agentPick(card);
-    return old.action === "verify" ? { action: "keep" } : (old as Pick);
+    const old = store[card.id]?.pick;
+    const offered: string[] = [...choices(card), ...textChoices(card)];
+    return old && offered.includes(old.action) ? old : agentPick(card);
   };
   return { picks: data.cards.map(pick), seen: data.cards.map((card) => store[card.id]?.seen ?? false) };
 }
@@ -170,7 +172,7 @@ function Deck({ data }: { data: AuditData }) {
   function choose(choice: Choice) {
     if (step?.type !== "card") return;
     if (choice === "edit" || choice === "ask") return setMode(choice);
-    decide([[step.i, { action: choice }]]);
+    decide([[step.i, onCard({ action: choice })]]);
   }
 
   function apply() {
@@ -188,7 +190,7 @@ function Deck({ data }: { data: AuditData }) {
       if (key === "Enter" && !applying) void apply();
       else return;
     } else if (key === "Enter") {
-      if (step!.type === "card") decide([[step!.i, picks[step!.i]!]]);
+      if (step!.type === "card") decide([[step!.i, onCard(picks[step!.i]!)]]);
       else go(pos + 1);
     } else if (step!.type === "divider") {
       if (key !== KEYS.keep) return;
@@ -333,7 +335,7 @@ function Strip({ data, flow, picks, seen, pos, onJump }: { data: AuditData; flow
         {used.map((action) => (
           <span key={action} className={cn("flex items-center gap-1.5", `a-${action}`)}>
             <span className="size-2 rounded-[2px] bg-(--a)" />
-            {action === "ask" ? "ask the agent" : action === "keep" ? "keep as is" : action === "index" ? "put back" : action}
+            {action === "ask" ? "ask the agent" : action === "keep" ? "keep as is" : action}
           </span>
         ))}
       </div>

@@ -5,7 +5,7 @@ function rankNotes(list, D) {
   return [...list].sort((a, b) => D.kinds.indexOf(a.kind) - D.kinds.indexOf(b.kind) || Number(a.scope === "global") - Number(b.scope === "global") || desc(a.last_used, b.last_used) || desc(a.verified, b.verified) || a.id.localeCompare(b.id));
 }
 function session(D, scope) {
-  const visible = D.notes.filter((n) => !n.trashed && n.indexed && !n.promoted && (n.scope === "global" || n.scope === scope));
+  const visible = D.notes.filter((n) => !n.trashed && !n.promoted && (n.scope === "global" || n.scope === scope));
   const ranked = rankNotes(visible, D);
   const budget = D.budgets.chars;
   const len = (listed, bodies) => {
