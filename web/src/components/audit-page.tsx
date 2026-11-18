@@ -1,3 +1,4 @@
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { type AuditCard, type AuditData, type AuditNote, type AuditResult, resultGroups } from "../../../cli/wire.ts";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { useTheme } from "@/hooks/use-theme";
 import { MAC } from "@/hooks/use-media";
 import * as api from "@/lib/api";
+import { auditQuery, queryClient, reloadPage } from "@/lib/queries";
 import { type Choice, KEYS, type Pick, agentPick, choiceLabel, choices, pickLabel, steps, stillHidden, summary, toPicks } from "@/lib/audit";
 import { cn } from "@/lib/utils";
 import { scopeName } from "@/lib/view";
@@ -33,13 +35,9 @@ function saved(data: AuditData): { picks: Pick[]; seen: boolean[] } {
 
 /** The audit as a deck: one note per card, the agent's pick on each, and Apply at the end. */
 export function AuditPage({ scope }: { scope: string }) {
-  const [data, setData] = useState<AuditData | null>(null);
-  const [failed, setFailed] = useState("");
+  const { data, error } = useQuery(auditQuery(scope));
+  const failed = error?.message ?? "";
   const { resolved } = useTheme();
-
-  useEffect(() => {
-    api.loadAudit(scope).then(setData, (error: Error) => setFailed(error.message));
-  }, [scope]);
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -51,14 +49,14 @@ export function AuditPage({ scope }: { scope: string }) {
       ) : data.cards.length === 0 ? (
         <p className="p-8 text-sm text-muted-foreground">Every note in this audit changed since the agent proposed it. Run /kb:audit again.</p>
       ) : (
-        <Deck data={data} onApplied={(result) => setData({ ...data, result })} />
+        <Deck data={data} />
       )}
       <Toaster theme={resolved} position="bottom-center" />
     </div>
   );
 }
 
-function Header({ scope, data, children }: { scope: string; data: AuditData | null; children?: React.ReactNode }) {
+function Header({ scope, data, children }: { scope: string; data: AuditData | undefined; children?: React.ReactNode }) {
   return (
     <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-6 py-3.5 max-wide:px-4">
       <a href="#" className="text-xl/none font-bold tracking-[-0.01em]" title="Back to the notes">
@@ -97,7 +95,7 @@ function Meter({ data, left }: { data: AuditData; left: number }) {
   );
 }
 
-function Deck({ data, onApplied }: { data: AuditData; onApplied: (result: AuditResult) => void }) {
+function Deck({ data }: { data: AuditData }) {
   const flow = useMemo(() => steps(data.cards), [data.cards]);
   const over = data.index.hidden > 0;
   const [initial] = useState(() => saved(data));
@@ -105,8 +103,19 @@ function Deck({ data, onApplied }: { data: AuditData; onApplied: (result: AuditR
   const [seen, setSeen] = useState<boolean[]>(initial.seen);
   const [pos, setPos] = useState(0);
   const [mode, setMode] = useState<Mode>(null);
-  const [applying, setApplying] = useState(false);
-  const [error, setError] = useState("");
+  const applyPicks = useMutation({
+    mutationFn: (picks: Pick[]) => api.applyAudit(data.scope, toPicks(data.cards, picks)),
+    onSuccess: (result) => {
+      try {
+        sessionStorage.removeItem(storageKey(data));
+      } catch {}
+      // The page shows what the picks did, and the notes reload for the way back.
+      queryClient.setQueryData(auditQuery(data.scope).queryKey, { ...data, result });
+      void reloadPage();
+    },
+  });
+  const error = applyPicks.error?.message ?? "";
+  const applying = applyPicks.isPending;
   const history = useRef<{ pos: number; picks: Pick[]; seen: boolean[] }[]>([]);
   const step = flow[pos];
   const end = pos >= flow.length;
@@ -156,20 +165,8 @@ function Deck({ data, onApplied }: { data: AuditData; onApplied: (result: AuditR
     decide([[step.i, { action: choice }]]);
   }
 
-  async function apply() {
-    setApplying(true);
-    setError("");
-    try {
-      const result = await api.applyAudit(data.scope, toPicks(data.cards, picks));
-      try {
-        sessionStorage.removeItem(storageKey(data));
-      } catch {}
-      onApplied(result);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setApplying(false);
-    }
+  function apply() {
+    applyPicks.mutate(picks);
   }
 
   const onKey = useEffectEvent((event: KeyboardEvent) => {

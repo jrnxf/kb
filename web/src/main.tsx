@@ -1,7 +1,9 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { AuditPage } from "./components/audit-page";
+import { queryClient } from "./lib/queries";
 import { auditScope } from "./lib/view";
 import "./index.css";
 
@@ -17,6 +19,8 @@ function Root() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Root />
+    <QueryClientProvider client={queryClient}>
+      <Root />
+    </QueryClientProvider>
   </StrictMode>,
 );

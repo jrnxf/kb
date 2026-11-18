@@ -53,6 +53,18 @@ describe("keys on a wide screen", () => {
     await page.close();
   });
 
+  test("a note an agent adds shows without a reload, and a trash from the page is not undone by the poll", async () => {
+    putNote(store, { id: "four", title: "Note four" });
+    await page.locator('[data-id="four"]').waitFor({ timeout: 8000 });
+    await page.locator('[data-id="two"]').click();
+    await page.keyboard.press("Backspace");
+    await until(async () => (await page.locator('[data-id="two"]').count()) === 0, "the note leaves the list");
+    // Two poll turns later the note is still gone, and nothing came back.
+    await Bun.sleep(6500);
+    expect(await page.locator('[data-id="two"]').count()).toBe(0);
+    expect(await page.locator('[data-id="four"]').count()).toBe(1);
+  }, 20000);
+
   test("j and k move through the list", async () => {
     const first = await selected(page);
     await page.keyboard.press("j");

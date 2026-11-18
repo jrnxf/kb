@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { NoteEdit, PageData, PageNote } from "../../cli/wire.ts";
+import type { NoteEdit, PageNote } from "../../cli/wire.ts";
 import { Combo } from "@/components/bits";
 import { type Confirm, ConfirmDialog } from "@/components/confirm-dialog";
 import { KeysDialog } from "@/components/keys-dialog";
@@ -13,18 +14,18 @@ import { Toaster } from "@/components/ui/sonner";
 import { MAC, PHONE, useMedia } from "@/hooks/use-media";
 import { useTheme } from "@/hooks/use-theme";
 import * as api from "@/lib/api";
+import { pageQuery, reloadPage, useStoreWatch } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { auditScope, fromHash, neighbour, scopeName, scopesOf, show, toHash, type View } from "@/lib/view";
 
 /** The longest the drawer takes to close. */
 const CLOSE_MS = 450;
 const UNDO_MS = 5000;
-const POLL_MS = 3000;
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 export function App() {
-  const [data, setData] = useState<PageData | null>(null);
-  const [failed, setFailed] = useState("");
+  const { data, error: loadError } = useQuery(pageQuery);
+  const failed = loadError?.message ?? "";
   const [view, setView] = useState<View>(() => fromHash(location.hash));
   const [editing, setEditing] = useState(false);
   const [help, setHelp] = useState(false);
@@ -33,26 +34,15 @@ export function App() {
   // The scope to go back to when the cursor walks on from the scopes into the kinds.
   const held = useRef<string | null>(view.scope);
   // What ⌘Z and the toast's Undo bring back while the toast shows: one note, or one project.
-  const undoing = useRef<(() => Promise<void>) | null>(null);
+  const undoing = useRef<(() => Promise<unknown>) | null>(null);
   const search = useRef<HTMLInputElement>(null);
   const reader = useRef<HTMLDivElement>(null);
   const indent = useRef<HTMLDivElement>(null);
   const phone = useMedia(PHONE);
   const { theme, resolved, next: nextTheme } = useTheme();
 
-  // changing: changes made in this page that are still on the way. made: every change this page
-  // started. The check for outside changes skips a turn when either says the page changed it.
-  const changing = useRef(0), made = useRef(0);
-  const busy = useCallback(async <T,>(run: () => Promise<T>): Promise<T> => {
-    changing.current++;
-    made.current++;
-    try {
-      return await run();
-    } finally {
-      changing.current--;
-    }
-  }, []);
-  const refresh = useCallback(() => busy(api.loadPage).then(setData), [busy]);
+  useStoreWatch(!!data);
+  const toastError = (error: Error) => void toast(error.message, { id: "kb" });
 
   // The repo whose audit agent this page started. When the agent ends, the page opens its cards, or says why there are none.
   const auditing = useRef<string | null>(null);
@@ -65,25 +55,6 @@ export function App() {
     else if (run.status === "nothing") toast(`The agent found nothing to change in ${scopeName(scope)}`, { id: "kb" });
     else toast(`The audit agent stopped with no cards. Its log: ${run.log}`, { id: "kb" });
   }, [data]);
-
-  useEffect(() => {
-    api.loadPage().then(setData, (error: Error) => setFailed(error.message));
-  }, []);
-
-  // A note that an agent adds or changes shows without a reload.
-  const version = data?.version;
-  useEffect(() => {
-    if (!version) return;
-    const timer = setInterval(async () => {
-      if (document.hidden || changing.current) return;
-      const before = made.current;
-      try {
-        const now = await api.storeVersion();
-        if (made.current === before && !changing.current && now !== version) await refresh();
-      } catch {}
-    }, POLL_MS);
-    return () => clearInterval(timer);
-  }, [version, refresh]);
 
   const notes = data?.notes ?? [];
   const kinds = data?.kinds ?? [];
@@ -207,42 +178,58 @@ export function App() {
 
   // ---- changes ----
 
-  async function save(edit: NoteEdit) {
-    if (!current) return;
-    await busy(() => api.saveNote(current.id, edit));
-    await refresh();
-    setEditing(false);
-  }
+  // Each change is a mutation. Its onSuccess closes what the change closes, then reloads the
+  // notes, and the mutation stays pending until that ends, so the store poll waits for it.
 
-  /** Move the open note to the trash, or restore it. Each works only on a note it fits. */
-  async function trash(restore: boolean) {
-    if (!current || editing || current.trashed !== restore) return;
-    const id = current.id, title = current.title, after = neighbour(shown.notes, id);
-    try {
-      await busy(() => (restore ? api.restoreNote(id) : api.trashNote(id)));
-    } catch (error) {
-      toast((error as Error).message, { id: "kb" });
-      return;
-    }
-    // The note leaves the list it is in. On a phone the drawer closes first, with the note still in it.
+  /** The drawer closes first on a phone, with the note still in it, then the view moves on. */
+  async function leave(view: (v: View) => View) {
     if (reading) {
       back();
       await sleep(CLOSE_MS);
     }
-    setView((v) => ({ ...v, note: after }));
-    await refresh();
-    if (restore) return;
-    // The toast names the note, as the note it moved is gone from the screen.
-    offerUndo("Moved to the trash", title, async () => {
-      await busy(() => api.restoreNote(id));
-      // The list has the note again before it is selected. Else the first row is selected for a frame.
-      await refresh();
+    setView(view);
+    await reloadPage();
+  }
+
+  const saveNote = useMutation({
+    mutationFn: ({ id, edit }: { id: string; edit: NoteEdit }) => api.saveNote(id, edit),
+    onSuccess: async () => {
+      await reloadPage();
+      setEditing(false);
+    },
+  });
+  // The form shows the error itself.
+  const save = async (edit: NoteEdit) => {
+    if (current) await saveNote.mutateAsync({ id: current.id, edit });
+  };
+
+  const restoreNote = useMutation({
+    mutationFn: api.restoreNote,
+    // The list has the note again before it is selected. Else the first row is selected for a frame.
+    onSuccess: async (_, id) => {
+      await reloadPage();
       setView((v) => ({ ...v, note: id }));
-    });
+    },
+  });
+  const moveNote = useMutation({
+    mutationFn: ({ id, restore }: { id: string; title: string; after: string | null; restore: boolean }) => (restore ? api.restoreNote(id) : api.trashNote(id)),
+    onError: toastError,
+    onSuccess: async (_, { id, title, after, restore }) => {
+      // The note leaves the list it is in.
+      await leave((v) => ({ ...v, note: after }));
+      // The toast names the note, as the note it moved is gone from the screen.
+      if (!restore) offerUndo("Moved to the trash", title, () => restoreNote.mutateAsync(id));
+    },
+  });
+
+  /** Move the open note to the trash, or restore it. Each works only on a note it fits. */
+  function trash(restore: boolean) {
+    if (!current || editing || current.trashed !== restore) return;
+    moveNote.mutate({ id: current.id, title: current.title, after: neighbour(shown.notes, current.id), restore });
   }
 
   /** A toast with Undo, which ⌘Z also presses while the toast shows. */
-  function offerUndo(text: string, description: string, run: () => Promise<void>) {
+  function offerUndo(text: string, description: string, run: () => Promise<unknown>) {
     undoing.current = run;
     toast(text, {
       id: "kb",
@@ -273,27 +260,45 @@ export function App() {
     }
   }
 
+  const startAudit = useMutation({
+    mutationFn: api.startAudit,
+    onSuccess: (run) => {
+      auditing.current = run.scope;
+      toast(`An agent audits ${scopeName(run.scope)}. This takes a few minutes.`, { id: "kb" });
+    },
+    onError: toastError,
+    onSettled: () => reloadPage(),
+  });
+
   /** The Audit button of a repo the page can audit: start an agent, wait for it, or open its cards. */
   function auditButton(scope: string) {
     if (!data) return undefined;
     const go = () => (location.hash = `#audit=${encodeURIComponent(scope)}`);
     if (data.audits.includes(scope)) return { state: "open" as const, run: go };
     if (!data.auditable.includes(scope)) return undefined;
-    if (data.runs[scope]?.status === "running") return { state: "running" as const, run: () => {} };
-    return {
-      state: "start" as const,
-      run: async () => {
-        try {
-          await busy(() => api.startAudit(scope));
-          auditing.current = scope;
-          toast(`An agent audits ${scopeName(scope)}. This takes a few minutes.`, { id: "kb" });
-        } catch (error) {
-          toast((error as Error).message, { id: "kb" });
-        }
-        await refresh();
-      },
-    };
+    if (startAudit.isPending || data.runs[scope]?.status === "running") return { state: "running" as const, run: () => {} };
+    return { state: "start" as const, run: () => startAudit.mutate(scope) };
   }
+
+  const restoreProject = useMutation({
+    mutationFn: api.restoreProject,
+    onSuccess: async (_, scope) => {
+      await reloadPage();
+      held.current = scope;
+      setView((v) => ({ ...v, scope, trash: false, note: null }));
+    },
+  });
+  const trashProject = useMutation({
+    mutationFn: ({ scope }: { scope: string; name: string }) => api.trashProject(scope),
+    onError: toastError,
+    onSuccess: async (_, { scope, name }) => {
+      // The project is gone from the sidebar, so the list shows every scope.
+      held.current = null;
+      setCursor(null);
+      await leave((v) => ({ ...v, scope: null, note: null }));
+      offerUndo("Moved the project to the trash", name, () => restoreProject.mutateAsync(scope));
+    },
+  });
 
   /** Move every note of a project to the trash, after the dialog. Undo brings the project back. */
   function askTrashProject(scope: string) {
@@ -305,48 +310,17 @@ export function App() {
       title: "Move this project to the trash?",
       description: `${n === 1 ? "The 1 note" : `All ${n} notes`} of ${name} go to the trash. The trash deletes them after ${data!.trashDays} days.`,
       action: "Trash project",
-      run: () => void trashProject(scope, name),
-    });
-  }
-  async function trashProject(scope: string, name: string) {
-    try {
-      await busy(() => api.trashProject(scope));
-    } catch (error) {
-      toast((error as Error).message, { id: "kb" });
-      return;
-    }
-    if (reading) {
-      back();
-      await sleep(CLOSE_MS);
-    }
-    // The project is gone from the sidebar, so the list shows every scope.
-    held.current = null;
-    setCursor(null);
-    setView((v) => ({ ...v, scope: null, note: null }));
-    await refresh();
-    offerUndo("Moved the project to the trash", name, async () => {
-      await busy(() => api.restoreProject(scope));
-      await refresh();
-      held.current = scope;
-      setView((v) => ({ ...v, scope, trash: false, note: null }));
+      run: () => trashProject.mutate({ scope, name }),
     });
   }
 
   /** A change that cannot be undone: the dialog asks first, then this runs it. */
-  async function removeForGood(run: () => Promise<unknown>, after: string | null) {
-    try {
-      await busy(run);
-    } catch (error) {
-      toast((error as Error).message, { id: "kb" });
-      return;
-    }
-    if (reading) {
-      back();
-      await sleep(CLOSE_MS);
-    }
-    setView((v) => ({ ...v, note: after }));
-    await refresh();
-  }
+  const removeForGood = useMutation({
+    mutationFn: (what: { note: string; after: string | null } | { trashOf: string | undefined }) =>
+      "note" in what ? api.deleteNote(what.note) : api.emptyTrash(what.trashOf),
+    onError: toastError,
+    onSuccess: (_, what) => leave((v) => ({ ...v, note: "note" in what ? what.after : null })),
+  });
 
   /** Delete the open note for good. Only a note in the trash, and only after the dialog. */
   function askDelete() {
@@ -356,7 +330,7 @@ export function App() {
       title: "Delete this note for good?",
       description: current.title,
       action: "Delete",
-      run: () => void removeForGood(() => api.deleteNote(id), after),
+      run: () => removeForGood.mutate({ note: id, after }),
     });
   }
 
@@ -370,7 +344,7 @@ export function App() {
       title: scope ? `Empty the trash of ${scopeName(scope)}?` : "Empty the trash?",
       description: `${what} deleted for good.${scope ? " The trash of other scopes stays." : ""}`,
       action: "Empty trash",
-      run: () => void removeForGood(() => api.emptyTrash(scope ?? undefined), null),
+      run: () => removeForGood.mutate({ trashOf: scope ?? undefined }),
     });
   }
 
@@ -488,8 +462,8 @@ export function App() {
     // Backspace moves a note to the trash. In the trash it asks to delete the note for good.
     else if ((key === "Backspace" || key === "Delete") && pane === "list" && current) {
       if (current.trashed) askDelete();
-      else void trash(false);
-    } else if (key === "r" && pane === "list") void trash(true);
+      else trash(false);
+    } else if (key === "r" && pane === "list") trash(true);
     else if (key === "t") nextTheme();
     else if (key === "?") setHelp(true);
     else if (kinds[Number(key) - 1]) toggleKind(kinds[Number(key) - 1]!);
@@ -539,11 +513,11 @@ export function App() {
         }}
         onTrash={() => {
           setView((v) => ({ ...v, pane: "list" }));
-          void trash(false);
+          trash(false);
         }}
         onRestore={() => {
           setView((v) => ({ ...v, pane: "list" }));
-          void trash(true);
+          trash(true);
         }}
         onDelete={() => {
           setView((v) => ({ ...v, pane: "list" }));
