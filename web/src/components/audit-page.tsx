@@ -40,14 +40,16 @@ export function AuditPage({ scope }: { scope: string }) {
   const { resolved } = useTheme();
 
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="flex h-dvh flex-col">
       {!(data && !data.result && data.cards.length > 0) && <Header scope={scope} data={data} />}
       {failed ? (
-        <p className="p-8 text-sm text-muted-foreground">kb: {failed}</p>
+        <p className="min-h-0 flex-1 overflow-y-auto p-8 text-sm text-muted-foreground">kb: {failed}</p>
       ) : !data ? null : data.result ? (
-        <Result result={data.result} />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Result result={data.result} />
+        </div>
       ) : data.cards.length === 0 ? (
-        <p className="p-8 text-sm text-muted-foreground">Every note in this audit changed since the agent proposed it. Run /kb:audit again.</p>
+        <p className="min-h-0 flex-1 overflow-y-auto p-8 text-sm text-muted-foreground">Every note in this audit changed since the agent proposed it. Run /kb:audit again.</p>
       ) : (
         <Deck data={data} />
       )}
@@ -206,7 +208,7 @@ function Deck({ data }: { data: AuditData }) {
     <Header scope={data.scope} data={data}>
       <Meter data={data} left={left} />
     </Header>
-    <main className="mx-auto flex w-[min(660px,100%)] flex-1 flex-col px-4 pt-6 pb-8">
+    <main className="mx-auto flex min-h-0 w-[min(720px,100%)] flex-1 flex-col px-4 pt-6 pb-4">
       <div className="flex items-center gap-3 text-[13px] text-muted-foreground tabular-nums">
         <span>{end ? "the end" : `${flow.slice(0, pos + 1).filter((s) => s.type === "card").length || 1} of ${data.cards.length}`}</span>
         <span className="h-1 flex-1 overflow-hidden rounded-full bg-secondary">
@@ -215,11 +217,17 @@ function Deck({ data }: { data: AuditData }) {
       </div>
       <Strip data={data} flow={flow} picks={picks} seen={seen} pos={pos} onJump={go} />
 
-      <div className="flex flex-1 flex-col justify-center py-6">
+      {/* Only the edit box fills the space. Any other step is as tall as its content, and the key hint follows it. */}
+      <div className={cn("mt-5 flex min-h-0 flex-col", mode === "edit" && "flex-1")}>
         {end ? (
           <End data={data} picks={picks} left={left} applying={applying} error={error} onApply={apply} />
         ) : step!.type === "divider" ? (
-          <Divider group={step!.group} count={step!.cards.length} />
+          <Divider
+            group={step!.group}
+            count={step!.cards.length}
+            onOneByOne={() => go(pos + 1)}
+            onKeepAll={() => decide(step!.cards.map((i) => [i, { action: "keep" }]), pos + step!.cards.length + 1)}
+          />
         ) : (
           <Card
             key={step!.i}
@@ -229,27 +237,15 @@ function Deck({ data }: { data: AuditData }) {
             mode={mode}
             onCancel={() => setMode(null)}
             onSave={(pick) => decide([[step!.i, pick]])}
+            keys={choices(step!.card, over).map((choice) => (
+              <KeyButton key={choice} k={KEYS[choice]} label={choiceLabel(step!.card, choice)} on={picks[step!.i]!.action === choice} action={choice} onClick={() => choose(choice)} />
+            ))}
           />
         )}
       </div>
 
-      {!mode && !end && (
-        <div className="flex flex-wrap justify-center gap-2" data-keys>
-          {step!.type === "divider" ? (
-            <>
-              <KeyButton k="Enter" label="one by one" on onClick={() => go(pos + 1)} />
-              <KeyButton k="a" label={`keep all ${step!.cards.length}`} onClick={() => decide(step!.cards.map((i) => [i, { action: "keep" }]), pos + step!.cards.length + 1)} />
-            </>
-          ) : (
-            choices(step!.card, over).map((choice) => {
-              const current = picks[step!.i]!.action === choice;
-              return <KeyButton key={choice} k={KEYS[choice]} label={choiceLabel(step!.card, choice)} on={current} action={choice} onClick={() => choose(choice)} />;
-            })
-          )}
-        </div>
-      )}
       {!mode && (
-        <p className="mt-4 text-center text-[12px] text-faint" data-keys-only>
+        <p className="mt-3 shrink-0 text-center text-[12px] text-faint" data-keys-only>
           {end ? "Enter applies" : "Enter takes the highlighted pick and goes on"} · <Kbd>←</Kbd> <Kbd>→</Kbd> move · <Kbd>z</Kbd> undo
         </p>
       )}
@@ -258,9 +254,27 @@ function Deck({ data }: { data: AuditData }) {
   );
 }
 
+/**
+ * The frame of every step in the deck: a fixed head, one body that scrolls, and the buttons in a
+ * footer. The panel is as tall as its content, at most the space under the strip: then only the body scrolls.
+ */
+function Panel({ head, footer, children, className, ...rest }: { head?: React.ReactNode; footer: React.ReactNode; children: React.ReactNode; className?: string } & React.HTMLAttributes<HTMLElement> & Record<`data-${string}`, string>) {
+  return (
+    <article className={cn("flex max-h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-card", className)} {...rest}>
+      {head && <div className="shrink-0 px-6 pt-5 pb-3 max-wide:px-4">{head}</div>}
+      <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-5 max-wide:px-4", !head && "pt-5")} data-panel-body>
+        {children}
+      </div>
+      <div className="shrink-0 border-t bg-card px-6 py-3 max-wide:px-4" data-keys>
+        {footer}
+      </div>
+    </article>
+  );
+}
+
 function KeyButton({ k, label, on, action, onClick }: { k: string; label: string; on?: boolean; action?: Choice; onClick: () => void }) {
   return (
-    <Button variant={on ? "default" : "outline"} className={cn("h-9 gap-2 px-3 text-[13.5px]", action && `a-${action}`)} onClick={onClick} data-choice={action}>
+    <Button variant={on ? "default" : "outline"} className={cn("h-9 gap-2 px-2.5 text-[13.5px]", action && `a-${action}`)} onClick={onClick} data-choice={action}>
       <Kbd className={cn(on ? "bg-primary-foreground/15 text-primary-foreground" : "")}>{k}</Kbd>
       {label}
     </Button>
@@ -307,14 +321,24 @@ function Strip({ data, flow, picks, seen, pos, onJump }: { data: AuditData; flow
   );
 }
 
-function Divider({ group, count }: { group: string; count: number }) {
+function Divider({ group, count, onOneByOne, onKeepAll }: { group: string; count: number; onOneByOne: () => void; onKeepAll: () => void }) {
   return (
-    <div className="rounded-xl border border-dashed px-6 py-8 text-center">
-      <h2 className="text-lg font-semibold">{group}</h2>
-      <p className="mt-1.5 text-[13.5px] text-muted-foreground">
-        {count} {count === 1 ? "card" : "cards"} next. Go through them one by one, or keep them all as they are.
-      </p>
-    </div>
+    <Panel
+      className="border-dashed"
+      footer={
+        <div className="flex flex-wrap justify-center gap-2">
+          <KeyButton k="Enter" label="one by one" on onClick={onOneByOne} />
+          <KeyButton k="a" label={`keep all ${count}`} onClick={onKeepAll} />
+        </div>
+      }
+    >
+      <div className="flex min-h-full flex-col items-center justify-center py-6 text-center">
+        <h2 className="text-lg font-semibold">{group}</h2>
+        <p className="mt-1.5 text-[13.5px] text-muted-foreground">
+          {count} {count === 1 ? "card" : "cards"} next. Go through them one by one, or keep them all as they are.
+        </p>
+      </div>
+    </Panel>
   );
 }
 
@@ -332,31 +356,40 @@ function Meta({ note, reason }: { note: AuditNote; reason?: string }) {
   );
 }
 
-const textBlock = "max-h-56 overflow-y-auto rounded-lg border px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]";
+const textBlock = "rounded-lg border px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]";
 const label = "mb-1 block font-mono text-[10.5px] font-semibold tracking-wider uppercase";
 
-function Card({ card, pick, seen, mode, onCancel, onSave }: { card: AuditCard; pick: Pick; seen: boolean; mode: Mode; onCancel: () => void; onSave: (pick: Pick) => void }) {
+/** The card's head: what kind of note, and its title. It stays put while the body scrolls. */
+function Head({ card }: { card: AuditCard }) {
+  return (
+    <>
+      <Meta note={card.note} reason={card.reason} />
+      <h2 className="mt-2 text-[19px]/snug font-semibold text-balance">{card.merge ? "These notes look like one idea" : card.note.title}</h2>
+    </>
+  );
+}
+
+function Card({ card, pick, seen, mode, keys, onCancel, onSave }: { card: AuditCard; pick: Pick; seen: boolean; mode: Mode; keys: React.ReactNode; onCancel: () => void; onSave: (pick: Pick) => void }) {
   const own = pick.title !== undefined || pick.body !== undefined;
   const newTitle = pick.title ?? card.proposed?.title ?? card.note.title;
   const newBody = pick.body ?? card.proposed?.body ?? card.note.body;
   const changed = own || !!card.proposed;
+  if (mode === "edit") return <EditCard card={card} title={newTitle} body={newBody} onCancel={onCancel} onSave={(title, body) => onSave({ action: card.merge ? "merge" : "rewrite", title, body })} />;
+  if (mode === "ask") return <AskCard card={card} initial={pick.request ?? ""} onCancel={onCancel} onSave={(request) => onSave({ action: "ask", request })} />;
   return (
-    <article className="rounded-xl border bg-card px-6 py-5 max-wide:px-4" data-card={card.id}>
-      <Meta note={card.note} reason={card.reason} />
-      <h2 className="mt-2 text-[19px]/snug font-semibold text-balance">{card.merge ? "These notes look like one idea" : card.note.title}</h2>
-
+    <Panel head={<Head card={card} />} footer={<div className="flex flex-wrap justify-center gap-1.5">{keys}</div>} data-card={card.id}>
       {card.merge ? (
-        <div className="mt-3 grid gap-2.5 wide:grid-cols-2">
+        <div className="grid gap-2.5 wide:grid-cols-2">
           {[card.note, ...card.merge].map((note, i) => (
             <div key={note.id} className="rounded-lg border px-3.5 py-2.5">
               <div className="text-[13.5px] font-semibold">{note.title}</div>
-              <div className="mt-1 line-clamp-6 text-[13px] whitespace-pre-wrap text-muted-foreground">{note.body}</div>
+              <div className="mt-1 text-[13px] whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{note.body}</div>
               <div className="mt-1.5 text-[11.5px] text-faint">{i === 0 ? "stays, with every fact" : "goes to the trash"}</div>
             </div>
           ))}
         </div>
-      ) : changed && mode !== "edit" ? (
-        <div className="mt-3 grid gap-2">
+      ) : changed ? (
+        <div className="grid gap-2">
           <div className={cn(textBlock, "border-(--destructive)/30 bg-(--destructive)/5 line-through decoration-(--destructive)/50")}>
             <span className={cn(label, "text-(--destructive) no-underline")}>now</span>
             {newTitle !== card.note.title && <b className="block">{card.note.title}</b>}
@@ -368,11 +401,11 @@ function Card({ card, pick, seen, mode, onCancel, onSave }: { card: AuditCard; p
             {newBody}
           </div>
         </div>
-      ) : mode !== "edit" ? (
-        <div className={cn(textBlock, "mt-3")}>{card.note.body}</div>
-      ) : null}
+      ) : (
+        <div className={textBlock}>{card.note.body}</div>
+      )}
 
-      {card.merge && changed && mode !== "edit" && (
+      {card.merge && changed && (
         <div className={cn(textBlock, "mt-2.5 border-(--k-convention)/35 bg-(--k-convention)/6 text-foreground")}>
           <span className={cn(label, "text-(--k-convention)")}>{own ? "your merged text" : "merged text, proposed by the agent"}</span>
           {newTitle !== card.note.title && <b className="block">{newTitle}</b>}
@@ -380,54 +413,57 @@ function Card({ card, pick, seen, mode, onCancel, onSave }: { card: AuditCard; p
         </div>
       )}
 
-      {mode === "edit" && <EditBox title={newTitle} body={newBody} merge={!!card.merge} onCancel={onCancel} onSave={(title, body) => onSave({ action: card.merge ? "merge" : "rewrite", title, body })} />}
-      {mode === "ask" && <AskBox initial={pick.request ?? ""} onCancel={onCancel} onSave={(request) => onSave({ action: "ask", request })} />}
-
-      {!mode && (
-        <>
-          <div className="mt-3.5 rounded-lg bg-muted px-3.5 py-2.5 text-[13.5px]">
-            <b className="font-semibold">Agent: {card.action}.</b> {card.why}
-          </div>
-          <div className="mt-3 text-[13px] text-muted-foreground" data-pick-line>
-            {seen ? "Your pick" : "Picked now"}: <b className={cn("font-semibold text-foreground")}>{pickLabel(card, pick)}</b>
-            {pick.action === card.action && !own && !pick.request ? " (the agent's)" : ""}
-            {pick.request && <span className="block text-faint">“{pick.request}”</span>}
-          </div>
-        </>
-      )}
-    </article>
+      <div className="mt-3.5 rounded-lg bg-muted px-3.5 py-2.5 text-[13.5px]">
+        <b className="font-semibold">Agent: {card.action}.</b> {card.why}
+      </div>
+      <div className="mt-3 text-[13px] text-muted-foreground" data-pick-line>
+        {seen ? "Your pick" : "Picked now"}: <b className={cn("font-semibold text-foreground")}>{pickLabel(card, pick)}</b>
+        {pick.action === card.action && !own && !pick.request ? " (the agent's)" : ""}
+        {pick.request && <span className="block text-faint">“{pick.request}”</span>}
+      </div>
+    </Panel>
   );
 }
 
-function EditBox({ title, body, merge, onCancel, onSave }: { title: string; body: string; merge: boolean; onCancel: () => void; onSave: (title: string, body: string) => void }) {
+function EditCard({ card, title, body, onCancel, onSave }: { card: AuditCard; title: string; body: string; onCancel: () => void; onSave: (title: string, body: string) => void }) {
   const [t, setT] = useState(title);
   const [b, setB] = useState(body);
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => ref.current?.focus(), []);
+  const ok = !!t.trim() && !!b.trim();
   const keys = (event: React.KeyboardEvent) => {
     if (event.key === "Escape") onCancel();
-    else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && t.trim() && b.trim()) onSave(t.trim(), b.trim());
+    else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && ok) onSave(t.trim(), b.trim());
     else return;
     event.preventDefault();
   };
   return (
-    <div className="mt-3 grid gap-2" onKeyDown={keys}>
-      <span className={cn(label, "mb-0 text-(--k-convention)")}>{merge ? "your merged text" : "your text"}</span>
-      <Input value={t} onChange={(e) => setT(e.target.value)} aria-label="Title" className="font-semibold" />
-      <Textarea ref={ref} value={b} onChange={(e) => setB(e.target.value)} aria-label="Body" className="max-h-[50vh] min-h-32 text-[13.5px]" />
-      <div className="flex justify-end gap-2">
-        <Button variant="outline" className="h-9 gap-2" onClick={onCancel}>
-          <Kbd>Esc</Kbd> cancel
-        </Button>
-        <Button className="h-9 gap-2" disabled={!t.trim() || !b.trim()} onClick={() => onSave(t.trim(), b.trim())}>
-          <Kbd className="bg-primary-foreground/15 text-primary-foreground">{MAC ? "⌘" : "ctrl"} Enter</Kbd> save
-        </Button>
+    <Panel
+      className="flex-1"
+      head={<Head card={card} />}
+      data-card={card.id}
+      onKeyDown={keys}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" className="h-9 gap-2" onClick={onCancel}>
+            <Kbd>Esc</Kbd> cancel
+          </Button>
+          <Button className="h-9 gap-2" disabled={!ok} onClick={() => onSave(t.trim(), b.trim())}>
+            <Kbd className="bg-primary-foreground/15 text-primary-foreground">{MAC ? "⌘" : "ctrl"} Enter</Kbd> save
+          </Button>
+        </div>
+      }
+    >
+      <div className="flex min-h-full flex-col gap-2">
+        <span className={cn(label, "mb-0 text-(--k-convention)")}>{card.merge ? "your merged text" : "your text"}</span>
+        <Input value={t} onChange={(e) => setT(e.target.value)} aria-label="Title" className="font-semibold" />
+        <Textarea ref={ref} value={b} onChange={(e) => setB(e.target.value)} aria-label="Body" className="min-h-40 flex-1 resize-none text-[13.5px]" />
       </div>
-    </div>
+    </Panel>
   );
 }
 
-function AskBox({ initial, onCancel, onSave }: { initial: string; onCancel: () => void; onSave: (request: string) => void }) {
+function AskCard({ card, initial, onCancel, onSave }: { card: AuditCard; initial: string; onCancel: () => void; onSave: (request: string) => void }) {
   const [text, setText] = useState(initial);
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => ref.current?.focus(), []);
@@ -438,20 +474,29 @@ function AskBox({ initial, onCancel, onSave }: { initial: string; onCancel: () =
     event.preventDefault();
   };
   return (
-    <div className="mt-3 grid gap-2" onKeyDown={keys}>
-      <label className="text-[13px] text-muted-foreground" htmlFor="ask-box">
-        What is wrong with it? After Apply, tell the agent. It rewrites the note, and you see the new text in the next audit.
-      </label>
-      <Input id="ask-box" ref={ref} value={text} onChange={(e) => setText(e.target.value)} />
-      <div className="flex justify-end gap-2">
-        <Button variant="outline" className="h-9 gap-2" onClick={onCancel}>
-          <Kbd>Esc</Kbd> cancel
-        </Button>
-        <Button className="h-9 gap-2" disabled={!text.trim()} onClick={() => onSave(text.trim())}>
-          <Kbd className="bg-primary-foreground/15 text-primary-foreground">Enter</Kbd> save
-        </Button>
+    <Panel
+      head={<Head card={card} />}
+      data-card={card.id}
+      onKeyDown={keys}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" className="h-9 gap-2" onClick={onCancel}>
+            <Kbd>Esc</Kbd> cancel
+          </Button>
+          <Button className="h-9 gap-2" disabled={!text.trim()} onClick={() => onSave(text.trim())}>
+            <Kbd className="bg-primary-foreground/15 text-primary-foreground">Enter</Kbd> save
+          </Button>
+        </div>
+      }
+    >
+      <div className="grid gap-2">
+        <label className="text-[13px] text-muted-foreground" htmlFor="ask-box">
+          What is wrong with it? After Apply, tell the agent. It rewrites the note, and you see the new text in the next audit.
+        </label>
+        <Input id="ask-box" ref={ref} value={text} onChange={(e) => setText(e.target.value)} />
+        <div className={cn(textBlock, "mt-1")}>{card.note.body}</div>
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -459,13 +504,26 @@ function End({ data, picks, left, applying, error, onApply }: { data: AuditData;
   const groups = summary(data.cards, picks);
   const changes = picks.filter((p) => p.action !== "keep").length;
   return (
-    <section className="rounded-xl border bg-card px-6 py-5 max-wide:px-4">
-      <h2 className="text-[19px] font-semibold">Ready to apply</h2>
-      <p className="mt-1 text-[13.5px] text-muted-foreground">
-        {changes} of {data.cards.length} notes change.
-        {data.index.hidden > 0 && (left === 0 ? " Every note will reach a session." : ` ${left} ${left === 1 ? "note" : "notes"} will still reach no session.`)}
-      </p>
-      <ul className="mt-4 grid gap-2.5">
+    <Panel
+      head={
+        <>
+          <h2 className="text-[19px] font-semibold">Ready to apply</h2>
+          <p className="mt-1 text-[13.5px] text-muted-foreground">
+            {changes} of {data.cards.length} notes change.
+            {data.index.hidden > 0 && (left === 0 ? " Every note will reach a session." : ` ${left} ${left === 1 ? "note" : "notes"} will still reach no session.`)}
+          </p>
+        </>
+      }
+      footer={
+        <div className="flex items-center justify-end gap-3">
+          {error && <p className="mr-auto text-[13px] text-destructive">{error}</p>}
+          <Button className="h-9 gap-2 px-4" disabled={applying} onClick={onApply}>
+            <Kbd className="bg-primary-foreground/15 text-primary-foreground">Enter</Kbd> {applying ? "applying…" : "apply"}
+          </Button>
+        </div>
+      }
+    >
+      <ul className="grid gap-2.5">
         {groups.map((group) => (
           <li key={group.label} className={cn("text-[13.5px]", `a-${group.action}`)}>
             <span className="flex items-center gap-2 font-semibold">
@@ -478,13 +536,7 @@ function End({ data, picks, left, applying, error, onApply }: { data: AuditData;
           </li>
         ))}
       </ul>
-      {error && <p className="mt-4 text-[13px] text-destructive">{error}</p>}
-      <div className="mt-5 flex justify-end">
-        <Button className="h-9 gap-2 px-4" disabled={applying} onClick={onApply}>
-          <Kbd className="bg-primary-foreground/15 text-primary-foreground">Enter</Kbd> {applying ? "applying…" : "apply"}
-        </Button>
-      </div>
-    </section>
+    </Panel>
   );
 }
 
