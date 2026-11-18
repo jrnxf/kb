@@ -7,7 +7,7 @@ import { normalizeTitle } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { git, type Store, type StoredNote, writeAtomic } from "./store.ts";
 
-export const STALE_REASONS = ["anchor-changed", "anchor-missing", "commit-unknown", "decayed", "duplicate"] as const;
+export const STALE_REASONS = ["anchor-changed", "anchor-missing", "commit-unknown", "expired", "decayed", "duplicate"] as const;
 export type StaleReason = (typeof STALE_REASONS)[number];
 
 export interface StaleCandidate {
@@ -40,6 +40,38 @@ function similarity(a: Set<string>, b: Set<string>): number {
   return shared / (a.size + b.size - shared);
 }
 
+/** An anchor's path, and its symbol after "#" or "". */
+function splitAnchor(anchor: string): { path: string; symbol: string } {
+  const hash = anchor.indexOf("#");
+  return hash === -1 ? { path: anchor, symbol: "" } : { path: anchor.slice(0, hash), symbol: anchor.slice(hash + 1) };
+}
+
+/**
+ * The anchors of a note that no longer hold in the checkout at root: the path is gone, or the
+ * symbol left the file. It reads files only and runs no git, so a session start can afford it.
+ */
+export function missingAnchors(note: Pick<StoredNote, "anchors">, root: string): string[] {
+  const missing: string[] = [];
+  for (const anchor of note.anchors) {
+    const { path, symbol } = splitAnchor(anchor);
+    const full = resolve(root, path);
+    if ((full !== root && !full.startsWith(root + sep)) || !existsSync(full)) {
+      missing.push(`${path} does not exist`);
+      continue;
+    }
+    if (!symbol) continue;
+    let text = "";
+    try {
+      text = readFileSync(full, "utf8");
+    } catch {
+      // a directory or an unreadable file: the symbol check does not apply
+      continue;
+    }
+    if (!text.includes(symbol)) missing.push(`${symbol} is no longer in ${path}`);
+  }
+  return missing;
+}
+
 /** Anchor checks need the repo on disk, so they cover only notes of the repo at `repoPath`. */
 function anchorCandidates(note: StoredNote, root: string, changedSince: (commit: string) => Set<string> | null): { reason: StaleReason; detail: string }[] {
   const found: { reason: StaleReason; detail: string }[] = [];
@@ -49,33 +81,14 @@ function anchorCandidates(note: StoredNote, root: string, changedSince: (commit:
     found.push({ reason: "commit-unknown", detail: `commit ${commit} is not in the history of HEAD (a rebase, or a shallow clone)` });
   }
 
-  const missing: string[] = [];
-  const moved: string[] = [];
-  for (const anchor of note.anchors) {
-    const hash = anchor.indexOf("#");
-    const path = hash === -1 ? anchor : anchor.slice(0, hash);
-    const symbol = hash === -1 ? "" : anchor.slice(hash + 1);
-    const full = resolve(root, path);
-    if ((full !== root && !full.startsWith(root + sep)) || !existsSync(full)) {
-      missing.push(`${path} does not exist`);
-      continue;
-    }
-    if (symbol) {
-      let text = "";
-      try {
-        text = readFileSync(full, "utf8");
-      } catch {
-        // a directory or an unreadable file: the symbol check does not apply
-        text = symbol;
-      }
-      if (!text.includes(symbol)) {
-        missing.push(`${symbol} is no longer in ${path}`);
-        continue;
-      }
-    }
-    // A path#symbol anchor counts as changed when its file changed.
-    if (changed && [...changed].some((file) => file === path || file.startsWith(`${path.replace(/\/+$/, "")}/`))) moved.push(path);
-  }
+  const missing = missingAnchors(note, root);
+  // A path#symbol anchor counts as changed when its file changed. A missing anchor says more.
+  const moved = changed
+    ? note.anchors
+        .map((anchor) => splitAnchor(anchor).path)
+        .filter((path) => !missing.some((m) => m.startsWith(`${path} `) || m.endsWith(` ${path}`)))
+        .filter((path) => [...changed].some((file) => file === path || file.startsWith(`${path.replace(/\/+$/, "")}/`)))
+    : [];
   if (missing.length > 0) found.push({ reason: "anchor-missing", detail: missing.join("; ") });
   if (moved.length > 0) found.push({ reason: "anchor-changed", detail: `changed since ${commit}: ${[...new Set(moved)].join(", ")}` });
   return found;
@@ -103,13 +116,19 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
     return diffs.get(commit)!;
   };
 
-  const decayMs = store.config().decayDays * 86_400_000;
+  const { decayDays, expireDays } = store.config();
+  const usage = store.usage();
+  const days = (iso: string) => Math.floor((now.getTime() - new Date(iso).getTime()) / 86_400_000);
   for (const note of notes) {
     if (repo.root && repo.head && note.scope === repo.scope) {
       for (const found of anchorCandidates(note, repo.root, changedSince)) add(note, found.reason, found.detail);
     }
-    const age = now.getTime() - new Date(note.last_verified).getTime();
-    if (age > decayMs) add(note, "decayed", `last verified ${Math.floor(age / 86_400_000)} days ago`);
+    // Expired: no session used the note and nobody checked it for expireDays. It says more than
+    // decayed, so a note gets one of the two.
+    const lastUsed = usage.get(note.id)?.last_used;
+    const seen = lastUsed && lastUsed > note.last_verified ? lastUsed : note.last_verified;
+    if (days(seen) > expireDays) add(note, "expired", `no use and no check for ${days(seen)} days`);
+    else if (days(note.last_verified) > decayDays) add(note, "decayed", `last verified ${days(note.last_verified)} days ago`);
   }
 
   // Possible duplicates: titles that share most of their words. The newer note is the candidate.

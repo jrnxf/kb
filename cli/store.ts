@@ -10,6 +10,8 @@ export interface Config {
   /** globalIndexLines: the places global notes may take in a repo session, bodies and index lines together. */
   budgets: { indexLines: number; contextChars: number; globalIndexLines: number };
   decayDays: number;
+  /** A note that no session used and nobody checked for this many days has expired. The audit proposes trash for it. */
+  expireDays: number;
   /** A note in the trash for longer than this is deleted for good. */
   trashDays: number;
   autocommit: boolean;
@@ -42,6 +44,7 @@ export const HARD_CONTEXT_CAP = 8800;
 const DEFAULT_CONFIG: Config = {
   budgets: { indexLines: 60, contextChars: 8000, globalIndexLines: 20 },
   decayDays: 180,
+  expireDays: 90,
   trashDays: 30,
   autocommit: true,
   sync: true,
