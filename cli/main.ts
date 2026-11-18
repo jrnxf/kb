@@ -3,7 +3,9 @@
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { proposeAudit, readAudit } from "./audit.ts";
+import { openAudits, proposeAudit, readAudit } from "./audit.ts";
+import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
+import { rememberRepo } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
@@ -38,8 +40,9 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb stale [--repo .]                    notes that may no longer be true, each with a reason
   kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
   kb budget [--repo .]                   what a session loads, and what reaches no session
+  kb audit [--repo .] [--no-wait]        start an agent that audits this repo, and print the page link
   kb audit propose [--repo .]            save /kb:audit's proposal from JSON on stdin, for the page
-  kb audit [--repo .]                    where the audit of this repo stands, and the notes the user
+  kb audit status [--repo .]             where the audit of this repo stands, and the notes the user
                                          sent back for a rewrite
   kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run] [--repo .]
                                          append a note to the repo's own file
@@ -445,17 +448,25 @@ Press Ctrl+C to stop.`);
 }
 
 /**
- * `kb audit propose` saves the agent's proposal for the page. `kb audit` says where the audit of
- * this repo stands: none, waiting for the user's picks, or applied, with the notes sent back.
+ * `kb audit` starts one headless agent that audits this repo, waits for its proposal, and prints the
+ * page link. An audit that waits for the user's picks opens as it is. `kb audit propose` saves the
+ * agent's proposal for the page. `kb audit status` says where the audit of this repo stands: none,
+ * waiting for the user's picks, or applied, with the notes sent back.
  */
 async function cmdAudit(store: Store, args: Args, stdin: () => Promise<string>): Promise<Output> {
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
   const scope = repo.scope ?? "global";
-  const sub = args.positional[0];
-  if (sub !== undefined && sub !== "propose") throw new KbError("usage: kb audit [propose] [--repo .]");
+  // The audit agent itself only asks where the audit stands: it never starts another one.
+  const sub = args.positional[0] ?? (process.env[RUN_ENV] ? "status" : undefined);
+  if (sub !== undefined && sub !== "propose" && sub !== "status") throw new KbError("usage: kb audit [propose | status] [--repo .] [--no-wait]");
   // The link goes to the server that is running: the port kb serve recorded, or the default.
   const port = (await runningPort(store)) ?? DEFAULT_PORT;
   const url = `http://127.0.0.1:${port}/#audit=${encodeURIComponent(scope)}`;
+  const served = () => isKbServer(port);
+  const open = async (cards: number, lead: string): Promise<Output> => ({
+    json: { scope, status: "open", cards, url, served: await served() },
+    text: `${lead}\n${(await served()) ? `open ${url}` : `kb serve is not running. Start it with \`kb serve\`, then open ${url}`}`,
+  });
   if (sub === "propose") {
     let input: unknown;
     try {
@@ -465,11 +476,20 @@ async function cmdAudit(store: Store, args: Args, stdin: () => Promise<string>):
     }
     store.ensure();
     const audit = proposeAudit(store, input, repo);
-    const served = await isKbServer(port);
-    return {
-      json: { scope, cards: audit.items.length, url, served },
-      text: `saved ${audit.items.length} cards for ${scope}\n${served ? `open ${url}` : `kb serve is not running. Start it with \`kb serve\`, then open ${url}`}`,
-    };
+    return open(audit.items.length, `saved ${audit.items.length} cards for ${scope}`);
+  }
+  if (sub === undefined) {
+    if (!repo.root || !repo.scope) throw new KbError("kb audit audits a repo: run it inside one. Its global notes are in every repo's audit.");
+    const waiting = readAudit(store, scope);
+    if (waiting && !waiting.result && openAudits(store).includes(scope)) return open(waiting.items.length, `the audit of ${scope} waits for your picks`);
+    rememberRepo(store, scope, repo.root);
+    let state = startRun(store, scope, repo.root);
+    if (args.flags.has("no-wait")) return { json: state, text: `an agent audits ${scope} now. Run kb audit again to see where it stands. Log: ${state.log}` };
+    if (!args.flags.has("json")) process.stderr.write(`an agent audits ${scope} and its global notes. This takes a few minutes.\nlog: ${state.log}\n`);
+    state = await waitRun(store, scope);
+    if (state.status === "proposed") return open(state.cards ?? 0, `the agent proposed ${state.cards} cards for ${scope}`);
+    if (state.status === "nothing") return { json: state, text: `the agent found nothing to change in ${scope}${state.said ? `:\n${state.said}` : ""}` };
+    throw new KbError(`the audit agent stopped with no proposal. Its last lines:\n${state.said || "(no output)"}\nlog: ${state.log}`);
   }
   const audit = readAudit(store, scope);
   if (!audit) return { json: { scope, status: "none" }, text: `no audit for ${scope}` };

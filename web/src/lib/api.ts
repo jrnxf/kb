@@ -1,4 +1,4 @@
-import type { AuditData, AuditPick, AuditResult, NoteEdit, PageData } from "../../../cli/wire.ts";
+import type { AuditData, AuditPick, AuditResult, AuditRunState, NoteEdit, PageData } from "../../../cli/wire.ts";
 
 let token = "";
 
@@ -37,4 +37,6 @@ export async function loadAudit(scope: string): Promise<AuditData> {
   token = data.token;
   return data;
 }
+/** One agent audits the repo in its checkout. The page data says when its cards are ready. */
+export const startAudit = (scope: string) => call<AuditRunState>("POST", "/api/audit/start", { scope });
 export const applyAudit = (scope: string, picks: AuditPick[]) => call<AuditResult>("POST", "/api/audit/apply", { scope, picks });

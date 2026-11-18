@@ -54,6 +54,18 @@ export function App() {
   }, []);
   const refresh = useCallback(() => busy(api.loadPage).then(setData), [busy]);
 
+  // The repo whose audit agent this page started. When the agent ends, the page opens its cards, or says why there are none.
+  const auditing = useRef<string | null>(null);
+  useEffect(() => {
+    const scope = auditing.current;
+    const run = scope ? data?.runs[scope] : undefined;
+    if (!scope || !run || run.status === "running") return;
+    auditing.current = null;
+    if (data!.audits.includes(scope)) location.hash = `#audit=${encodeURIComponent(scope)}`;
+    else if (run.status === "nothing") toast(`The agent found nothing to change in ${scopeName(scope)}`, { id: "kb" });
+    else toast(`The audit agent stopped with no cards. Its log: ${run.log}`, { id: "kb" });
+  }, [data]);
+
   useEffect(() => {
     api.loadPage().then(setData, (error: Error) => setFailed(error.message));
   }, []);
@@ -259,6 +271,28 @@ export function App() {
     } catch (error) {
       toast((error as Error).message, { id: "kb" });
     }
+  }
+
+  /** The Audit button of a repo the page can audit: start an agent, wait for it, or open its cards. */
+  function auditButton(scope: string) {
+    if (!data) return undefined;
+    const go = () => (location.hash = `#audit=${encodeURIComponent(scope)}`);
+    if (data.audits.includes(scope)) return { state: "open" as const, run: go };
+    if (!data.auditable.includes(scope)) return undefined;
+    if (data.runs[scope]?.status === "running") return { state: "running" as const, run: () => {} };
+    return {
+      state: "start" as const,
+      run: async () => {
+        try {
+          await busy(() => api.startAudit(scope));
+          auditing.current = scope;
+          toast(`An agent audits ${scopeName(scope)}. This takes a few minutes.`, { id: "kb" });
+        } catch (error) {
+          toast((error as Error).message, { id: "kb" });
+        }
+        await refresh();
+      },
+    };
   }
 
   /** Move every note of a project to the trash, after the dialog. Undo brings the project back. */
@@ -556,7 +590,7 @@ export function App() {
             audits={data.audits}
           />
           <NoteList notes={shown.notes} current={current} q={view.q} onQ={(q) => setView((v) => ({ ...v, q }))} searchRef={search} onOpen={pickRow} empty={empty} trash={shown.trash ? { days: data.trashDays, onEmpty: askEmpty } : undefined}
-            project={!shown.trash && view.scope && view.scope !== "global" ? { onTrash: () => askTrashProject(view.scope!) } : undefined}
+            project={!shown.trash && view.scope && view.scope !== "global" ? { onTrash: () => askTrashProject(view.scope!), audit: auditButton(view.scope) } : undefined}
           />
         </DrawerIndent>
         {!phone && (
