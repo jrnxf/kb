@@ -146,11 +146,11 @@ describe("kb budget", () => {
     const { repo, store } = fixture();
     putNote(store, { id: "a", scope: SCOPE });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
-    expect(b).toMatchObject({ scope: SCOPE, over: false, demote: [], index: { lines: 0, budget: 60, hidden: 0 }, context: { bodies: 1, dropped: 0, budget: contextBudget(8000) } });
+    expect(b).toMatchObject({ scope: SCOPE, over: false, trim: [], index: { lines: 0, budget: 60, hidden: 0 }, context: { bodies: 1, dropped: 0, budget: contextBudget(8000) } });
     expect(b.notes[0]).toMatchObject({ id: "a", shown: "body", uses: 0 });
   });
 
-  test("bodies that drop to an index line are not a reason to demote", () => {
+  test("bodies that drop to an index line are not a reason to make room", () => {
     const { repo, store } = fixture();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 60, contextChars: 1500 } }));
     const body = "word ".repeat(80);
@@ -159,9 +159,9 @@ describe("kb budget", () => {
     expect(b.context.dropped).toBeGreaterThan(0);
     expect(b.index.hidden).toBe(0);
     expect(b.index.lines).toBe(b.context.dropped);
-    expect(b).toMatchObject({ over: false, demote: [] });
+    expect(b).toMatchObject({ over: false, trim: [] });
     const text = kb(store, ["budget"], { cwd: repo }).stdout;
-    expect(text).not.toContain("Demote");
+    expect(text).not.toContain("Trash, merge or shorten first");
     expect(text).toContain("every note reaches a session");
     expect(text).toContain("longest  ");
   });
@@ -179,15 +179,15 @@ describe("kb budget", () => {
     expect(b.over).toBe(true);
     expect(b.index.hidden).toBeGreaterThan(0);
     expect(b.index.lines).toBe(2);
-    const ids = b.demote.map((d: any) => d.id);
+    const ids = b.trim.map((d: any) => d.id);
     expect(ids).toHaveLength(b.index.hidden);
     for (const id of ids) expect(id).toMatch(/^howto-/);
-    expect(b.demote[0].reason).toBe("never used");
+    expect(b.trim[0].reason).toBe("never used");
     expect(b.ask).toEqual([]);
-    expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is full\.\nDemote first: howto-/);
+    expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is full\.\nTrash, merge or shorten first: howto-/);
   });
 
-  test("gotchas and conventions fill the rest of the hidden count as notes to ask about, never as demotions", () => {
+  test("gotchas and conventions fill the rest of the hidden count as notes to ask about, never as notes to trim", () => {
     const { repo, store } = fixture();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 1, contextChars: 1500 } }));
     const body = "word ".repeat(80);
@@ -196,11 +196,11 @@ describe("kb budget", () => {
     putNote(store, { id: "trap", scope: SCOPE, kind: "gotcha", body });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
     expect(b.over).toBe(true);
-    expect(b.demote.map((d: any) => d.id)).toEqual(["howto"]);
+    expect(b.trim.map((d: any) => d.id)).toEqual(["howto"]);
     expect(b.ask).toHaveLength(b.index.hidden - 1);
     for (const d of b.ask) expect(["gotcha", "convention"]).toContain(d.kind);
     const text = kb(store, ["budget"], { cwd: repo }).stdout;
-    expect(text).toContain("Demote first: howto (never used)");
+    expect(text).toContain("Trash, merge or shorten first: howto (never used)");
     expect(text).toMatch(/Then ask the user, because these are rules: (rule-\d|trap) \((convention|gotcha), never used\)/);
   });
 

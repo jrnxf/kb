@@ -370,9 +370,9 @@ function cmdBudget(store: Store, args: Args): Output {
   if (b.demoted.length > 0) lines.push(`demoted  ${count(b.demoted.length)}, in no session: ${b.demoted.join(", ")}`);
   if (b.over) {
     lines.push(`${count(b.index.hidden)} ${b.index.hidden === 1 ? "reaches" : "reach"} no session, because the index is full.`);
-    if (b.demote.length > 0) lines.push(`Demote first: ${b.demote.map((d) => `${d.id} (${d.reason})`).join(", ")}`);
+    if (b.trim.length > 0) lines.push(`Trash, merge or shorten first: ${b.trim.map((d) => `${d.id} (${d.reason})`).join(", ")}`);
     if (b.ask.length > 0) lines.push(`Then ask the user, because these are rules: ${b.ask.map((d) => `${d.id} (${d.kind}, ${d.reason})`).join(", ")}`);
-    if (b.demote.length === 0 && b.ask.length === 0) lines.push("Nothing to demote: only open work is left.");
+    if (b.trim.length === 0 && b.ask.length === 0) lines.push("Nothing to take out: only open work is left.");
   } else lines.push(b.notes.length === 0 ? "no notes load here" : "every note reaches a session, as a body or as an index line");
   return { json: b, text: lines.join("\n") };
 }

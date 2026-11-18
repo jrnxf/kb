@@ -62,7 +62,7 @@ export interface NoteEdit {
 
 // ---- the audit page ----
 
-export type AuditAction = "verify" | "rewrite" | "trash" | "merge" | "demote" | "keep";
+export type AuditAction = "rewrite" | "trash" | "merge" | "keep";
 
 export interface AuditNote {
   id: string;
@@ -71,7 +71,7 @@ export interface AuditNote {
   scope: string;
   body: string;
   uses: number;
-  /** False after a demote: no session lists the note. */
+  /** False when the note was demoted (`kb add` with "indexed": false): no session lists it. */
   indexed: boolean;
   /** What the note takes in a session now: its body, an index line, or nothing. */
   place: "body" | "index" | "hidden";
@@ -93,11 +93,13 @@ export interface AuditCard {
 
 export interface AuditResult {
   at: string;
-  verified: string[];
+  /** Only in results applied before keep took over verify. */
+  verified?: string[];
   rewritten: string[];
   merged: { kept: string; trashed: string[] }[];
   trashed: string[];
-  demoted: string[];
+  /** Only in results applied before demote left the audit. */
+  demoted?: string[];
   /** Demoted notes the user put back in the index. */
   indexed: string[];
   kept: string[];
@@ -129,12 +131,12 @@ export interface AuditPick {
 /** The result as named groups of note ids, in a fixed order. The CLI and the page both print it this way. */
 export function resultGroups(r: AuditResult, arrow = "<-"): [string, string[]][] {
   return [
-    ["verified", r.verified],
+    ["verified", r.verified ?? []],
     ["rewritten", r.rewritten],
     ["merged", r.merged.map((m) => `${m.kept} ${arrow} ${m.trashed.join(", ")}`)],
     ["trashed", r.trashed],
-    ["demoted", r.demoted],
+    ["demoted", r.demoted ?? []],
     ["put back in the index", r.indexed ?? []],
-    ["kept", r.kept],
+    ["kept as is", r.kept],
   ];
 }

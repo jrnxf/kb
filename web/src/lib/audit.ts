@@ -2,8 +2,11 @@
 
 import type { AuditCard, AuditData, AuditNote, AuditPick } from "../../../cli/wire.ts";
 
-/** What the user can pick on a card. keep changes nothing. ask sends the note back to the agent. index takes back a demotion. */
-export type Choice = "verify" | "rewrite" | "ask" | "edit" | "trash" | "merge" | "demote" | "index" | "keep";
+/**
+ * What the user can pick on a card. keep says the note is still true and records the check. ask
+ * sends the note back to the agent. edit opens the user's own text. index takes back a demotion.
+ */
+export type Choice = "rewrite" | "ask" | "edit" | "trash" | "merge" | "index" | "keep";
 
 export interface Pick {
   action: Exclude<Choice, "edit">;
@@ -17,7 +20,10 @@ export interface Pick {
 /** One step of the deck: a card, or a divider before a group of cards. */
 export type Step = { type: "card"; card: AuditCard; i: number } | { type: "divider"; group: string; cards: number[] };
 
-export const KEYS: Record<Choice, string> = { verify: "v", rewrite: "r", ask: "r", edit: "e", trash: "t", merge: "m", demote: "d", index: "i", keep: "k" };
+export const KEYS: Record<Choice, string> = { rewrite: "u", ask: "r", edit: "e", trash: "t", merge: "m", index: "i", keep: "k" };
+
+/** The key that takes the agent's pick, whatever it is. */
+export const ACCEPT_KEY = "a";
 
 /** The steps in order: cards with no group first, then each group after its divider, in the order the agent gave. */
 export function steps(cards: AuditCard[]): Step[] {
@@ -28,15 +34,22 @@ export function steps(cards: AuditCard[]): Step[] {
   return [...loose.map(card), ...[...groups].flatMap(([group, ids]): Step[] => [{ type: "divider", group, cards: ids }, ...ids.map(card)])];
 }
 
-/** The choices of a card, in the order of its keys. */
-export function choices(card: AuditCard, over: boolean): Choice[] {
-  if (card.merge) return ["merge", "edit", "keep"];
-  // A demoted note can go back in the index. A note in it can be demoted only while notes reach no
-  // session: each note out of the index gives one of them its line. Open work leaves the index when
-  // it is done, so it is never demoted.
-  const index: Choice[] = card.note.indexed ? (card.action === "demote" || (over && card.note.kind !== "open-work") ? ["demote"] : []) : ["index"];
-  if (card.proposed) return ["verify", "rewrite", "edit", "trash", ...index, "keep"];
-  return ["verify", "ask", "edit", "trash", ...index, "keep"];
+/**
+ * The buttons of a card. The agent's pick comes first, as accept. Then the other picks, each once.
+ * A demoted note can go back in the index.
+ */
+export function choices(card: AuditCard): Choice[] {
+  const all: Choice[] = card.merge ? ["merge", "keep"] : [...(card.proposed ? (["rewrite"] as Choice[]) : []), "keep", "trash", ...(card.note.indexed ? [] : (["index"] as Choice[]))];
+  return [card.action, ...all.filter((c) => c !== card.action)];
+}
+
+/** The picks that change the text. They sit on the text box, not in the row of buttons. */
+export const textChoices = (card: AuditCard): Choice[] => (card.merge ? ["edit"] : ["edit", "ask"]);
+
+/** The choice a key takes on a card, if any. */
+export function choiceForKey(card: AuditCard, key: string): Choice | undefined {
+  if (key === ACCEPT_KEY) return card.action;
+  return [...choices(card), ...textChoices(card)].find((c) => KEYS[c] === key);
 }
 
 export const agentPick = (card: AuditCard): Pick => ({ action: card.action });
@@ -51,7 +64,7 @@ const placed = (note: AuditNote) => note.indexed && note.place !== "hidden";
 export function freed(cards: AuditCard[], picks: Pick[]): number {
   return cards.reduce((n, card, i) => {
     const pick = picks[i]!;
-    if (pick.action === "trash" || pick.action === "demote") return n + (placed(card.note) ? 1 : 0);
+    if (pick.action === "trash") return n + (placed(card.note) ? 1 : 0);
     if (pick.action === "merge") return n + (card.merge ?? []).filter(placed).length;
     if (pick.action === "index") return n - 1;
     return n;
@@ -73,7 +86,7 @@ export function pickLabel(card: AuditCard, pick: Pick): string {
     case "index":
       return "put back in the index";
     case "keep":
-      return card.merge ? "keep both" : "keep";
+      return card.merge ? "keep both" : "keep as is";
     default:
       return pick.action;
   }
@@ -82,10 +95,10 @@ export function pickLabel(card: AuditCard, pick: Pick): string {
 /** The label of a choice's button. */
 export function choiceLabel(card: AuditCard, choice: Choice): string {
   if (choice === "rewrite") return "use new text";
-  if (choice === "ask") return "ask for rewrite";
-  if (choice === "edit") return "edit text";
-  if (choice === "index") return "put back";
-  if (choice === "keep" && card.merge) return "keep both";
+  if (choice === "ask") return "ask the agent";
+  if (choice === "edit") return "edit";
+  if (choice === "index") return "put back in the index";
+  if (choice === "keep") return card.merge ? "keep both" : "keep as is";
   return choice;
 }
 
@@ -104,7 +117,7 @@ export function toPicks(cards: AuditCard[], picks: Pick[]): AuditPick[] {
 /** The summary before Apply: each pick with the cards that have it, in a fixed order. */
 export function summary(cards: AuditCard[], picks: Pick[]): { label: string; action: Pick["action"]; ids: string[] }[] {
   const groups = new Map<string, { label: string; action: Pick["action"]; ids: string[] }>();
-  const order = ["verify", "rewrite", "merge", "ask", "trash", "demote", "index", "keep"];
+  const order = ["rewrite", "merge", "ask", "trash", "index", "keep"];
   cards.forEach((card, i) => {
     const pick = picks[i]!;
     const label = pick.action === "ask" ? "sent back to the agent to rewrite" : pickLabel(card, pick);
