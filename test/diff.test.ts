@@ -40,4 +40,8 @@ describe("the audit card's word diff", () => {
     expect(text("a\n\nb", "a\n\nNEW\n\nb")).toEqual(["a", "", "NEW", "", "b"]);
     expect(text("a\n\nOLD\n\nb", "a\n\nb")).toEqual(["a", "", "OLD", "", "b"]);
   });
+
+  test("joins two changed words with only a space between them into one change", () => {
+    expect(show("a proposal kept per machine", "a proposal kept on each machine")).toBe("a proposal kept [-per -]{+on each +}machine");
+  });
 });

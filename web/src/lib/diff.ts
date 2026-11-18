@@ -1,96 +1,39 @@
 // A word diff for the audit card: it marks only the words the proposal changes, so a one-character
 // fix does not hide inside two whole copies of the note.
 
+import { diffWordsWithSpace } from "diff";
+
 export type Op = "=" | "-" | "+";
 export type Piece = { op: Op; text: string };
 /** One line of the merged text. `whole` is set when every word on the line is removed, or every word is new. */
 export type Line = { pieces: Piece[]; whole?: "-" | "+" };
 
-/** Above this many token pairs, the card shows the whole text as replaced instead of running the table. */
-const MAX_CELLS = 4_000_000;
-
-/** Words, runs of spaces, line breaks, and each punctuation mark on its own, so `;` to `.` marks only the mark. */
-function tokens(text: string): string[] {
-  return text.match(/\n|[^\S\n]+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu) ?? [];
-}
-
-const isWord = (token: string) => /[\p{L}\p{N}_]/u.test(token);
-
-/** The longest common subsequence of two token lists, as a list of ops. */
-function lcs(a: string[], b: string[]): Piece[] {
-  const n = a.length;
-  const m = b.length;
-  if (n * m > MAX_CELLS) return [...a.map((text) => ({ op: "-" as const, text })), ...b.map((text) => ({ op: "+" as const, text }))];
-  const w = m + 1;
-  const table = new Uint32Array((n + 1) * w);
-  for (let i = n - 1; i >= 0; i--)
-    for (let j = m - 1; j >= 0; j--)
-      table[i * w + j] = a[i] === b[j] ? table[(i + 1) * w + j + 1]! + 1 : Math.max(table[(i + 1) * w + j]!, table[i * w + j + 1]!);
-  const out: Piece[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) out.push({ op: "=", text: a[i++]! }), j++;
-    else if (table[(i + 1) * w + j]! >= table[i * w + j + 1]!) out.push({ op: "-", text: a[i++]! });
-    else out.push({ op: "+", text: b[j++]! });
-  }
-  while (i < n) out.push({ op: "-", text: a[i++]! });
-  while (j < m) out.push({ op: "+", text: b[j++]! });
-  return out;
-}
-
 /**
- * Diffs two texts by word. A shared run with no word in it (a space, a comma) that sits between two
- * changes joins the change, so a reworded phrase reads as one removed run and one new run, not a comb.
+ * Diffs two texts by word with jsdiff. A shared run of spaces between two changes joins them, so a
+ * reworded phrase reads as one removed run and one new run, not a comb of single words.
  */
 export function wordDiff(before: string, after: string): Piece[] {
-  const a = tokens(before);
-  const b = tokens(after);
-  let start = 0;
-  while (start < a.length && start < b.length && a[start] === b[start]) start++;
-  let end = 0;
-  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
-  const raw = [
-    ...a.slice(0, start).map((text) => ({ op: "=" as const, text })),
-    ...lcs(a.slice(start, a.length - end), b.slice(start, b.length - end)),
-    ...a.slice(a.length - end).map((text) => ({ op: "=" as const, text })),
-  ];
-
-  // Group into runs: a shared run, or a change made of its removed and its new tokens.
-  type Run = { same: string } | { del: string; ins: string };
-  const runs: Run[] = [];
-  for (const { op, text } of raw) {
+  const runs: { same?: string; del: string; ins: string }[] = [];
+  for (const change of diffWordsWithSpace(before, after)) {
     const last = runs.at(-1);
-    if (op === "=") {
-      if (last && "same" in last) last.same += text;
-      else runs.push({ same: text });
-    } else {
-      const change = last && "del" in last ? last : (runs.push({ del: "", ins: "" }), runs.at(-1) as { del: string; ins: string });
-      if (op === "-") change.del += text;
-      else change.ins += text;
+    if (!change.added && !change.removed) runs.push({ same: change.value, del: "", ins: "" });
+    else {
+      const run = last && last.same === undefined ? last : (runs.push({ del: "", ins: "" }), runs.at(-1)!);
+      if (change.removed) run.del += change.value;
+      else run.ins += change.value;
     }
   }
-  // Fold a wordless shared run between two changes into the change around it.
   for (let k = 1; k < runs.length - 1; k++) {
-    const run = runs[k]!;
-    const prev = runs[k - 1]!;
-    const next = runs[k + 1]!;
-    if ("same" in run && !run.same.includes("\n") && !tokens(run.same).some(isWord) && "del" in prev && "del" in next) {
+    const [prev, run, next] = [runs[k - 1]!, runs[k]!, runs[k + 1]!];
+    if (run.same !== undefined && /^[^\S\n]+$/.test(run.same) && prev.same === undefined && next.same === undefined) {
       prev.del += run.same + next.del;
       prev.ins += run.same + next.ins;
-      runs.splice(k, 2);
-      k--;
+      runs.splice(k--, 2);
     }
   }
-  const out: Piece[] = [];
-  for (const run of runs) {
-    if ("same" in run) out.push({ op: "=", text: run.same });
-    else {
-      if (run.del) out.push({ op: "-", text: run.del });
-      if (run.ins) out.push({ op: "+", text: run.ins });
-    }
-  }
-  return out;
+  return runs.flatMap((run): Piece[] =>
+    run.same !== undefined ? [{ op: "=", text: run.same }] : [...(run.del ? [{ op: "-" as const, text: run.del }] : []), ...(run.ins ? [{ op: "+" as const, text: run.ins }] : [])],
+  );
 }
 
 /** Splits a diff at its line breaks, and marks lines that are wholly removed or wholly new. */
