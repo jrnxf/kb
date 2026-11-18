@@ -20,12 +20,14 @@ interface Props {
   theme: Theme;
   onTheme: () => void;
   onKeys: () => void;
+  /** Scopes with an audit that waits for the user's picks. */
+  audits?: string[];
 }
 
 const THEME_ICON = { system: MonitorIcon, light: SunIcon, dark: MoonIcon };
 
 /** The sidebar: scopes, kinds and the trash. On a phone the scopes and the kinds are two rows that scroll sideways. */
-export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, onKeys }: Props) {
+export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, onKeys, audits = [] }: Props) {
   const ThemeIcon = THEME_ICON[theme];
   const scopes = items.filter((i) => i.type === "scope");
   const rest = items.filter((i) => i.type !== "scope");
@@ -79,6 +81,23 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
             {repos.length > 0 && sep}
             {repos.map(item)}
           </div>
+          {audits.length > 0 && (
+            <div className={strip}>
+              {heading("Audits")}
+              {audits.map((scope) => (
+                <a
+                  key={scope}
+                  href={`#audit=${encodeURIComponent(scope)}`}
+                  data-audit={scope}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-[13.5px] text-muted-foreground hover:bg-muted hover:text-foreground max-wide:w-auto max-wide:flex-none max-wide:rounded-full max-wide:border max-wide:px-3"
+                >
+                  <span className="size-[7px] flex-none rounded-full bg-(--link)" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate">{scope === "global" ? "global" : scopeName(scope)}</span>
+                  <span className="text-xs text-faint">to decide</span>
+                </a>
+              ))}
+            </div>
+          )}
           <div className={strip}>
             {heading("Kinds")}
             {kinds.map(item)}

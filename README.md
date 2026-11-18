@@ -39,8 +39,11 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 - **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: an
   anchored file changed since the note was verified, an anchor is gone, the verified commit left
   the history, nobody verified the note for `decayDays` (180), or two titles are close.
-  `/kb:audit` reads the code for each candidate, checks both budgets, proposes verify, rewrite,
-  merge, shorten, demote, trash or delete, and applies what you accept. `kb budget` asks for a
+  `/kb:audit` reads the code for each candidate, checks both budgets, and proposes verify, rewrite,
+  merge, shorten, demote or trash with `kb audit propose`. You decide in the `kb serve` page, one
+  card per note: each card shows the note, the new text struck against the old, and the agent's
+  pick. A key takes a pick, a meter counts the notes that still reach no session, and Apply makes
+  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit`. `kb budget` asks for a
   demotion only when the index is full and a note reaches no session. A body that became an
   index line is the normal state. It names decisions and how-tos to demote, and leaves gotchas and
   conventions for you to name, because a rule that works leaves no use count. It also lists the
@@ -77,6 +80,7 @@ kb trash|restore|delete|empty-trash --scope <repo id>   a whole project
 kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]         kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run]
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
+kb audit propose             kb audit   (the open audit, or what its Apply did)
 kb sync                      kb checkpointed <session-id>
 ```
 

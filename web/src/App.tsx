@@ -14,7 +14,7 @@ import { MAC, PHONE, useMedia } from "@/hooks/use-media";
 import { useTheme } from "@/hooks/use-theme";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { fromHash, neighbour, scopeName, scopesOf, show, toHash, type View } from "@/lib/view";
+import { auditScope, fromHash, neighbour, scopeName, scopesOf, show, toHash, type View } from "@/lib/view";
 
 /** The longest the drawer takes to close. */
 const CLOSE_MS = 450;
@@ -95,7 +95,8 @@ export function App() {
 
   // The address keeps the view, so a reload comes back to the same place.
   useEffect(() => {
-    if (!data) return;
+    // A link to an audit changes the address before the page swaps to it: leave that address alone.
+    if (!data || auditScope()) return;
     history.replaceState(history.state, "", toHash({ ...view, note: current?.id ?? null, read: reading }));
   }, [data, view, current?.id, reading]);
 
@@ -181,7 +182,7 @@ export function App() {
   }
   useEffect(() => {
     const pop = () => {
-      if (!history.state?.reading) closeNote();
+      if (!history.state?.reading && !auditScope()) closeNote();
     };
     addEventListener("popstate", pop);
     return () => removeEventListener("popstate", pop);
@@ -552,6 +553,7 @@ export function App() {
             theme={theme}
             onTheme={nextTheme}
             onKeys={() => setHelp(true)}
+            audits={data.audits}
           />
           <NoteList notes={shown.notes} current={current} q={view.q} onQ={(q) => setView((v) => ({ ...v, q }))} searchRef={search} onOpen={pickRow} empty={empty} trash={shown.trash ? { days: data.trashDays, onEmpty: askEmpty } : undefined}
             project={!shown.trash && view.scope && view.scope !== "global" ? { onTrash: () => askTrashProject(view.scope!) } : undefined}

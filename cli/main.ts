@@ -3,11 +3,13 @@
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { proposeAudit, readAudit } from "./audit.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { searchNotes } from "./search.ts";
-import { DEFAULT_PORT, isKbServer, serve } from "./serve.ts";
+import { DEFAULT_PORT, isKbServer, runningPort, serve } from "./serve.ts";
+import { resultGroups } from "./wire.ts";
 import { markSaved } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
@@ -36,6 +38,9 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb stale [--repo .]                    notes that may no longer be true, each with a reason
   kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
   kb budget [--repo .]                   what a session loads, and what reaches no session
+  kb audit propose [--repo .]            save /kb:audit's proposal from JSON on stdin, for the page
+  kb audit [--repo .]                    where the audit of this repo stands, and the notes the user
+                                         sent back for a rewrite
   kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run] [--repo .]
                                          append a note to the repo's own file
   kb checkpointed <session-id>           record that this session saved its knowledge
@@ -439,6 +444,42 @@ Press Ctrl+C to stop.`);
   return new Promise<never>(() => {});
 }
 
+/**
+ * `kb audit propose` saves the agent's proposal for the page. `kb audit` says where the audit of
+ * this repo stands: none, waiting for the user's picks, or applied, with the notes sent back.
+ */
+async function cmdAudit(store: Store, args: Args, stdin: () => Promise<string>): Promise<Output> {
+  const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
+  const scope = repo.scope ?? "global";
+  const sub = args.positional[0];
+  if (sub !== undefined && sub !== "propose") throw new KbError("usage: kb audit [propose] [--repo .]");
+  // The link goes to the server that is running: the port kb serve recorded, or the default.
+  const port = (await runningPort(store)) ?? DEFAULT_PORT;
+  const url = `http://127.0.0.1:${port}/#audit=${encodeURIComponent(scope)}`;
+  if (sub === "propose") {
+    let input: unknown;
+    try {
+      input = JSON.parse(await stdin());
+    } catch {
+      throw new KbError('kb audit propose reads {"items": [...]} on stdin');
+    }
+    store.ensure();
+    const audit = proposeAudit(store, input, repo);
+    const served = await isKbServer(port);
+    return {
+      json: { scope, cards: audit.items.length, url, served },
+      text: `saved ${audit.items.length} cards for ${scope}\n${served ? `open ${url}` : `kb serve is not running. Start it with \`kb serve\`, then open ${url}`}`,
+    };
+  }
+  const audit = readAudit(store, scope);
+  if (!audit) return { json: { scope, status: "none" }, text: `no audit for ${scope}` };
+  if (!audit.result) return { json: { scope, status: "open", cards: audit.items.length, created: audit.created, url }, text: `the audit of ${scope} waits for the user's picks: ${url}` };
+  const r = audit.result;
+  const lines = [`the audit of ${scope} was applied at ${r.at}`, ...resultGroups(r).filter(([, ids]) => ids.length).map(([name, ids]) => `${name}: ${ids.join(", ")}`)];
+  if (r.requests.length) lines.push("sent back for a rewrite:", ...r.requests.map((q) => `  ${q.id}: ${q.request}`));
+  return { json: { scope, status: "applied", ...r }, text: lines.join("\n") };
+}
+
 function cmdSync(store: Store): Output {
   const result = syncNow(store);
   return { json: result, text: `${result.status}: ${result.detail}` };
@@ -485,6 +526,7 @@ async function main(): Promise<number> {
       case "promote": out = cmdPromote(store, args); break;
       case "checkpointed": out = cmdCheckpointed(store, args); break;
       case "serve": out = await cmdServe(store, args, json); break;
+      case "audit": out = await cmdAudit(store, args, () => Bun.stdin.text()); break;
       case "sync": out = cmdSync(store); break;
       default: throw new KbError(`unknown command "${command}". Run \`kb help\`.`);
     }

@@ -125,3 +125,6 @@ export function day(iso: string, now = new Date()): string {
   const text = `${date.getDate()} ${MONTHS[date.getMonth()]}`;
   return date.getFullYear() === now.getFullYear() ? text : `${text} ${date.getFullYear()}`;
 }
+
+/** The scope of the audit page in the address (#audit=<scope>), or null on the notes. */
+export const auditScope = (hash = location.hash) => new URLSearchParams(hash.replace(/^#/, "")).get("audit");
