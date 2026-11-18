@@ -1,5 +1,6 @@
 // The data behind the page that `kb serve` shows. The page itself is a React app in web/.
 
+import { openAudits } from "./audit.ts";
 import { rank } from "./context.ts";
 import { KINDS, byTrashedAt } from "./note.ts";
 import type { Store, StoredNote } from "./store.ts";
@@ -53,5 +54,5 @@ export function pageData(store: Store, token: string): PageData {
       last_used: used?.last_used,
     };
   });
-  return { version: storeVersion(store), token, kinds: [...KINDS], trashDays: days, notes };
+  return { version: storeVersion(store), token, kinds: [...KINDS], trashDays: days, notes, audits: openAudits(store) };
 }

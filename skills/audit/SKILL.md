@@ -1,6 +1,6 @@
 ---
 name: audit
-description: Check the kb notes of this repo for stale, duplicate and over-budget entries, propose changes, and apply the ones the user accepts. Run only when the user types /kb:audit.
+description: Check the kb notes of this repo for stale, duplicate and over-budget entries, propose changes, and hand them to the user in the kb serve page. Run only when the user types /kb:audit.
 disable-model-invocation: true
 allowed-tools: Bash(kb *)
 model: opus
@@ -9,7 +9,7 @@ effort: medium
 
 # kb audit
 
-Keep the store true and small. You propose changes. The user accepts them. Then you apply them.
+Keep the store true and small. You propose changes. The user picks in the page, and the page applies them.
 `kb` is on PATH. Run every `kb` command from the session's project directory, so scope and commit resolve.
 
 ## 1. Collect
@@ -42,7 +42,6 @@ Read the note with `kb show <id>`. For an anchor reason, read the anchored code 
 | verify | The note is still true as written. |
 | rewrite | The fact drifted. The note needs a new body, title or anchors. |
 | trash | The fact is obsolete, the work is done, or the user no longer needs the note. `kb restore` brings it back. The trash deletes it after 30 days. |
-| delete | The user asks for a note to be gone now. There is no undo in kb. Never choose this yourself. |
 | merge | Two or more notes cover one idea. One note keeps everything, the others go to the trash. |
 | shorten | The note is true but long. Cut it to the fact, the reason and how to apply it. |
 | demote | The note is true but rarely used, and `over` is true. No session loads it again. It stays searchable. |
@@ -53,34 +52,43 @@ Rules:
 - Do not verify a note you did not check against the code or a source. For a `global` note with no anchor, verify only when you know the fact still holds. If you cannot tell, propose `keep` and say what is unknown.
 - Demote only when `over` is true, and at most as many notes as `demote` lists. Prefer merge, trash and shorten before demote. Never demote `open-work`.
 - A demoted note leaves every session without a trace there. So never demote a `gotcha` or a `convention` because it has no uses: a rule that works leaves no use count. Demote one only when the user names it.
-- For each note you propose to demote, write "or trash" in the why column. The user then picks demote or trash for the row in the same answer.
-- If `ask` has ids, list them below the table with their kind. The user can name any of them to demote or trash.
-- If `demoted` has ids, list them below the table. The user can take one back, or trash it.
-- When the user says delete, remove or get rid of, use `delete`. When the user says no longer needed, use `trash`. If you cannot tell, ask.
-- For a rewrite, a merge or a shorten, write the new text now, so the user sees it before they accept.
+- For each note you propose to demote, write "or trash" in the why. The user picks demote or trash on the card.
+- For a rewrite, a merge or a shorten, write the new text now, so the user sees it on the card.
 
-## 3. Propose, then wait
+## 3. Propose in the page, then stop
 
-Show one table, and below it the new text of every rewritten, merged or shortened note:
+The user decides in the `kb serve` page, one card per note. Write the proposal as JSON, one item per candidate:
 
+```bash
+kb audit propose <<'KB_AUDIT'
+{ "items": [
+  { "id": "<id>", "action": "verify", "why": "<one line>", "reason": "anchor-changed" },
+  { "id": "<id>", "action": "rewrite", "why": "<one line>", "body": "<new body>" },
+  { "id": "<id>", "action": "merge", "why": "<one line>", "merge": ["<other id>"], "body": "<merged body>" },
+  { "id": "<id>", "action": "demote", "why": "Rarely used. Or trash it.", "reason": "0 uses" },
+  { "id": "<id>", "action": "keep", "why": "A rule. Only you can demote or trash it.", "group": "conventions that reach no session" }
+] }
+KB_AUDIT
 ```
-| # | note | reason | action | why |
-|---|------|--------|--------|-----|
-| 1 | <id> | anchor-changed | rewrite | <one line> |
-```
 
-Then ask the user which rows to apply: all, none, or a list of row numbers. For a demote row, the user can answer "trash" instead, for example "all, but trash 8 and 9". Stop and wait for the answer. Apply nothing before it.
+- `action` is one of verify, rewrite, trash, merge, demote and keep. A shorten is a rewrite.
+- A rewrite needs the new `title` or `body`, or both. A merge needs `merge`, the notes that go to the trash. The note `id` keeps every fact, so give it the merged text.
+- `reason` is what `kb stale` or `kb budget` said. `why` is one line from you.
+- Put the `ask` ids and the `demoted` ids in the items too, as `keep`, with a `group`. Cards with the same group sit together after a divider, and the user can keep the whole group with one key.
+- What each card offers:
+  - Every card but a merge offers trash.
+  - A note in the index offers demote while notes reach no session. Open work never does.
+  - A demoted note offers to put it back in the index.
+  - A merge card offers merge, edit and keep both.
+- Never propose delete. When the user asks for a note to be gone now, run `kb delete <id>` yourself, outside the audit.
 
-## 4. Apply the accepted rows
+`kb audit propose` prints the page link. If it says kb serve is not running, start `kb serve` in the background. Give the user the link, and stop. Apply nothing yourself: the page applies the picks in one commit.
 
-- verify: `kb verify <id>...`
-- rewrite, shorten: `kb add --json` with `"id"` and the fields that change. This also records the note as verified.
-- merge: update the note that stays, with `"supersedes": ["<other id>", ...]`, then `kb trash <other id>...`
-- trash: `kb trash <id>...`
-- delete: `kb delete <id>...`
-- demote: `kb add --json` with `{"id": "<id>", "indexed": false}`. To take a demotion back: `{"id": "<id>", "indexed": true}`
+## 4. After the user applies
 
-Use a quoted heredoc for JSON, so the shell changes nothing:
+When the user says it is applied, run `kb audit`. It lists what the page did, and the notes the user sent back with what is wrong with each.
+
+For each note sent back, read it and the code again, and rewrite it with `kb add --json`:
 
 ```bash
 kb add --json <<'KB_NOTE'
@@ -99,12 +107,11 @@ verified: <ids>
 rewritten: <ids>
 merged: <kept id> <- <trashed ids>
 trashed: <ids>
-deleted: <ids>
 demoted: <ids>
-declined: <row numbers>
+kept: <count>
 budget: <chars> of <budget> characters, <bodies> bodies, <lines> notes in the index only, <hidden> in no session
 ```
 
-The budget line takes `context.chars`, `context.budget`, `context.bodies`, `index.lines` and `index.hidden` from `kb budget --json`.
+The rewritten line includes the notes you rewrote in step 4. The budget line takes `context.chars`, `context.budget`, `context.bodies`, `index.lines` and `index.hidden` from `kb budget --json`.
 
 Leave out an empty group.

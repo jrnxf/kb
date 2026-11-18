@@ -3,10 +3,12 @@
 // the store from /api/page.
 
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
+import { applyAudit, auditData } from "./audit.ts";
 import { pageData, storeVersion } from "./page.ts";
 import { KbError } from "./note.ts";
-import type { Store } from "./store.ts";
+import { type Store, writeAtomic } from "./store.ts";
 import { deleteNotes, emptyTrash, moveNotes, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 export const DEFAULT_PORT = 4810;
@@ -64,6 +66,16 @@ async function handle(store: Store, token: string, port: number, request: Reques
     return json(pageData(store, token));
   }
   if ((request.method === "GET" || request.method === "HEAD") && !url.pathname.startsWith("/api/")) return staticFile(url.pathname);
+
+  // An audit: the agent's proposal as cards, and Apply, which makes the user's picks.
+  if (request.method === "GET" && url.pathname === "/api/audit") return json(auditData(store, url.searchParams.get("scope") ?? "", token));
+  if (url.pathname === "/api/audit/apply") {
+    if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
+    if (request.method !== "POST") return json({ error: "not found" }, 404);
+    const input = await body(request);
+    if (typeof input?.scope !== "string") throw new KbError("scope: must be a repo id");
+    return json(applyAudit(store, input.scope, input));
+  }
 
   if (url.pathname === "/api/trash/empty") {
     if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
@@ -161,10 +173,29 @@ export function serve(store: Store, options: { port?: number } = {}): Served {
       }
     },
   });
+  // `kb audit` reads this to link to the server that is up, also one started with --port.
+  try {
+    if (store.exists()) writeAtomic(store.statePath(SERVE_FILE), `${JSON.stringify({ port: server.port })}\n`);
+  } catch {
+    // the link falls back to the default port
+  }
   return { url: `http://127.0.0.1:${server.port}/`, port: server.port!, token, stop: () => {
     clearInterval(timer);
     server.stop(true);
   } };
+}
+
+const SERVE_FILE = "serve.json";
+
+/** The port of the kb server that is up now, from what the last `kb serve` recorded. */
+export async function runningPort(store: Store): Promise<number | undefined> {
+  try {
+    const { port } = JSON.parse(readFileSync(store.statePath(SERVE_FILE), "utf8")) as { port?: unknown };
+    if (typeof port === "number" && (await isKbServer(port))) return port;
+  } catch {
+    // no record
+  }
+  return undefined;
 }
 
 /** True when a kb server already answers on this port. */
