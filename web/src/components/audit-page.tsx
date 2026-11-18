@@ -433,8 +433,13 @@ function Card({ card, pick, seen, mode, keys, onCancel, onSave }: { card: AuditC
         </div>
       )}
 
-      <div className="mt-3.5 rounded-lg bg-muted px-3.5 py-2.5 text-[13.5px]">
-        <b className="font-semibold">The agent suggests {card.action}:</b> {card.why}
+      <div className={cn("mt-3.5 rounded-lg bg-muted px-3.5 py-3 text-[13.5px]", `a-${card.action}`)} data-recommendation>
+        <div className="flex items-center gap-2">
+          <span className="size-2 flex-none rounded-[2px] bg-(--a)" aria-hidden />
+          <span className="text-muted-foreground">The agent suggests</span>
+          <b className="font-semibold">{card.action}</b>
+        </div>
+        <p className="mt-1.5 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{card.why}</p>
       </div>
       <div className="mt-3 text-[13px] text-muted-foreground" data-pick-line>
         {seen ? "Your pick" : "Picked now"}: <b className={cn("font-semibold text-foreground")}>{pickLabel(card, pick)}</b>
