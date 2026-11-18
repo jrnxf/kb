@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // A static site: no Worker code, only the files in dist/.
+  "name": "kb-site",
+  "compatibility_date": "2026-11-01",
+  "assets": { "directory": "./dist" },
+  "routes": [{ "pattern": "kb.jrnxf.co", "custom_domain": true }],
+  "observability": { "enabled": true }
+}
