@@ -26,7 +26,8 @@ highest.
 - **Notes load by path.** When the agent reads a file, a hook names the repo notes whose anchors
   name that file or a folder above it: the id, the kind and the title, at most five at a time. So
   a note reaches the agent when it works on the file, also when the note has no place in the
-  index. Each note comes once per session, and again after a compaction. A file the agent gets
+  index. Each note comes once per session, and again after a compaction or a `/clear`. A subagent
+  has its own context, so it gets the notes too. A file the agent gets
   with `@` is not a Read, so it names no notes.
 - **Context stays small.** Budgets in `kb.config.json`: `indexLines` (60), `globalIndexLines`
   (20) and `contextChars` (8000, clamped under the 10,000 character hook cap, with the save rule
