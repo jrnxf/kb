@@ -1,13 +1,14 @@
 // An audit: the changes /kb:audit proposes for the notes of one scope, and the picks the user makes
-// in the page. A repo audit covers the repo's notes. A global audit, run outside any repo, covers
-// the global notes, and can move a global rule into the global instructions file. The agent writes the proposal with `kb audit propose`. The page shows one card per
+// in the page. A repo audit covers the repo's notes, and can move a rule into the repo's CLAUDE.md
+// or AGENTS.md. A global audit, run outside any repo, covers the global notes, and can move a global
+// rule into the global instructions file. The agent writes the proposal with `kb audit propose`. The page shows one card per
 // note, and Apply makes every pick in one commit. A note the user sends back for a rewrite waits in
 // the audit file for the agent's next run.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { budgetOf } from "./context.ts";
-import { type InstructionsFile, checkWritable, fileName, globalInstructions, hasRule, insertRule, readInstructions, shortPath, writeInstructions } from "./instructions.ts";
+import { type InstructionsFile, checkWritable, fileName, instructionsFor, hasRule, insertRule, readInstructions, shortPath, writeInstructions } from "./instructions.ts";
 import { KbError, type Note, validateNote } from "./note.ts";
 import type { RepoInfo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
@@ -37,7 +38,7 @@ export interface AuditItem {
   body?: string;
   /** For a merge: the notes that go to the trash. The note `id` keeps every fact. For a promote: the notes whose rule the text holds too, so they move with it. */
   merge?: string[];
-  /** For a promote: the text to add to the global instructions file. */
+  /** For a promote: the text to add to the instruction file of the audit's scope. */
   rule?: string;
   /** For a promote: the heading to add it under. */
   section?: string;
@@ -131,7 +132,6 @@ export function proposeAudit(store: Store, input: unknown, repo: RepoInfo): Audi
     check(note, "");
     const action = item.action as AuditAction;
     if (!ACTIONS.includes(action)) throw new KbError(`items[${i}].action: must be one of ${ACTIONS.join(", ")}`);
-    if (action === "promote" && scope !== "global") throw new KbError(`items[${i}]: only the global audit moves a rule to an instruction file`);
     const why = text(item.why, "why", i);
     if (!why) throw new KbError(`items[${i}].why: required`);
     if (why.length > WHY_MAX) throw new KbError(`items[${i}].why: ${why.length} characters, at most ${WHY_MAX}. Say only the evidence for the pick.`);
@@ -206,7 +206,7 @@ export function auditData(store: Store, scope: string, token: string): AuditData
   let file: InstructionsFile | undefined;
   const promoting = items.filter((item) => item.action === "promote");
   if (promoting.length > 0) {
-    file = globalInstructions(store);
+    file = instructionsFor(store, audit.scope);
     let content = readInstructions(file);
     for (const item of promoting) {
       const { content: after, above, added } = insertRule(content, item.rule!, item.section);
@@ -219,6 +219,7 @@ export function auditData(store: Store, scope: string, token: string): AuditData
     file: file!.name,
     path: shortPath(file!.path),
     link: file!.link,
+    ...(file!.create ? { create: true } : {}),
     ...(item.section ? { section: item.section } : {}),
     ...previews.get(item.id)!,
     rule: item.rule!,
@@ -274,9 +275,9 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
     }
   };
 
-  // The global instructions file, resolved when the first promote pick needs it.
-  let target: ReturnType<typeof globalInstructions> | undefined;
-  const promotedTo = () => fileName((target ??= globalInstructions(store)));
+  // The instruction file of the scope, resolved when the first promote pick needs it.
+  let target: InstructionsFile | undefined;
+  const promotedTo = () => fileName((target ??= instructionsFor(store, audit.scope)));
 
   const plan = (picks as AuditPick[]).map((pick, i) => {
     if (pick === null || typeof pick !== "object" || typeof pick.id !== "string") throw new KbError(`picks[${i}]: needs an id`);

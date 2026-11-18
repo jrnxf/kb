@@ -51,7 +51,6 @@ describe("kb audit propose", () => {
     [{ items: [{ id: "nope", action: "keep", why: "x" }] }, 'no active note "nope"'],
     [{ items: [{ id: "other", action: "keep", why: "x" }] }, "belongs to example.com/team/other"],
     [{ items: [{ id: "g", action: "keep", why: "x" }] }, "belongs to global. Run the global audit outside any repo"],
-    [{ items: [{ id: "v", action: "promote", why: "x", rule: "a rule" }] }, "only the global audit moves a rule"],
     [{ items: [{ id: "v", action: "archive", why: "x" }] }, "action: must be one of"],
     [{ items: [{ id: "v", action: "trash", checked: true, why: "x" }] }, "checked: only a keep has it"],
     [{ items: [{ id: "v", action: "keep", checked: "yes", why: "x" }] }, "checked: must be true or false"],
@@ -303,6 +302,54 @@ describe("the global audit", () => {
     expect(applyAudit(store, "global", { picks: [{ id: "g2", action: "trash" }] }).trashed).toEqual(["g2", "g3"]);
     expect([store.find("g2")!.trashed_at, store.find("g3")!.trashed_at]).toEqual([expect.any(String), expect.any(String)]);
     expect(readFileSync(real, "utf8")).toBe(RULES);
+  });
+});
+
+describe("a repo audit moves a rule to the repo's own file", () => {
+  const MOVE = { id: "v", action: "promote", why: "a rule for anyone in this repo", rule: "- Run the build before you commit.", section: "Build", merge: ["keepme"] };
+
+  /** A store with a proposal to move v and keepme, and a checkout that kb knows. */
+  function repoSetup(files: (root: string) => void = () => {}) {
+    const store = setup();
+    const root = tempDir();
+    files(root);
+    rememberRepo(store, SCOPE, root);
+    proposeAudit(store, { items: [MOVE] }, { scope: SCOPE, root, head: "abc1234" });
+    return { store, root };
+  }
+
+  test("creates CLAUDE.md when the repo has no instruction file, and the notes stop loading", () => {
+    const { store, root } = repoSetup();
+    expect(auditData(store, SCOPE, "tok").cards[0]!.promote).toMatchObject({ file: "CLAUDE.md", create: true, link: false, added: ["## Build", "", MOVE.rule] });
+    expect(applyAudit(store, SCOPE, { picks: [{ id: "v", action: "promote" }] }).promoted).toEqual(["v", "keepme"]);
+    expect(readFileSync(join(root, "CLAUDE.md"), "utf8")).toBe(`## Build\n\n${MOVE.rule}\n`);
+    expect([store.find("v")!.promoted_to, store.find("keepme")!.promoted_to]).toEqual(["CLAUDE.md", "CLAUDE.md"]);
+    expect(contextFor(store, SCOPE).text).not.toContain("body of v");
+  });
+
+  test("writes AGENTS.md when the repo has only that, and the file behind a CLAUDE.md link", () => {
+    const only = repoSetup((root) => writeFileSync(join(root, "AGENTS.md"), "# Agents\n"));
+    expect(auditData(only.store, SCOPE, "tok").cards[0]!.promote).toMatchObject({ file: "AGENTS.md", link: false });
+    expect(auditData(only.store, SCOPE, "tok").cards[0]!.promote!.create).toBeUndefined();
+    applyAudit(only.store, SCOPE, { picks: [{ id: "v", action: "promote" }] });
+    expect(readFileSync(join(only.root, "AGENTS.md"), "utf8")).toBe(`# Agents\n\n## Build\n\n${MOVE.rule}\n`);
+    expect(existsSync(join(only.root, "CLAUDE.md"))).toBe(false);
+
+    const linked = repoSetup((root) => {
+      writeFileSync(join(root, "AGENTS.md"), "# Agents\n");
+      symlinkSync("AGENTS.md", join(root, "CLAUDE.md"));
+    });
+    expect(auditData(linked.store, SCOPE, "tok").cards[0]!.promote).toMatchObject({ file: "CLAUDE.md", link: true, path: expect.stringContaining("AGENTS.md") });
+    applyAudit(linked.store, SCOPE, { picks: [{ id: "v", action: "promote" }] });
+    expect(readFileSync(join(linked.root, "AGENTS.md"), "utf8")).toContain(MOVE.rule);
+  });
+
+  test("a checkout that kb does not know stops the page and Apply before any change", () => {
+    const store = setup();
+    proposeAudit(store, { items: [MOVE] }, repo());
+    expect(() => auditData(store, SCOPE, "tok")).toThrow(`the checkout of ${SCOPE} is not on this machine`);
+    expect(() => applyAudit(store, SCOPE, { picks: [{ id: "v", action: "promote" }] })).toThrow("is not on this machine");
+    expect(store.find("v")!.promoted_to).toBeUndefined();
   });
 });
 

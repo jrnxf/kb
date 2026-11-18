@@ -1,10 +1,12 @@
 // Instruction files: the files a harness loads whole into every session, such as CLAUDE.md. A rule the
-// user states belongs there, not in kb. A global audit moves global rules into the global file.
+// user states belongs there, not in kb. An audit moves rules into the file of its scope: the global
+// audit into the global file, a repo audit into the repo's own file.
 
-import { accessSync, constants, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { KbError } from "./note.ts";
+import { repoRoot } from "./repos.ts";
 import type { Store } from "./store.ts";
 
 export interface InstructionsFile {
@@ -14,6 +16,8 @@ export interface InstructionsFile {
   path: string;
   /** True when the config path is a link to another file, as a dotfiles manager makes it. */
   link: boolean;
+  /** True when the repo has no instruction file yet, so Apply creates it. */
+  create?: boolean;
 }
 
 const tilde = (path: string) => (path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path);
@@ -36,10 +40,34 @@ export function globalInstructions(store: Store): InstructionsFile {
   return { name, path, link: lstatSync(tilde(name)).isSymbolicLink() };
 }
 
+/** The files a repo can hold its rules in, in the order kb looks for them. */
+export const REPO_FILES = ["CLAUDE.md", "AGENTS.md"];
+
+/**
+ * The instruction file of a repo checkout: CLAUDE.md, or AGENTS.md when the repo has only that. A
+ * link is resolved, as for the global file. With neither file, Apply creates CLAUDE.md.
+ */
+export function repoInstructions(root: string): InstructionsFile {
+  for (const name of REPO_FILES) {
+    const full = join(root, name);
+    if (existsSync(full)) return { name, path: realpathSync(full), link: lstatSync(full).isSymbolicLink() };
+  }
+  return { name: REPO_FILES[0]!, path: join(root, REPO_FILES[0]!), link: false, create: true };
+}
+
+/** The instruction file of an audit scope: the global file, or the file of the repo's checkout. */
+export function instructionsFor(store: Store, scope: string): InstructionsFile {
+  if (scope === "global") return globalInstructions(store);
+  const root = repoRoot(store, scope);
+  if (!root) throw new KbError(`the checkout of ${scope} is not on this machine, so kb cannot find its instruction file`);
+  return repoInstructions(root);
+}
+
 /** The file name a moved note records in promoted_to, such as CLAUDE.md. */
 export const fileName = (file: InstructionsFile) => basename(file.name);
 
 export function readInstructions(file: InstructionsFile): string {
+  if (file.create) return "";
   try {
     return readFileSync(file.path, "utf8");
   } catch {
@@ -50,7 +78,7 @@ export function readInstructions(file: InstructionsFile): string {
 /** Stop before the first note changes when the write would fail. */
 export function checkWritable(file: InstructionsFile): void {
   try {
-    accessSync(file.path, constants.W_OK);
+    accessSync(file.create ? dirname(file.path) : file.path, constants.W_OK);
   } catch {
     throw new KbError(`cannot write ${file.name} (${shortPath(file.path)})`);
   }

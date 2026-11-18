@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 // kb: a personal knowledge store for coding agents. Harness-agnostic: flags and stdin only.
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { openAudits, proposeAudit, readAudit } from "./audit.ts";
 import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
-import { globalInstructions } from "./instructions.ts";
+import { REPO_FILES, globalInstructions } from "./instructions.ts";
 import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
@@ -51,8 +51,6 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          sent back for a rewrite
   kb instructions [--repo .]             the instruction files for a rule the user states: the global
                                          one, and the repo's CLAUDE.md and AGENTS.md
-  kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run] [--repo .]
-                                         append a note to the repo's own file
   kb checkpointed <session-id>           record that this session saved its knowledge
   kb scope [--repo .]                    print the scope id of a directory
   kb serve [--port n] [--no-open]        the store as a local page: read, edit and trash notes
@@ -389,35 +387,6 @@ function cmdBudget(store: Store, args: Args): Output {
   return { json: b, text: lines.join("\n") };
 }
 
-const PROMOTE_FILES = ["CLAUDE.md", "AGENTS.md"];
-
-function cmdPromote(store: Store, args: Args): Output {
-  const id = args.positional[0];
-  const to = args.flags.get("to");
-  if (!id || typeof to !== "string" || !PROMOTE_FILES.includes(to)) throw new KbError("usage: kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run] [--repo .]");
-  const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
-  const { path: _path, trashed, ...note } = requireNote(store, id);
-  if (trashed) throw new KbError(`${id} is in the trash. Restore it first.`);
-  if (note.promoted_to) throw new KbError(`${id} is already in ${note.promoted_to}`);
-  if (!repo.root || note.scope !== repo.scope) throw new KbError(`${id} belongs to ${note.scope}. Run kb promote inside that repo.`);
-
-  const file = join(repo.root, to);
-  const marker = `<!-- kb: ${note.id} -->`;
-  const before = existsSync(file) ? readFileSync(file, "utf8") : "";
-  if (before.includes(marker)) throw new KbError(`${to} already has ${note.id}`);
-  const gap = before === "" ? "" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
-  const addition = `${gap}${marker}\n## ${note.title}\n\n${note.body}\n`;
-  const dryRun = args.flags.has("dry-run");
-  if (!dryRun) {
-    // The one write kb ever makes inside a repo. The caller asks the user first.
-    appendFileSync(file, addition);
-    note.promoted_to = to;
-    store.writeNote(note);
-    afterWrite(store, `kb: promote ${note.id} to ${to}`);
-  }
-  return { json: { id: note.id, file, written: !dryRun, addition }, text: dryRun ? `would append to ${file}:\n${addition.trimEnd()}` : `promoted ${note.id} to ${file}` };
-}
-
 function cmdCheckpointed(store: Store, args: Args): Output {
   const session = args.positional[0];
   if (!session) throw new KbError("usage: kb checkpointed <session-id>");
@@ -487,6 +456,8 @@ async function cmdAudit(store: Store, args: Args, stdin: () => Promise<string>):
       throw new KbError('kb audit propose reads {"items": [...]} on stdin');
     }
     store.ensure();
+    // A move writes the repo's own instruction file at Apply, so the page must find the checkout.
+    if (repo.root && repo.scope) rememberRepo(store, scope, repo.root);
     const audit = proposeAudit(store, input, repo);
     return open(audit.items.length, `saved ${audit.items.length} cards for ${scope}`);
   }
@@ -522,7 +493,7 @@ function cmdInstructions(store: Store, args: Args): Output {
   } catch (error) {
     global = { file: store.config().globalInstructions, error: (error as Error).message };
   }
-  const files = repo.root ? PROMOTE_FILES.map((name) => ({ file: name, path: join(repo.root!, name), exists: existsSync(join(repo.root!, name)) })) : [];
+  const files = repo.root ? REPO_FILES.map((name) => ({ file: name, path: join(repo.root!, name), exists: existsSync(join(repo.root!, name)) })) : [];
   const lines = [`global  ${"path" in global ? `${global.path}${global.link ? ` (${global.file} links here)` : ""}` : global.error}`];
   if (repo.root) for (const f of files) lines.push(`repo    ${f.path}${f.exists ? "" : " (does not exist yet)"}`);
   else lines.push("repo    none: this directory is not in a git repo");
@@ -572,7 +543,6 @@ async function main(): Promise<number> {
       case "stale": out = cmdStale(store, args); break;
       case "verify": out = cmdVerify(store, args); break;
       case "budget": out = cmdBudget(store, args); break;
-      case "promote": out = cmdPromote(store, args); break;
       case "instructions": out = cmdInstructions(store, args); break;
       case "checkpointed": out = cmdCheckpointed(store, args); break;
       case "serve": out = await cmdServe(store, args, json); break;

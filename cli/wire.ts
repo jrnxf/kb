@@ -100,6 +100,8 @@ export interface AuditPromote {
   path: string;
   /** True when the file the config names is a link to path. */
   link: boolean;
+  /** True when the repo has no instruction file yet, so Apply creates it. */
+  create?: boolean;
   /** The heading the rule goes under. A heading the file does not have yet is added. */
   section?: string;
   /** The lines of the file right above the new lines. */

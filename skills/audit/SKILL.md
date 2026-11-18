@@ -11,7 +11,7 @@ effort: medium
 
 Keep the store true and small. You propose changes. The user picks in the page, and the page applies them.
 `kb` is on PATH. Run every `kb` command from the session's project directory, so scope and commit resolve.
-In a repo, the audit covers that repo's notes. Outside any repo, it is the global audit: it covers the global notes, and it can move rules to the global instructions file (step 2).
+In a repo, the audit covers that repo's notes. Outside any repo, it is the global audit: it covers the global notes. Both can move rules to an instruction file (step 2): a repo audit to the repo's file, the global audit to the global file.
 
 ## 1. Collect
 
@@ -44,7 +44,7 @@ Read the note with `kb show <id> --no-use`, so the read counts no use. For an an
 | merge | Two or more notes cover one idea. One note keeps everything, the others go to the trash. |
 | shorten | The note is true but long. Cut it to the fact, the reason and how to apply it. |
 | keep | The note is still true as written, or you cannot tell. Also a `duplicate` candidate that is in fact a different idea. |
-| promote | Global audit only. The note is a rule for how to work, which the user stated. It moves to the global instructions file, which every session loads whole. |
+| promote | The note is a rule for how to work, which the user stated. It moves to the instruction file of the audit's scope, which every session loads whole. |
 
 Rules:
 
@@ -53,11 +53,15 @@ Rules:
 - Never propose trash for a `gotcha` or a `convention` because it has no uses: a rule that works leaves no use count. Propose `keep`, and the user decides.
 - For a rewrite, a merge or a shorten, write the new text now, so the user sees it on the card.
 
-### The global audit: move rules to the instructions file
+### Move rules to the instruction file
 
-A rule the user states belongs in an instruction file, not in kb. In the global audit, every global `convention` is a candidate, also without a `kb stale` reason. Find them with `kb list --scope global --json`.
+A rule the user states belongs in an instruction file, not in kb. Every `convention` of the scope is a candidate, also without a `kb stale` reason. Find them with `kb list --json` in a repo, or `kb list --scope global --json` outside any repo.
 
-1. Run `kb instructions` and read the whole global file. It loads into every session, and it is long already.
+The file depends on the scope:
+- A repo audit writes the repo's `CLAUDE.md`, or its `AGENTS.md` when the repo has only that. When the repo has neither, Apply creates `CLAUDE.md`. Move a rule there only when it holds for anyone who works in the repo.
+- The global audit writes the global instructions file.
+
+1. Run `kb instructions` and read the whole file of the scope. It loads into every session, and it is often long already.
 2. Group the conventions that say one thing. Each group becomes one `promote` item: the first note is `id`, and the others go in `merge`. They all move with the rule.
 3. Write the `rule` for each group: as few lines as the rule needs, often one, in the style of the file around it. Merge, do not copy: a short instruction, with no history and no dates.
 4. Pick a `section`: a heading that the file has, or a new heading when none fits.
@@ -85,7 +89,7 @@ kb audit propose <<'KB_AUDIT'
 KB_AUDIT
 ```
 
-- `action` is one of keep, rewrite, trash, merge and promote. A shorten is a rewrite. Only the global audit has promote.
+- `action` is one of keep, rewrite, trash, merge and promote. A shorten is a rewrite.
 - A rewrite needs the new `title` or `body`, or both. A merge needs `merge`, the notes that go to the trash. The note `id` keeps every fact, so give it the merged text.
 - A promote needs the `rule`, the lines to add to the instructions file. `section` is the heading they go under. `merge` is optional: the other notes that move with the rule.
 - `reason` is what `kb stale` or `kb budget` said.

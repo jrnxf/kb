@@ -482,7 +482,7 @@ function PromoteBox({ card, pick }: { card: AuditCard; pick: Pick }) {
         </div>
       ))}
       <div className="mt-1.5 text-[12px] text-faint [overflow-wrap:anywhere]">
-        Apply writes {promote.path}
+        Apply {promote.create ? "creates" : "writes"} {promote.path}
         {promote.link ? ` (${promote.file} links to it)` : ""} and does not commit it.
       </div>
     </div>
