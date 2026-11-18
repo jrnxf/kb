@@ -10,6 +10,7 @@ import { buildBudget, buildContext, rank } from "./context.ts";
 import { globalInstructions } from "./instructions.ts";
 import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
+import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
 import { DEFAULT_PORT, isKbServer, runningPort, serve } from "./serve.ts";
 import { resultGroups } from "./wire.ts";
@@ -151,6 +152,7 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     throw new KbError(`${unknownScope(store, scope)} To start the notes of another repo, pass --repo <its directory>.`);
   }
   if (typeof input.title !== "string" || !input.title.trim()) throw new KbError("invalid note: title: required");
+  rejectSecrets({ title: input.title, body: input.body }, "the note");
   const slug = slugify(input.title);
   if (!slug) throw new KbError("invalid note: title: needs letters or digits");
 

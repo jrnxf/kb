@@ -10,6 +10,7 @@ import { budgetOf } from "./context.ts";
 import { type InstructionsFile, checkWritable, fileName, globalInstructions, hasRule, insertRule, readInstructions, shortPath, writeInstructions } from "./instructions.ts";
 import { KbError, type Note, validateNote } from "./note.ts";
 import type { RepoInfo } from "./scope.ts";
+import { rejectSecrets } from "./secrets.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import type { AuditAction, AuditCard, AuditData, AuditNote, AuditPick, AuditPromote, AuditResult } from "./wire.ts";
 import { afterWrite, nowIso } from "./write.ts";
@@ -300,6 +301,9 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
     const text = { ...(title !== undefined ? { title } : {}), ...(body !== undefined ? { body } : {}) };
     if (pick.rule !== undefined && (pick.action !== "promote" || typeof pick.rule !== "string" || !pick.rule.trim())) throw new KbError(`picks[${i}].rule: only a promote has it, and it must be text`);
     const rule = pick.action === "promote" ? (pick.rule ?? item.rule)!.trim() : undefined;
+    // New text reaches the synced store or the instructions file only without a secret in it.
+    if (pick.action === "rewrite" || pick.action === "merge") rejectSecrets(text, `the new text of ${note.id}`);
+    if (rule !== undefined) rejectSecrets({ rule }, `the rule of ${note.id}`);
     // A keep records the check only when someone looked: the user picked it on the card, or the agent
     // checked the note. A group kept in one key, or a card the user never opened, records nothing.
     // Keep both on a merge card only says the notes differ.
