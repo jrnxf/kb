@@ -524,7 +524,7 @@ function Card({ card, pick, seen, mode, keys, textKeys, onCancel, onSave }: { ca
 
       {card.promote && pick.action === "promote" && <PromoteBox card={card} pick={pick} />}
 
-      {card.merge && changed && !card.promote && (
+      {card.merge && pick.action === "merge" && changed && !card.promote && (
         <div className={cn(textBlock, "mt-2.5 border-(--k-convention)/35 bg-(--k-convention)/6 text-foreground")}>
           <span className={cn(label, "text-(--k-convention)")}>{own ? "your merged text" : "merged text, proposed by the agent"}</span>
           {newTitle !== card.note.title && <b className="block">{newTitle}</b>}

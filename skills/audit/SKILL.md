@@ -101,7 +101,7 @@ KB_AUDIT
   - Every card offers to accept your pick, edit the text, keep and trash. On a card with several notes, trash takes every note on it. Every card but a merge offers asking you for a rewrite.
   - When the user keeps a note on its card, kb records the check.
   - A card with your new text offers to use it.
-  - A merge card offers merge and keep both.
+  - A merge card offers merge, keep both and trash both (or trash all N).
   - A promote card shows the lines it adds, under the lines above them in the file. It offers move, keep, edit, ask and trash.
 - Never propose delete. When the user asks for a note to be gone now, run `kb delete <id>` yourself, outside the audit.
 

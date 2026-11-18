@@ -87,7 +87,7 @@ export interface AuditCard {
   note: AuditNote;
   /** The agent's new text, for a rewrite or a merge. */
   proposed?: { title: string; body: string };
-  /** For a merge: the notes that go to the trash. For a promote: the notes that move with the note. */
+  /** The other notes on the card. A merge trashes them, a promote moves them, and a trash takes them with the note. */
   merge?: AuditNote[];
   /** For a promote: where the rule goes, and the lines above it in the file now. */
   promote?: AuditPromote;
