@@ -343,6 +343,9 @@ function Divider({ group, count, onOneByOne, onKeepAll }: { group: string; count
   );
 }
 
+/** Where sessions see the note now, in the user's words. */
+const placeText = { body: "sessions load it in full", index: "sessions see its title only", hidden: "no session sees it" } as const;
+
 const usesText = (n: number) => `${n} ${n === 1 ? "use" : "uses"}`;
 
 function Meta({ note, reason }: { note: AuditNote; reason?: string }) {
@@ -351,8 +354,9 @@ function Meta({ note, reason }: { note: AuditNote; reason?: string }) {
       <Dot />
       <span className="font-[550] text-(--k)">{note.kind}</span>
       <span>· {note.scope === "global" ? "global" : scopeName(note.scope)}</span>
+      <span>· {placeText[note.place]}</span>
       {reason && <span>· {reason}</span>}
-      <span>· {usesText(note.uses)}</span>
+      {!/\buse/.test(reason ?? "") && <span>· {usesText(note.uses)}</span>}
     </div>
   );
 }
@@ -418,7 +422,7 @@ function Card({ card, pick, seen, mode, keys, onCancel, onSave }: { card: AuditC
           <Diff before={card.note.body} after={newBody} />
         </div>
       ) : (
-        <div className={textBlock}>{card.note.body}</div>
+        <div className={cn(textBlock, "text-foreground")}>{card.note.body}</div>
       )}
 
       {card.merge && changed && (

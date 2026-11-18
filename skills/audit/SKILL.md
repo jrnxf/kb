@@ -66,14 +66,14 @@ kb audit propose <<'KB_AUDIT'
   { "id": "<id>", "action": "rewrite", "why": "<one line>", "body": "<new body>" },
   { "id": "<id>", "action": "merge", "why": "<one line>", "merge": ["<other id>"], "body": "<merged body>" },
   { "id": "<id>", "action": "demote", "why": "Rarely used. Or trash it.", "reason": "0 uses" },
-  { "id": "<id>", "action": "keep", "why": "A rule. Only you can demote or trash it.", "group": "conventions that reach no session" }
+  { "id": "<id>", "action": "keep", "why": "A use counts only when a checkpoint names the note. A rule that quietly prevents a mistake is rarely named. Keep it if it is still true. Trash it if not.", "group": "Rules with few uses: only you can remove one to make room" }
 ] }
 KB_AUDIT
 ```
 
 - `action` is one of verify, rewrite, trash, merge, demote and keep. A shorten is a rewrite.
 - A rewrite needs the new `title` or `body`, or both. A merge needs `merge`, the notes that go to the trash. The note `id` keeps every fact, so give it the merged text.
-- `reason` is what `kb stale` or `kb budget` said. `why` is one line from you.
+- `reason` is what `kb stale` or `kb budget` said. `why` is one line from you. The user reads it on the card with no other context, so say why in full words and what the pick changes for the note. No shorthand like "A rule."
 - Put the `ask` ids and the `demoted` ids in the items too, as `keep`, with a `group`. Cards with the same group sit together after a divider, and the user can keep the whole group with one key.
 - What each card offers:
   - Every card but a merge offers trash.
