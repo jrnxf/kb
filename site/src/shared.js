@@ -19,6 +19,7 @@ const TERM = [
   ["", " "],
   ["c-h", "# kb: saved knowledge for github.com/acme/shop"],
   ["c-dim", "These notes come from earlier sessions. Each is below once: with its body, or as an index line."],
+  ["c-dim", "A stated rule goes to an instruction file, not to kb. Save what you learn with `kb add`."],
   ["", " "],
   ["c-h", "## Index"],
   ["c-dim", "### github.com/acme/shop (3)"],
@@ -26,8 +27,8 @@ const TERM = [
   ["c-i", "- money-is-integer-cents-everywhere-never [convention] ...floats"],
   ["c-i", "- why-orders-use-soft-delete-refunds-need-the [decision] ...old row"],
   ["c-dim", "### global (2)"],
-  ["c-i", "- prefer-bun-over-node-for-scripts [convention]"],
-  ["c-i", "- never-edit-a-generated-lockfile-by-hand [convention]"],
+  ["c-i", "- pnpm-install-in-ci-needs-the-frozen-lockfile [gotcha]"],
+  ["c-i", "- the-dev-proxy-drops-websocket-upgrades-so-hmr [gotcha] ...needs port 5173"],
   ["", " "],
   ["c-h", "## Notes (2 of 5, by rank)"],
   ["c-b", "### finish-the-webhook-retry-the-handler-still [open-work] ...drops a 409"],
@@ -53,7 +54,7 @@ function mountTerm(root) {
 function mountLoop(root) {
   root.classList.add("loop");
   root.innerHTML = `<div class="orbit"></div><div class="hub"><b>every session</b>also after /clear, resume, compaction and fork</div>
-    <div class="node n-top" data-a="270"><span class="when">during a session</span><b>You state a rule</b><code>kb add</code></div>
+    <div class="node n-top" data-a="270"><span class="when">during a session</span><b>I learn a fact</b><code>kb add</code></div>
     <div class="node n-right" data-a="0"><span class="when">before /clear</span><b>Checkpoint</b><code>/kb:checkpoint</code></div>
     <div class="node n-bottom" data-a="90"><span class="when">on disk</span><b>One file per note</b><code>~/.kb/notes/&lt;scope&gt;/</code></div>
     <div class="node n-left" data-a="180"><span class="when">session start</span><b>The packer</b><code>kb context</code></div>
