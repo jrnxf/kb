@@ -1,7 +1,7 @@
 // HOLDBACK: the arm of session starts that keeps the old policy, so the next audit can compare it
 // with the briefs. In this arm a session start fills its room with whole bodies in rank order, as
 // every start did before. To end the experiment, delete this file and each line that a "HOLDBACK"
-// comment marks: `grep -rn HOLDBACK cli hooks test` lists them.
+// comment marks: `grep -rn HOLDBACK cli hooks test` lists them. The README has one bullet on it.
 
 import { createHash } from "node:crypto";
 import { type Note, localDate } from "./note.ts";
