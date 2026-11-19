@@ -153,7 +153,7 @@ highest.
 
 ```
 kb context [--repo .]        what a session gets at start
-kb add [--repo .]            create or update a note from JSON on stdin
+kb add [--file <path>] [--repo .]   create or update a note from JSON: the file, or stdin
 kb add --as-of <ISO time>    the same for a fact from an earlier time: the note is verified then
 kb add --recovered-from <session-id>   also record the note in that unsaved session
 kb show <id> [--check]       kb search <words> [--scope s] [--trash] [--check]
@@ -164,7 +164,7 @@ kb trash|restore|delete|empty-trash --scope <repo id>   a whole project
 kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
-kb audit [--no-wait]         kb audit propose   kb audit status   (an agent audits the scope)
+kb audit [--no-wait]         kb audit propose [--file <path>]   kb audit status   (an agent audits the scope)
 kb instructions [--repo .]   kb sync      kb checkpointed <session-id>
 kb log [--session id] [--since days]      (what the log says of each note, or of one session)
 kb unsaved [--forget <session-id>]   sessions here that ended with no checkpoint
@@ -185,9 +185,39 @@ commit `web/dist` with the change. A test fails while the build is older than it
 `bun run dev` in `web/` serves the page with hot reload against a `kb serve` on port 4810.
 
 `kb search` finds the notes that have every word of the query, in any order, in the title or the
-body. When no note has every word, it prints the closest notes and says so. Each note is one line
-with its scope, then the body lines that matched. The notes of the current repo come first, then
-global, then other repos. `kb show` accepts a part of an id when only one note has it.
+body. A word also finds its other forms: "retry" finds "retries" and "retrying", and "migrations"
+finds "migration". The stemmer knows the plural, the past and the -ing form, and no more: "migrate"
+does not find "migration". When no note has every word, it prints the closest notes and says so.
+Each note is one line with its scope, then the body lines that matched. The notes of the current
+repo come first, then global, then other repos. `kb show` accepts a part of an id when only one
+note has it.
+
+`kb add` reads one JSON object: `{"title", "kind", "body", "scope"?, "id"?, "anchors"?,
+"confidence"?, "new"?}`. It comes from the file of `--file <path>`, or from stdin. An agent
+writes the file and passes `--file`, because Claude Code refuses a heredoc that has a brace and a
+quote. The result has a `status`:
+
+- `created` or `updated`: the note is written. With `"id"`, the note is updated.
+- `exists`: a note of the scope has the same title. Nothing is written.
+- `neighbors`: stored notes are close to the new note in their words. Nothing is written. The
+  result lists at most 3: `{"id", "scope", "kind", "title", "first_line", "shared", "score"}`.
+  `shared` names the words both notes have. The writer reads them, then passes `"id"` to update
+  the note that holds the same fact, or `"new": true` when this is a different fact. With
+  `"new": true` the note is written, and the result still lists the neighbors.
+- `newer`: with `--as-of`, the note was checked after that time. Nothing changed.
+
+The neighbor check finds a fact that a store holds in other words, which the title check and a
+search miss. It also finds a note that says the opposite, so the writer corrects that note and
+adds no second one. It compares a new note with the notes of its scope and the global notes. A
+global note is also compared with the notes of every repo: a close repo note does not stop the
+write, and the result names it. The measure is plain text, with no server and no model: BM25 over
+the stems of the title and the body, as the share of one note that the other holds, in the larger
+of the two directions. A note at 0.30 or more is a neighbor. An update by id skips the check, and
+a note in the trash or in an instruction file is no neighbor. On the seeded store, 10 of 10 notes
+written again by hand in other words find their original, and 0 of 10 new facts get a neighbor.
+About 1 seeded note in 4 has a related note that is not the same fact over the line: the writer
+reads it and passes `"new": true`. A twin in words that share little with the stored note still
+gets through. The log records each answer: `kb log --session` shows the notes that `kb add` named.
 
 `--scope` takes `repo` (the repo of the current directory), `global` or a repo id. A scope that
 has no notes is an error in `kb add`, `kb search` and `kb list`, so a typing error cannot put a

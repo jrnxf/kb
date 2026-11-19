@@ -75,10 +75,9 @@ Never write the instructions file yourself. Apply writes it, at the end of the s
 
 ## 3. Propose in the page, then stop
 
-The user decides in the `kb serve` page, one card per note. Write the proposal as JSON, one item per candidate:
+The user decides in the `kb serve` page, one card per note. Write the proposal as JSON to a file in your scratchpad directory with the Write tool, one item per candidate. A write there needs no permission:
 
-```bash
-kb audit propose <<'KB_AUDIT'
+```json
 { "items": [
   { "id": "<id>", "action": "keep", "checked": true, "why": "I read cli/serve.ts. The port is still 4173.", "reason": "anchor-changed" },
   { "id": "<id>", "action": "rewrite", "why": "The flag is now --repo, not --dir.", "body": "<new body>" },
@@ -89,8 +88,15 @@ kb audit propose <<'KB_AUDIT'
   { "id": "<id>", "action": "keep", "why": "I could not check this note. It has no anchor, and the tap repo is not on this machine." },
   { "id": "<id>", "action": "promote", "why": "The user stated this rule. The two other notes say the same thing.", "rule": "- Write short sentences in the active voice.", "section": "Style", "merge": ["<id>", "<id>"] }
 ] }
-KB_AUDIT
 ```
+
+Then run this with the full path of the file:
+
+```bash
+kb audit propose --file <path>
+```
+
+Do not pipe the JSON, and do not put the path in a shell variable. A session with normal permissions refuses both.
 
 - `action` is one of keep, rewrite, trash, merge and promote. A shorten is a rewrite.
 - A rewrite needs the new `title` or `body`, or both. A merge needs `merge`, the notes that go to the trash. The note `id` keeps every fact, so give it the merged text.
@@ -118,12 +124,14 @@ KB_AUDIT
 
 When the user says it is applied, run `kb audit status`. It lists what the page did, and the notes the user sent back with what is wrong with each.
 
-For each note sent back, read it and the code again, and rewrite it with `kb add --json`. Add `"anchors"` when the request is for narrower anchors:
+For each note sent back, read it and the code again, and rewrite it. Write this JSON to a new file with the Write tool, as in step 3. Add `"anchors"` when the request is for narrower anchors:
+
+```json
+{ "id": "<id>", "body": "<new body>" }
+```
 
 ```bash
-kb add --json <<'KB_NOTE'
-{ "id": "<id>", "body": "<new body>" }
-KB_NOTE
+kb add --json --file <path>
 ```
 
 Never save a secret, token, password, key or credential in a note.
