@@ -59,6 +59,8 @@ interface Seed {
   /** Times a session opened the note for a task. They go to the event log. */
   opened?: number;
   anchors?: string[];
+  /** When the note loads outside the session start: a command or an error text. */
+  triggers?: string[];
   confidence?: Note["confidence"];
 }
 
@@ -81,6 +83,7 @@ function put(scope: string, head: string | undefined, s: Seed): void {
     confidence: s.confidence ?? "medium",
     body: s.body,
   };
+  if (s.triggers) note.triggers = s.triggers;
   if (head && scope !== "global") note.verified_at_commit = head;
   store.writeNote(note);
   const opened = s.opened ?? (next(3) === 0 ? next(6) : 0);
@@ -95,16 +98,16 @@ const para = (text: string, times: number) => Array.from({ length: times }, (_, 
 
 const GLOBAL: Seed[] = [
   // Gotchas. Several are long, as they get after months of additions.
-  { kind: "gotcha", title: "Never run the migration tool against the shared staging database", opened: 9, age: 3, body: "The staging database at db.staging.example.com is shared by four teams. `migrate up` there dropped a column in use.\nRun migrations on a local copy only. Ask the user to run the staging step." },
-  { kind: "gotcha", title: "The deploy CLI exits 0 when the upload was rejected", opened: 6, age: 12, body: "Only `\"status\":\"live\"` in the JSON output means deployed. Check it every time.\n" + para("A rejected upload prints a warning line and still exits 0, so a script that checks only the exit code reports a deploy that did not happen.", 5) },
+  { kind: "gotcha", title: "Never run the migration tool against the shared staging database", opened: 9, age: 3, triggers: ["stop: migrate up"], body: "The staging database at db.staging.example.com is shared by four teams. `migrate up` there dropped a column in use.\nRun migrations on a local copy only. Ask the user to run the staging step." },
+  { kind: "gotcha", title: "The deploy CLI exits 0 when the upload was rejected", opened: 6, age: 12, triggers: ["cmd: shipit deploy"], body: "Only `\"status\":\"live\"` in the JSON output means deployed. Check it every time.\n" + para("A rejected upload prints a warning line and still exits 0, so a script that checks only the exit code reports a deploy that did not happen.", 5) },
   { kind: "gotcha", title: "Background agents cannot answer a permission prompt", opened: 4, age: 20, body: "A prompt in a background agent times out and is denied. Ask for `mktemp -d` directories and script files instead of `rm` in a compound command." },
   { kind: "gotcha", title: "A load test can outlive its run and pin the machine for hours", opened: 3, age: 31, body: "Every load or loop needs a hard time limit and cleanup on exit.\n" + para("A burner process started to reproduce a flake kept all cores busy long after the session ended, and nobody saw it until the fans started.", 4) },
   { kind: "gotcha", title: "The build host has no route to the office network", age: 40, body: "It reaches the internet only. Anything that needs the office network becomes a command for the user.\n" + para("Requests to internal names time out after 30 seconds without an error message, which looks like a slow service and not like a blocked route.", 6) },
-  { kind: "gotcha", title: "The package registry mirror serves stale versions for an hour", age: 55, body: "After a publish, `install` can get the old version for up to 60 minutes. Pin the exact version and pass `--prefer-online`." },
+  { kind: "gotcha", title: "The package registry mirror serves stale versions for an hour", age: 55, triggers: ["err: no matching version found"], body: "After a publish, `install` can get the old version for up to 60 minutes. Pin the exact version and pass `--prefer-online`." },
   { kind: "gotcha", title: "Screen recording permission resets after each OS update", age: 62, body: "The capture tool then records a black frame and exits 0. Check the first frame before a long recording." },
-  { kind: "gotcha", title: "The repo edit command ignores a positional repo name", age: 70, body: "It edits the repo of the current directory. Always pass `-R owner/repo`." },
+  { kind: "gotcha", title: "The repo edit command ignores a positional repo name", age: 70, triggers: ["cmd: forge repo edit"], body: "It edits the repo of the current directory. Always pass `-R owner/repo`." },
   { kind: "gotcha", title: "The operating system blocks agents from reading the Downloads folder", age: 75, body: "Ask the user to move the file to /home/user/work first. This holds for shell commands too." },
-  { kind: "gotcha", title: "Rebase of a published branch drops review comments", age: 90, body: "Merge the default branch into a published PR head. Never rebase it: the review tool loses the comment anchors." },
+  { kind: "gotcha", title: "Rebase of a published branch drops review comments", age: 90, triggers: ["cmd: git rebase"], body: "Merge the default branch into a published PR head. Never rebase it: the review tool loses the comment anchors." },
   { kind: "gotcha", title: "The review pipeline writes local paths into its report", age: 101, body: "Remove `/home/user/...` paths from the report before it goes into a PR body." },
   { kind: "gotcha", title: "The notification tool reports success when nothing was shown", age: 120, body: "Only `\"shown\":true` means delivered.\n" + para("The exit code is 0 in both cases, and the text output is the same, so only the JSON field tells the two apart.", 4) },
   { kind: "gotcha", title: "Preview links expire after seven days", age: 140, body: "A link in an old PR can be dead. Make a new preview before the user is asked to look." },
@@ -165,9 +168,9 @@ function repoNotes(name: string, domain: string, file: string): Seed[] {
   return [
     { kind: "open-work", title: `Finish the ${domain} retry rework in ${name}`, age: 2, body: `Done: the backoff table and its tests. Left: the dead-letter path in \`${file}\`. Next step: make \`retryAll\` idempotent.`, anchors: [file] },
     { kind: "gotcha", title: `${name} amounts are integer cents, never floats`, opened: 7, age: 5, anchors: [`${file}#total`], body: `A float in the ${domain} path gave totals that were off by one cent. Convert at the edge.` },
-    { kind: "gotcha", title: `The ${name} test database must be reset between suites`, opened: 2, age: 30, body: `Suites share one schema. Run \`make db-reset\` first, or ${domain} tests fail in a random order.` },
+    { kind: "gotcha", title: `The ${name} test database must be reset between suites`, opened: 2, age: 30, triggers: [`cmd: make test-${domain}`], body: `Suites share one schema. Run \`make db-reset\` first, or ${domain} tests fail in a random order.` },
     { kind: "gotcha", title: `${name} cache keys include the tenant id`, age: 64, body: `A key without the tenant leaked ${domain} data between tenants in staging.\n${para(`Every helper that builds a key must take the tenant as its first argument, and the lint rule in ${name} checks only the helpers it knows.`, 5)}` },
-    { kind: "gotcha", title: `The ${name} dev server needs port 4100 free`, age: 210, body: "It fails with a misleading \"module not found\" when the port is taken." },
+    { kind: "gotcha", title: `The ${name} dev server needs port 4100 free`, age: 210, triggers: ["cmd: make dev", "err: module not found"], body: "It fails with a misleading \"module not found\" when the port is taken." },
     { kind: "convention", title: `${name} errors are values, not exceptions, in the ${domain} layer`, age: 45, body: "Return `{ ok: false, error }`. Throw only at the HTTP edge." },
     { kind: "convention", title: `${name} commits use the imperative and name the module`, age: 88, body: `For example: "${domain}: reject empty batches".` },
     { kind: "decision", title: `${name} keeps ${domain} state in one table`, age: 100, anchors: [file], body: `A second table was tried and the two went out of step. One table with a status column, and a nightly check.` },

@@ -70,8 +70,9 @@ If a kb note holds the same rule, run `kb trash <id>`.
 
 ## 3. Write
 
-One idea per note. Aim for a body under 15 lines: the fact, why it matters, how to apply it.
+One idea per note. Aim for a body of 700 characters or fewer: the fact, why it matters, how to apply it. A trigger loads 700 characters and cuts the rest.
 Write the title as a statement of the fact, not a topic ("Stripe signature check needs the raw body", not "Stripe webhooks").
+For a gotcha about a command or an error, put the command or the error word in the title.
 
 Pipe one JSON object to `kb add --json`. Use a quoted heredoc, so the shell changes nothing:
 
@@ -92,9 +93,28 @@ KB_NOTE
 - `kind`: `gotcha`, `decision`, `convention`, `how-to` or `open-work`.
 - `confidence`: `high` when you verified it in this session, `medium` when it is likely, `low` when it is a guess.
 - `anchors`: repo-relative paths, or `path#symbol`, of the code the fact depends on. They let a later check find stale notes. Leave the list empty for a global note.
+- `triggers`: when the note loads outside the session start. See "Say when the note loads" below.
 - To update, add `"id": "<id>"` and only the fields that change. A `body` replaces the whole body, so read the note with `kb show <id> --check` first and write the full new body, with the old detail that is still true. A new title, body or anchors also records the note as verified now.
 
+### Say when the note loads
+
+A note at the session start is one title among many, hours before the agent needs it.
+A trigger or an anchor loads the note at the moment it applies.
+Give every `gotcha` and every `how-to` a trigger or an anchor. When none fits, say why in one line of the report.
+
+- A gotcha about a command gets `"triggers": ["cmd: pkill -f"]`. The note loads before a shell command that runs those words.
+- When one run of the command does damage, write `stop:` in place of `cmd:`. kb then refuses the command once, with the note as the reason. A run 3 seconds later passes.
+- A gotcha about an error gets `"triggers": ["err: address already in use"]`. Use the stable part of the error text, at least 8 characters. Leave out a path, an id or a number that changes.
+- A fact about a file gets an anchor. The note loads when the agent reads or changes that file.
+- A note can have several triggers, and triggers and anchors together.
+
+A `cmd:` or a `stop:` trigger is the words of the command, in order: `cmd: git push --force`.
+One command of the line must hold them as whole words, with the first as its command word. Other words may stand between them.
+kb refuses one word that is a common command (`git`, `ls`, `bun`): add a subcommand or a flag.
+`-rf` and `-fr` are two words, so give one trigger for each form.
+
 Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id> --check`, then update it or skip.
+A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor, or a body over 700 characters. The note is saved. Fix it with an update, or give the reason in the report.
 
 ## 4. Close finished work
 
@@ -108,14 +128,14 @@ Run this:
 kb log --session ${CLAUDE_SESSION_ID}
 ```
 
-It prints the events of this session. Under `no verdict yet:` it lists each note you got and how: `body` (whole, at the session start), `opened` (you ran `kb show`) or `fired` (a hook named it when you read a file).
+It prints the events of this session. Under `no verdict yet:` it lists each note you got and how: `body` (whole, at the session start), `opened` (you ran `kb show`) or `fired` (a trigger loaded it: a command, an error or a file).
 No such list means there is nothing to judge: go to step 6.
 
 Give a verdict only for a note you can judge:
 
 - `kb verdict helped <id>... --session ${CLAUDE_SESSION_ID}` - the note changed what you did.
 - `kb verdict wrong <id>... --session ${CLAUDE_SESSION_ID}` - the note was false or misleading.
-- `kb verdict not-needed <id>... --session ${CLAUDE_SESSION_ID}` - a hook named the note when you read a file (`fired`), and it had no bearing on the work.
+- `kb verdict not-needed <id>... --session ${CLAUDE_SESSION_ID}` - a trigger loaded the note (`fired`), and it had no bearing on the work.
 
 Pass `--session ${CLAUDE_SESSION_ID}` on each verdict, so the verdict belongs to the session that the list above read.
 Skip a note when you cannot tell. An index line gets no verdict.
@@ -166,4 +186,5 @@ End with this, and nothing after it. Write it as Markdown, not in a code block, 
 
 - The first line is the verdict. Write `**Safe to clear**`, or `**Not safe to clear** - <what is unsaved>` when a `kb` command failed, or when open work exists that no note describes. Never add "yes" or "no".
 - Show the title of a note, not its id. Keep each reason to one short sentence.
+- Under a saved gotcha or how-to that has no trigger and no anchor, add one line: `No trigger: <why none fits>`.
 - Leave out a count that is 0, and a group that is empty.

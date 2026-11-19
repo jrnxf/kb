@@ -14,6 +14,11 @@ export interface Note {
   last_verified: string;
   verified_at_commit?: string;
   anchors: string[];
+  /**
+   * When the note loads outside the session start, each `<kind>: <text>`: `cmd` and `stop` before
+   * a shell command, `err` after an error. trigger.ts reads them. A path is an anchor, not a trigger.
+   */
+  triggers?: string[];
   confidence: Confidence;
   promoted_to?: string;
   supersedes?: string[];
@@ -23,6 +28,9 @@ export interface Note {
 }
 
 export class KbError extends Error {}
+
+/** A body up to this length loads whole at a trigger. A longer one is cut there, and `kb add` warns about it. */
+export const BODY_CHARS = 700;
 
 const SCOPE_RE = /^[a-z0-9._-]+(\/[a-z0-9._~-]+)*$/;
 
@@ -73,6 +81,9 @@ export function validateNote(raw: Record<string, unknown>): Note {
   need(KINDS.includes(raw.kind as Kind), `kind: must be one of ${KINDS.join(", ")}`);
   need(CONFIDENCES.includes(raw.confidence as Confidence), `confidence: must be one of ${CONFIDENCES.join(", ")}`);
   need(raw.anchors === undefined || (Array.isArray(raw.anchors) && raw.anchors.every(isString)), "anchors: must be a list of paths");
+  // Only the shape is checked here. A write checks each trigger with requireTriggers. A read takes
+  // the list through storedTriggers first, so a trigger that a hand or a later kb wrote hides no note.
+  need(raw.triggers === undefined || isStringArray(raw.triggers), "triggers: must be a list of texts");
   need(raw.supersedes === undefined || isStringArray(raw.supersedes), "supersedes: must be a list of ids");
   need(raw.promoted_to === undefined || isString(raw.promoted_to), "promoted_to: must be a file name");
   need(raw.verified_at_commit === undefined || isString(raw.verified_at_commit), "verified_at_commit: must be a commit");
@@ -102,6 +113,7 @@ export function validateNote(raw: Record<string, unknown>): Note {
     confidence: raw.confidence as Confidence,
     body: (raw.body as string).trim(),
   };
+  if (raw.triggers !== undefined && (raw.triggers as string[]).length > 0) note.triggers = raw.triggers as string[];
   if (raw.verified_at_commit !== undefined) note.verified_at_commit = raw.verified_at_commit as string;
   if (raw.promoted_to !== undefined) note.promoted_to = raw.promoted_to as string;
   if (raw.supersedes !== undefined && (raw.supersedes as string[]).length > 0) note.supersedes = raw.supersedes as string[];
@@ -109,12 +121,31 @@ export function validateNote(raw: Record<string, unknown>): Note {
   return note;
 }
 
+/**
+ * The triggers of a note file, as a hand may have written them. YAML reads `- cmd: zorp --wipe`
+ * with no quotes as a map with one key: that is the same trigger. An item of any other shape is
+ * left out. A broken trigger must cost only itself, never the note: a note that fails here is in
+ * no list, no search and no session, with no message.
+ */
+function storedTriggers(value: unknown): string[] {
+  const texts: string[] = [];
+  for (const item of Array.isArray(value) ? value : [value]) {
+    if (isString(item)) texts.push(item);
+    else if (item !== null && typeof item === "object" && !Array.isArray(item)) {
+      const entries = Object.entries(item);
+      const text = entries[0]?.[1];
+      if (entries.length === 1 && (isString(text) || typeof text === "number" || typeof text === "boolean")) texts.push(`${entries[0]![0]}: ${text}`);
+    }
+  }
+  return texts;
+}
+
 export function parseNote(text: string): Note {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
   if (!match) throw new KbError("invalid note: no frontmatter");
   const front = Bun.YAML.parse(match[1]!) as Record<string, unknown> | null;
   if (front === null || typeof front !== "object" || Array.isArray(front)) throw new KbError("invalid note: frontmatter is not a map");
-  return validateNote({ ...front, body: match[2] });
+  return validateNote({ ...front, ...("triggers" in front ? { triggers: storedTriggers(front.triggers) } : {}), body: match[2] });
 }
 
 /** Most recently trashed first. A note with no trashed_at goes by its last verification. */
@@ -134,6 +165,7 @@ export function serializeNote(note: Note): string {
   };
   if (note.verified_at_commit) front.verified_at_commit = note.verified_at_commit;
   front.anchors = note.anchors;
+  if (note.triggers?.length) front.triggers = note.triggers;
   front.confidence = note.confidence;
   if (note.promoted_to) front.promoted_to = note.promoted_to;
   if (note.supersedes?.length) front.supersedes = note.supersedes;

@@ -38,7 +38,7 @@ try {
   const memoryOn = autoMemoryOn(process.env, process.env.CLAUDE_PROJECT_DIR || cwd);
   if (!memoryOn) rules = SAVE_RULE;
   const store = new Store();
-  // The notes a Read named before a compaction or a /clear are gone from the context, so a Read may name them again.
+  // The notes a trigger loaded before a compaction or a /clear are gone from the context, so they may load again.
   if (input.source === "compact" || input.source === "clear") forgetSeen(store, input.session_id);
   const context = buildContext(store, cwd);
   const { text, hiddenIndexLines } = context;
