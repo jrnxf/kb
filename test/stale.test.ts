@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { contextBudget } from "../cli/context.ts";
 import { findStale } from "../cli/stale.ts";
-import { kb, legacyUsage, logAt, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
+import { kb, legacyUsage, logAt, otherMachine, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
 
 const SCOPE = "github.com/acme/billing";
 const NOW = new Date("2026-03-01T00:00:00Z");
@@ -113,6 +113,73 @@ describe("kb stale", () => {
     // The config sets both windows.
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ decayDays: 365, expireDays: 30 }));
     expect(reasons(store, repo)).toEqual(["checked:expired"]);
+  });
+
+  test("a note that is active on another machine does not expire here", () => {
+    const { repo, store } = fixture();
+    putNote(store, { id: "used-there", scope: SCOPE, last_verified: "2025-11-01T00:00:00Z" });
+    putNote(store, { id: "used-nowhere", scope: SCOPE, last_verified: "2025-11-01T00:00:00Z" });
+    expect(reasons(store, repo)).toEqual(["used-nowhere:expired", "used-there:expired"]);
+    // This machine has no event for the note. The roll-up of the other machine says it was opened last week.
+    otherMachine(store, "machine-b", { "used-there": { last: "2026-02-22T00:00:00Z" } });
+    expect(reasons(store, repo)).toEqual(["used-nowhere:expired"]);
+  });
+
+  test("judged-wrong: a session said the note was wrong after its last check, on any machine", () => {
+    const { repo, store } = fixture();
+    putNote(store, { id: "here", scope: SCOPE, last_verified: FRESH });
+    putNote(store, { id: "there", scope: SCOPE, last_verified: FRESH });
+    putNote(store, { id: "before", scope: SCOPE, last_verified: FRESH });
+    putNote(store, { id: "corrected", scope: SCOPE, last_verified: FRESH });
+    putNote(store, { id: "fine", scope: SCOPE, last_verified: FRESH });
+    logAt(store, "2026-02-25T00:00:00Z", { ev: "verdict", session: "s1", note: "here", verdict: "wrong" });
+    // Another session that the note helped does not take the verdict back.
+    logAt(store, "2026-02-26T00:00:00Z", { ev: "verdict", session: "s2", note: "here", verdict: "helped" });
+    // A verdict from before the last check is about an older text.
+    logAt(store, "2026-02-10T00:00:00Z", { ev: "verdict", session: "s1", note: "before", verdict: "wrong" });
+    // A session that corrects its own verdict judged the note once.
+    logAt(store, "2026-02-25T00:00:00Z", { ev: "verdict", session: "s3", note: "corrected", verdict: "wrong" });
+    logAt(store, "2026-02-25T00:01:00Z", { ev: "verdict", session: "s3", note: "corrected", verdict: "helped" });
+    logAt(store, "2026-02-25T00:00:00Z", { ev: "verdict", session: "s1", note: "fine", verdict: "helped" });
+    otherMachine(store, "machine-b", { there: { wrong: "2026-02-27T00:00:00Z" }, before: { wrong: "2026-02-19T00:00:00Z" } });
+    const found = findStale(store, repo, NOW).candidates;
+    expect(found.map((c) => `${c.id}:${c.reason}`)).toEqual(["here:judged-wrong", "there:judged-wrong"]);
+    expect(found[0]!.detail).toBe("a session judged it wrong 4 days ago, after the last check");
+    expect(found[1]!.detail).toBe("a session judged it wrong 2 days ago, after the last check");
+    expect(kb(store, ["stale"], { cwd: repo }).stdout).toMatch(/^there \| judged-wrong \| a session judged it wrong \d+ days ago, after the last check$/m);
+
+    // A new verification clears it: kb verify, or an update of the body.
+    expect(kb(store, ["verify", "here"], { cwd: repo }).code).toBe(0);
+    expect(kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ id: "there", body: "The corrected text." }) }).json.status).toBe("updated");
+    expect(reasons(store, repo)).toEqual([]);
+    // An update of another field is no verification.
+    logAt(store, "2026-02-25T00:00:00Z", { ev: "verdict", session: "s4", note: "fine", verdict: "wrong" });
+    expect(kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ id: "fine", confidence: "low" }) }).json.status).toBe("updated");
+    expect(reasons(store, repo)).toEqual(["fine:judged-wrong"]);
+  });
+
+  test("not-needed: three sessions said so after the last check, on all machines together, and none said it helped", () => {
+    const { repo, store } = fixture();
+    const ids = ["three-here", "two-here", "split", "helped", "helped-there", "helped-before", "same-session", "before"];
+    for (const [i, id] of ids.entries()) putNote(store, { id, title: `Fact ${i}`, scope: SCOPE, last_verified: FRESH });
+    const notNeeded = (note: string, session: string, time = "2026-02-25T00:00:00Z") => logAt(store, time, { ev: "verdict", session, note, verdict: "not-needed" });
+    for (const session of ["s1", "s2", "s3"]) for (const note of ["three-here", "helped", "helped-there", "helped-before"]) notNeeded(note, session);
+    for (const session of ["s1", "s2"]) for (const note of ["two-here", "split"]) notNeeded(note, session);
+    // One session that says it three times is one session.
+    for (const time of ["2026-02-25T00:00:00Z", "2026-02-26T00:00:00Z", "2026-02-27T00:00:00Z"]) notNeeded("same-session", "s1", time);
+    // Verdicts from before the last check do not count.
+    for (const session of ["s1", "s2", "s3"]) notNeeded("before", session, "2026-02-10T00:00:00Z");
+    logAt(store, "2026-02-26T00:00:00Z", { ev: "verdict", session: "s4", note: "helped", verdict: "helped" });
+    logAt(store, "2026-02-10T00:00:00Z", { ev: "verdict", session: "s4", note: "helped-before", verdict: "helped" });
+    otherMachine(store, "machine-b", { split: { not_needed: ["2026-02-27T00:00:00Z", "2026-02-01T00:00:00Z"] }, "helped-there": { helped: "2026-02-28T00:00:00Z" } });
+    const found = findStale(store, repo, NOW).candidates;
+    expect(found.map((c) => `${c.id}:${c.reason}`)).toEqual(["helped-before:not-needed", "split:not-needed", "three-here:not-needed"]);
+    expect(found[1]!.detail).toBe("at least 3 sessions judged it not needed since the last check, and none said it helped");
+
+    // A new verification clears it.
+    expect(kb(store, ["verify", "split", "three-here"], { cwd: repo }).code).toBe(0);
+    expect(kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ id: "helped-before", anchors: ["src/ledger.ts"] }) }).json.status).toBe("updated");
+    expect(reasons(store, repo)).toEqual([]);
   });
 
   test("a note expires after expireDays whole days, and a wrong window falls back to the default", () => {

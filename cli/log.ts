@@ -1,8 +1,9 @@
 // The event log: what each session was shown, what it opened, and what came of it. One JSON object
 // per line in .state/log/<YYYY-MM>.jsonl. Per machine, never committed and never synced, so a read
 // of a note is no longer a write to the store. The audit reads the log through `kb log`.
+// What the other machines need of it syncs as a small roll-up, one file per machine in activity/.
 
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type Store, writeAtomic } from "./store.ts";
 
@@ -55,8 +56,13 @@ export type LogEvent = Who &
   (
     | StartEvent
     | FireEvent
-    | { ev: "show"; note: string; why: Why }
-    | { ev: "search"; query: string; hits: number; why: Why }
+    /** `trashed`: the note was in the trash. A look into the trash is never activity. */
+    | { ev: "show"; note: string; why: Why; trashed?: true }
+    /**
+     * `hits` counts the notes that have every word. When no note has every word, `complete` is
+     * false, `hits` is 0 and `closest` counts the notes with the most words, which the search printed.
+     */
+    | { ev: "search"; query: string; hits: number; complete?: boolean; closest?: number; why: Why }
     | { ev: "write"; note: string; op: WriteOp }
     | { ev: "verdict"; note: string; verdict: Verdict }
     | { ev: "checkpoint" }
@@ -159,27 +165,37 @@ function parseLine(line: string): Logged | null {
   }
 }
 
-/** The events in time order. A line that does not parse is skipped. */
-export function readLog(store: Store, filter: { since?: Date; session?: string } = {}): Logged[] {
-  const from = filter.since ? stamp(filter.since) : "";
+/**
+ * The events in time order. A line that does not parse is skipped. `has` is a text that each line
+ * of interest holds: a line without it is not parsed, because most lines are long and of no use to
+ * a caller that wants one session or one kind of event.
+ */
+function scanLog(store: Store, from: string, has?: string): Logged[] {
   const events: Logged[] = [];
   for (const name of logFiles(store)) {
     if (name.slice(0, 7) < from.slice(0, 7)) continue;
-    let text: string;
+    let lines: string;
     try {
-      text = readFileSync(join(logDir(store), name), "utf8");
+      lines = readFileSync(join(logDir(store), name), "utf8");
     } catch {
       continue;
     }
-    for (const line of text.split("\n")) {
+    for (const line of lines.split("\n")) {
+      if (has !== undefined && !line.includes(has)) continue;
       const event = parseLine(line);
-      if (!event || event.t < from) continue;
-      if (filter.session !== undefined && event.session !== filter.session) continue;
-      events.push(event);
+      if (event && event.t >= from) events.push(event);
     }
   }
   // Each file is in the order of the appends. The sort is stable, so it only mends a clock that went back.
   return events.sort((a, b) => a.t.localeCompare(b.t));
+}
+
+/** The events in time order, of one session or from a start time on. A line that does not parse is skipped. */
+export function readLog(store: Store, filter: { since?: Date; session?: string } = {}): Logged[] {
+  const from = filter.since ? stamp(filter.since) : "";
+  if (filter.session === undefined) return scanLog(store, from);
+  // A line holds its session id as JSON text. Only a line with that text can belong to the session.
+  return scanLog(store, from, JSON.stringify(filter.session).slice(1, -1)).filter((event) => event.session === filter.session);
 }
 
 // ---- summary ----
@@ -195,7 +211,7 @@ export interface NoteLog {
   opened: { task: number; check: number };
   /** Times a trigger loaded the note, such as a Read of a file it is anchored to. */
   fired: number;
-  /** One verdict per session and note: the last one counts. */
+  /** One verdict per session and note: the last one counts. See `finalVerdicts`. */
   verdicts: Record<Verdict, number>;
 }
 
@@ -216,8 +232,34 @@ export interface LogSummary {
 
 export const emptyNoteLog = (id: string): NoteLog => ({ id, body: 0, index: 0, hidden: 0, opened: { task: 0, check: 0 }, fired: 0, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } });
 
-const texts = (value: unknown): string[] => (Array.isArray(value) ? value.filter((each): each is string => typeof each === "string") : []);
+/** A field of a line as the reader takes it: a later kb, or a hand edit, may have written another shape. */
+const text = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
+const texts = (value: unknown): string[] => (Array.isArray(value) ? value.filter((each): each is string => text(each) !== null) : []);
 const isWhy = (value: unknown): value is Why => value === "task" || value === "check";
+
+/** An event with its fields not yet checked. */
+type Raw = { t: string; ev: string } & Record<string, unknown>;
+
+/**
+ * The verdicts that count, in time order. A session that gives its verdicts twice, or corrects
+ * one, still judged each note once: its last verdict counts, with the time of that verdict. A
+ * subagent judges for itself. A verdict with no session cannot be matched to one, so the same
+ * verdict on the same note on the same day counts once.
+ */
+function finalVerdicts(events: Logged[]): { note: string; verdict: Verdict; t: string }[] {
+  const last = new Map<string, { note: string; verdict: Verdict; t: string }>();
+  for (const event of events as Raw[]) {
+    const note = event.ev === "verdict" ? text(event.note) : null;
+    if (!note || !VERDICTS.includes(event.verdict as Verdict)) continue;
+    const verdict = event.verdict as Verdict;
+    const session = text(event.session);
+    const key = session ? `${session}\n${text(event.agent) ?? ""}\n${note}` : `\n${note}\n${verdict}\n${event.t.slice(0, 10)}`;
+    // A later verdict takes the place of the first one in time order too.
+    last.delete(key);
+    last.set(key, { note, verdict, t: event.t });
+  }
+  return [...last.values()];
+}
 
 export function summarize(events: Logged[]): LogSummary {
   const notes = new Map<string, NoteLog>();
@@ -228,11 +270,10 @@ export function summarize(events: Logged[]): LogSummary {
   };
   const summary: LogSummary = { from: events[0]?.t ?? null, to: events.at(-1)?.t ?? null, events: events.length, sessions: 0, starts: 0, searches: { task: 0, check: 0 }, checkpoints: 0, unsaved: 0, notes: [] };
   const sessions = new Set<string>();
-  // A session that gives its verdicts twice, or corrects one, still judged each note once.
-  const verdicts = new Map<string, { note: string; verdict: Verdict }>();
   // The fields are read as unknown: a later kb, or a hand edit, may have written another shape.
-  for (const [i, event] of (events as (Who & { t: string; ev: string } & Record<string, unknown>)[]).entries()) {
-    if (event.session) sessions.add(event.session);
+  for (const event of events as Raw[]) {
+    const session = text(event.session);
+    if (session) sessions.add(session);
     switch (event.ev) {
       case "start":
         summary.starts++;
@@ -250,11 +291,10 @@ export function summarize(events: Logged[]): LogSummary {
         if (note) note.fired++;
         break;
       }
-      case "verdict": {
-        const note = of(event.note);
-        if (note && VERDICTS.includes(event.verdict as Verdict)) verdicts.set(event.session ? `${event.session}\n${event.agent ?? ""}\n${note.id}` : `\n${i}`, { note: note.id, verdict: event.verdict as Verdict });
+      case "verdict":
+        // A note that only a verdict of an unknown kind names still gets a row.
+        of(event.note);
         break;
-      }
       case "search":
         if (isWhy(event.why)) summary.searches[event.why]++;
         break;
@@ -270,7 +310,7 @@ export function summarize(events: Logged[]): LogSummary {
         break;
     }
   }
-  for (const { note, verdict } of verdicts.values()) notes.get(note)!.verdicts[verdict]++;
+  for (const { note, verdict } of finalVerdicts(events)) of(note)!.verdicts[verdict]++;
   summary.sessions = sessions.size;
   summary.notes = [...notes.values()].sort((a, b) => a.id.localeCompare(b.id));
   return summary;
@@ -278,11 +318,14 @@ export function summarize(events: Logged[]): LogSummary {
 
 // ---- last activity ----
 
-/** The note of an event that shows the note was of use: a show for a task, a fire, or a verdict "helped". */
+/**
+ * The note of an event that shows the note was of use: a show for a task, a fire, or a verdict
+ * "helped". A show of a note in the trash is a look at what was retired, not a use of it.
+ */
 function activeNote(event: Logged): string | null {
-  const e = event as { ev: string; note?: unknown; why?: unknown; verdict?: unknown };
+  const e = event as { ev: string; note?: unknown; why?: unknown; verdict?: unknown; trashed?: unknown };
   if (typeof e.note !== "string" || !e.note) return null;
-  return (e.ev === "show" && e.why === "task") || e.ev === "fire" || (e.ev === "verdict" && e.verdict === "helped") ? e.note : null;
+  return (e.ev === "show" && e.why === "task" && !e.trashed) || e.ev === "fire" || (e.ev === "verdict" && e.verdict === "helped") ? e.note : null;
 }
 
 /** How far each file is read, in bytes, and the newest activity found up to there. */
@@ -363,10 +406,195 @@ function logActivity(store: Store): Map<string, string> {
   return cache.last;
 }
 
+// ---- the roll-up: what the other machines need of this log ----
+
+/** A note is "not needed" when this many sessions said so. A roll-up keeps that many times per note. */
+export const NOT_NEEDED_SESSIONS = 3;
+
+/** The log keeps this many months. A monthly file older than that is removed. */
+export const LOG_MONTHS = 12;
+
+/** What one machine knows of a note, in the form that syncs. Each time has the form of the log. */
+export interface NoteRollUp {
+  /** The last activity. */
+  last?: string;
+  /** The newest verdict "helped", and the newest verdict "wrong". */
+  helped?: string;
+  wrong?: string;
+  /** The newest verdicts "not-needed", one per session, the newest first. At most NOT_NEEDED_SESSIONS. */
+  not_needed?: string[];
+}
+
+const rollUpDir = (store: Store) => join(store.home, "activity");
+
+/** A machine id that is safe as a file name. */
+const SAFE_MACHINE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** A roll-up file as a map. It accepts any shape, and takes only the fields that are a time. */
+function readRollUp(path: string): Map<string, NoteRollUp> {
+  const notes = new Map<string, NoteRollUp>();
+  let raw: unknown;
+  try {
+    raw = (JSON.parse(readFileSync(path, "utf8")) as { notes?: unknown } | null)?.notes;
+  } catch {
+    return notes;
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return notes;
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!id || value === null || typeof value !== "object") continue;
+    const { last, helped, wrong, not_needed } = value as Record<string, unknown>;
+    const entry: NoteRollUp = {};
+    if (text(last)) entry.last = last as string;
+    if (text(helped)) entry.helped = helped as string;
+    if (text(wrong)) entry.wrong = wrong as string;
+    if (texts(not_needed).length > 0) entry.not_needed = texts(not_needed);
+    if (Object.keys(entry).length > 0) notes.set(id, entry);
+  }
+  return notes;
+}
+
+/** The roll-up of each machine that has one, this machine too. */
+function rollUps(store: Store): { machine: string; notes: Map<string, NoteRollUp> }[] {
+  let files: string[];
+  try {
+    files = readdirSync(rollUpDir(store)).filter((name) => name.endsWith(".json")).sort();
+  } catch {
+    return [];
+  }
+  return files.map((name) => ({ machine: name.slice(0, -5), notes: readRollUp(join(rollUpDir(store), name)) }));
+}
+
+const newest = (a: string | undefined, b: string | undefined) => ((a ?? "") >= (b ?? "") ? a : b);
+
+/** The verdicts on each note. `notNeeded` has one time per session, the newest first. */
+export interface Judgment {
+  helped?: string;
+  wrong?: string;
+  notNeeded: string[];
+}
+
+/** What the log of this machine says of the verdicts on each note. Only the verdict lines are parsed. */
+function logJudgments(store: Store): Map<string, Judgment> {
+  const judged = new Map<string, Judgment>();
+  for (const { note, verdict, t } of finalVerdicts(scanLog(store, "", '"verdict"'))) {
+    const entry = judged.get(note) ?? { notNeeded: [] };
+    if (verdict === "not-needed") entry.notNeeded.push(t);
+    else entry[verdict] = newest(entry[verdict], t);
+    judged.set(note, entry);
+  }
+  for (const entry of judged.values()) entry.notNeeded.sort().reverse();
+  return judged;
+}
+
 /**
- * The last activity of each note on this machine: the newest of a `kb show` for a task, a fire, a
- * verdict "helped", and the `last_used` that kb recorded in usage/ before it had a log. A note
- * with no activity is not in the map. The ranking and `kb stale` both read it here.
+ * The verdicts on each note over all machines: the log of this machine, and the roll-up of each
+ * other machine. `kb stale` reads them. A roll-up keeps at most NOT_NEEDED_SESSIONS times per note,
+ * which is enough to tell if that many sessions said "not-needed".
+ */
+export function judgments(store: Store): Map<string, Judgment> {
+  let judged = new Map<string, Judgment>();
+  try {
+    judged = logJudgments(store);
+  } catch {
+    // a log that cannot be read gives no verdict
+  }
+  // The roll-up of this machine says what its log says, as of the day it was written.
+  const own = store.local().machine;
+  for (const { machine, notes } of rollUps(store)) {
+    if (machine === own) continue;
+    for (const [id, theirs] of notes) {
+      const entry = judged.get(id) ?? { notNeeded: [] };
+      if (theirs.helped) entry.helped = newest(entry.helped, theirs.helped);
+      if (theirs.wrong) entry.wrong = newest(entry.wrong, theirs.wrong);
+      if (theirs.not_needed) entry.notNeeded = [...entry.notNeeded, ...theirs.not_needed].sort().reverse();
+      judged.set(id, entry);
+    }
+  }
+  return judged;
+}
+
+/**
+ * The roll-up of this machine, as it is now: the last activity and the verdicts in the log. The
+ * last activity never goes back, so a note keeps it after its month left the log.
+ */
+function buildRollUp(store: Store, before: Map<string, NoteRollUp>): Map<string, NoteRollUp> {
+  const notes = new Map<string, NoteRollUp>();
+  const of = (id: string): NoteRollUp => {
+    if (!notes.has(id)) notes.set(id, {});
+    return notes.get(id)!;
+  };
+  for (const [id, was] of before) if (was.last) of(id).last = was.last;
+  for (const [id, t] of logActivity(store)) of(id).last = newest(of(id).last, t);
+  for (const [id, judged] of logJudgments(store)) {
+    const entry = of(id);
+    if (judged.helped) entry.helped = judged.helped;
+    if (judged.wrong) entry.wrong = judged.wrong;
+    if (judged.notNeeded.length > 0) entry.not_needed = judged.notNeeded.slice(0, NOT_NEEDED_SESSIONS);
+  }
+  return notes;
+}
+
+/** One line per note, in id order, so a commit of the file shows only the notes that changed. */
+function rollUpText(notes: Map<string, NoteRollUp>): string {
+  const rows = [...notes].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, n]) => `${JSON.stringify(id)}: ${JSON.stringify({ last: n.last, helped: n.helped, wrong: n.wrong, not_needed: n.not_needed })}`);
+  return `{\n"v": 1,\n"notes": {\n${rows.join(",\n")}\n}\n}\n`;
+}
+
+/**
+ * The daily care of the log, at most once per day: write the roll-up of this machine to
+ * activity/<machine>.json, when it changed, and remove the monthly files older than LOG_MONTHS.
+ * Each machine writes only its own file, so two machines never change the same one. Nothing is
+ * committed here: a command that writes a note calls this before its commit, and so does a sync.
+ * A read never calls it. It never throws. Returns true when the roll-up file changed.
+ */
+export function rollUp(store: Store, now: Date = new Date()): boolean {
+  try {
+    // No log: nothing to roll up and nothing to remove. A store with no log gets no file.
+    if (!store.exists() || logFiles(store).length === 0) return false;
+    const day = stamp(now).slice(0, 10);
+    const mark = join(logDir(store), "rolled-up");
+    try {
+      if (readFileSync(mark, "utf8").trim() === day) return false;
+    } catch {
+      // no mark yet
+    }
+    writeAtomic(mark, `${day}\n`);
+
+    let changed = false;
+    const machine = store.machine();
+    if (SAFE_MACHINE.test(machine)) {
+      const path = join(rollUpDir(store), `${machine}.json`);
+      const before = readRollUp(path);
+      const notes = buildRollUp(store, before);
+      const next = rollUpText(notes);
+      let current = "";
+      try {
+        current = readFileSync(path, "utf8");
+      } catch {
+        // no roll-up yet
+      }
+      if (next !== current && (notes.size > 0 || current)) {
+        writeAtomic(path, next);
+        changed = true;
+      }
+    }
+
+    // The roll-up is written first, so the last activity in a month that goes now is kept.
+    const oldest = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - LOG_MONTHS, 1)).toISOString().slice(0, 7);
+    for (const name of logFiles(store)) if (name.slice(0, 7) < oldest) rmSync(join(logDir(store), name), { force: true });
+    return changed;
+  } catch {
+    return false;
+  }
+}
+
+// ---- last activity over all machines ----
+
+/**
+ * The last activity of each note on any machine: the newest of a `kb show` for a task, a fire and
+ * a verdict "helped" in the log of this machine, the roll-up of each machine, and the `last_used`
+ * that kb recorded in usage/ before it had a log. A note with no activity is not in the map. The
+ * ranking and `kb stale` both read it here.
  */
 export function lastActivity(store: Store): Map<string, string> {
   const last = new Map<string, string>();
@@ -374,10 +602,22 @@ export function lastActivity(store: Store): Map<string, string> {
     if (t > (last.get(id) ?? "")) last.set(id, t);
   };
   for (const [id, legacy] of store.usage()) if (legacy.last_used) take(id, legacy.last_used);
+  for (const { notes } of rollUps(store)) for (const [id, entry] of notes) if (entry.last) take(id, entry.last);
   try {
     for (const [id, t] of logActivity(store)) take(id, t);
   } catch {
-    // a log that cannot be read ranks the notes as if nobody opened them
+    // a log that cannot be read ranks the notes by what the roll-ups say
   }
   return last;
+}
+
+/**
+ * The ids that have a history on any machine: activity or a verdict in a roll-up, activity in the
+ * log of this machine, or counters of an older kb. `kb add` gives none of them to a new note, so
+ * a new note never takes the history of a deleted one.
+ */
+export function idsWithHistory(store: Store): Set<string> {
+  const ids = new Set<string>([...store.usage().keys(), ...lastActivity(store).keys()]);
+  for (const { notes } of rollUps(store)) for (const id of notes.keys()) ids.add(id);
+  return ids;
 }

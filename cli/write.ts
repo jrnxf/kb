@@ -1,7 +1,7 @@
 // Changes to stored notes, shared by the CLI commands and `kb serve`.
 
 import { existsSync } from "node:fs";
-import { type WriteOp, logEvent } from "./log.ts";
+import { type WriteOp, logEvent, rollUp } from "./log.ts";
 import { KbError, serializeNote, validateNote } from "./note.ts";
 import type { RepoInfo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
@@ -11,10 +11,14 @@ import { kickSync } from "./sync.ts";
 
 export const nowIso = (date: Date = new Date()) => date.toISOString().replace(/\.\d{3}Z$/, "Z");
 
-/** Regenerate the derived files, commit, and start a background sync. */
+/**
+ * Regenerate the derived files, commit, and start a background sync. The roll-up of the log, which
+ * is due once per day, goes into the same commit.
+ */
 export function afterWrite(store: Store, message: string): void {
   store.writeIndex();
   clearStaleCache(store);
+  rollUp(store);
   if (store.commit(message)) kickSync(store);
 }
 

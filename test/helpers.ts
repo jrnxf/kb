@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type LogEvent, logEvent, readLog } from "../cli/log.ts";
+import { type LogEvent, type NoteRollUp, logEvent, readLog } from "../cli/log.ts";
 import type { Note } from "../cli/note.ts";
 import { Store } from "../cli/store.ts";
 
@@ -79,6 +79,12 @@ export const logAt = (store: Store, time: string, event: LogEvent) => logEvent(s
 export function legacyUsage(store: Store, machine: string, data: Record<string, { uses: number; last_used?: string }>): void {
   mkdirSync(join(store.home, "usage"), { recursive: true });
   writeFileSync(join(store.home, "usage", `${machine}.json`), JSON.stringify(data));
+}
+
+/** The roll-up of another machine, as a sync brings it: what that machine knows of each note. */
+export function otherMachine(store: Store, machine: string, notes: Record<string, NoteRollUp>): void {
+  mkdirSync(join(store.home, "activity"), { recursive: true });
+  writeFileSync(join(store.home, "activity", `${machine}.json`), JSON.stringify({ v: 1, notes }));
 }
 
 export interface CliResult {

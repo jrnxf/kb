@@ -54,7 +54,7 @@ const EMPTY: ContextResult = { text: "", scope: null, index: [], bodies: [], dro
 
 /**
  * Repo notes before global notes, so the notes of the repo are never crowded out. Repo notes go by
- * kind (open-work, gotcha, convention, decision, how-to), then by last activity on this machine,
+ * kind (open-work, gotcha, convention, decision, how-to), then by last activity on any machine,
  * then last_verified. Global notes go open work first, then by kind, then last_verified. No count
  * of reads is in the order: a count measures neither the value of a note nor the need for it.
  * `active` is `lastActivity` of the store.

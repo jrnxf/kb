@@ -3,12 +3,12 @@
 
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
-import { lastActivity } from "./log.ts";
+import { NOT_NEEDED_SESSIONS, judgments, lastActivity } from "./log.ts";
 import { normalizeTitle } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { git, type Store, type StoredNote, writeAtomic } from "./store.ts";
 
-export const STALE_REASONS = ["anchor-changed", "anchor-missing", "commit-unknown", "expired", "decayed", "duplicate"] as const;
+export const STALE_REASONS = ["anchor-changed", "anchor-missing", "commit-unknown", "judged-wrong", "expired", "decayed", "not-needed", "duplicate"] as const;
 export type StaleReason = (typeof STALE_REASONS)[number];
 
 export interface StaleCandidate {
@@ -140,7 +140,9 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
   const { decayDays, expireDays } = store.config();
   const read = anchorReader();
   const active = lastActivity(store);
+  const judged = judgments(store);
   const days = (iso: string) => Math.floor((now.getTime() - new Date(iso).getTime()) / 86_400_000);
+  const ago = (n: number) => (n <= 0 ? "today" : `${n} ${n === 1 ? "day" : "days"} ago`);
   for (const note of notes) {
     if (repo.root && repo.head && note.scope === repo.scope) {
       for (const found of anchorCandidates(note, repo.root, changedSince, read)) add(note, found.reason, found.detail);
@@ -151,6 +153,14 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
     const seen = lastActive && lastActive > note.last_verified ? lastActive : note.last_verified;
     if (days(seen) > expireDays) add(note, "expired", `no use and no check for ${days(seen)} days`);
     else if (days(note.last_verified) > decayDays) add(note, "decayed", `last verified ${days(note.last_verified)} days ago`);
+    // What sessions said of the note, on any machine. A verdict from before the last check is
+    // about an older text, so a verification clears both reasons.
+    const verdicts = judged.get(note.id);
+    if (!verdicts) continue;
+    const since = (t: string | undefined): t is string => t !== undefined && t > note.last_verified;
+    if (since(verdicts.wrong)) add(note, "judged-wrong", `a session judged it wrong ${ago(days(verdicts.wrong))}, after the last check`);
+    const notNeeded = verdicts.notNeeded.filter(since).length;
+    if (notNeeded >= NOT_NEEDED_SESSIONS && !since(verdicts.helped)) add(note, "not-needed", `at least ${notNeeded} sessions judged it not needed since the last check, and none said it helped`);
   }
 
   // Possible duplicates: titles that share most of their words. The newer note is the candidate.

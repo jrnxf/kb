@@ -138,6 +138,7 @@ export class Store {
     writeAtomic(join(this.home, "local.json"), `${JSON.stringify(local, null, 2)}\n`);
   }
 
+  /** The id of this machine, made on first use. It names the file that only this machine writes: its roll-up in activity/. */
   machine(): string {
     const local = this.local();
     if (local.machine) return local.machine;
@@ -213,7 +214,8 @@ export class Store {
   /**
    * The counters that kb kept in usage/, one file per machine, before it had an event log. They
    * are synced history, so the files stay. Two things still read them: the last activity of a note
-   * takes `last_used`, and `kb add` never gives a new note an id that has counters.
+   * takes `last_used`, and `kb add` never gives a new note an id that has counters. What a machine
+   * shares of its log now is the roll-up in activity/, which log.ts reads and writes.
    */
   usage(): Map<string, Usage> {
     const total = new Map<string, Usage>();
