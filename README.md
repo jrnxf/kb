@@ -25,12 +25,42 @@ highest.
   the rule in full reaches every session, also when the body does not. It runs at startup,
   resume, `/clear`, compaction and fork. With auto memory off, the fixed text is three lines:
   the scope, one line on how to read the notes, and the save rule.
-- **Notes load by path.** When the agent reads a file, a hook names the repo notes whose anchors
-  name that file or a folder above it: the id, the kind and the title, at most five at a time. So
-  a note reaches the agent when it works on the file, also when the note has no place in the
-  index. Each note comes once per session, and again after a compaction or a `/clear`. A subagent
-  has its own context, so it gets the notes too. A file the agent gets
-  with `@` is not a Read, so it names no notes.
+- **Notes load by path.** When the agent reads or changes a file, a hook gives the repo notes whose
+  anchors name that file or a folder above it. A gotcha comes whole, because a title that the agent
+  does not open is lost. Another kind comes as one line: the id, the kind and the title. A Read
+  gives at most five notes, and a change at most three. A shell command that names the path counts
+  too: `sed -n 1,40p src/pay.ts` loads the notes on `src/pay.ts`. So a note reaches the agent when
+  it works on the file, also when the note has no place in the index. Each note comes once per
+  session, and again after a compaction or a `/clear`. A subagent has its own context, so it gets
+  the notes too. A file the agent gets with `@` is not a Read, so it loads no notes.
+- **Notes load at their trigger.** A session start gives notes before the task is known, and most
+  tool calls are shell commands. So a note can carry `triggers`, and a hook loads the note at the
+  moment it applies:
+  - `cmd: pkill -f` loads the note before a shell command that runs `pkill -f`. The command still runs.
+  - `stop: git push --force` refuses the command once, with the note as the reason. The second run
+    passes. It is for a command where one run does damage.
+  - `err: address already in use` loads the note after a tool call that failed with that text in
+    its error.
+
+  The agent gets the id, the kind, the title and the body. A body over 600 characters is cut, with
+  a pointer to `kb show`. At most three notes load for one tool call. Each note comes once per
+  session and subagent, and again after a compaction or a `/clear`. A repo note loads in its repo,
+  and a global note loads everywhere. A `cmd` or a `stop` trigger matches like this:
+  - kb cuts the command line into simple commands at `;`, `&&`, `||`, `|`, `&`, a line break and `$( )`.
+  - One simple command must hold the words of the trigger in order, as whole words. Other words
+    may stand between them.
+  - The first word must be the command word. So `cmd: pkill -f` matches `sudo pkill -9 -f x` and
+    `a && pkill -f x`, and it does not match `echo "pkill -f"`.
+  - After `sudo`, `env`, `xargs`, `timeout`, `ssh` and such, each later word can be the command
+    word. The quoted script of `bash -c`, `ssh` or `eval` is read as a command line.
+  - A quoted argument, a comment and the body of a heredoc are data. `-rf` and `-fr` are two words,
+    so each form needs its own trigger.
+
+  `kb add` refuses a trigger of one word that is a common command, such as `ls`, `git` or `bun`:
+  it needs a second word. An `err` text needs 8 characters. Case and line breaks do not count in
+  it. The hook runs before every shell command, so it reads no note file: it reads one small table
+  of all triggers and anchors, which kb builds again when a note file changes. A command that
+  matches nothing costs about 20 ms.
 - **Context stays small.** Budgets in `kb.config.json`: `indexLines` (60), `globalIndexLines`
   (20) and `contextChars` (8000, clamped under the 10,000 character hook cap, with the save rule
   on top). The repo's own notes rank first, by kind (open-work, gotcha, convention, decision,
@@ -41,11 +71,11 @@ highest.
   takes an index line. The store can grow for years and a session loads the same amount.
 - **A log says what each session got.** Each machine keeps an event log in `.state/log/`. It
   records the notes a session got at its start, and in what form: a body, an index line, or
-  nothing. It also records the notes a Read named, each `kb show` and `kb search`, each write and
+  nothing. It also records the notes a trigger loaded, each `kb show` and `kb search`, each write and
   each checkpoint. A read writes nothing to the store, so it makes no commit and no sync. A check
   (an audit, a look before an update) passes `--check`. At the checkpoint the agent gives a
   verdict on the notes it got: `kb verdict helped`, `not-needed` or `wrong`. `not-needed` is only
-  for a note that a Read named in that session: kb refuses it for a note from the session start,
+  for a note that a trigger loaded in that session: kb refuses it for a note from the session start,
   which loads in every session. A note that the session corrected gets no `wrong`. `kb log` sums the
   log per note, for the next audit. The log never leaves the machine, and it keeps 12 months: a
   monthly file older than that is removed.
@@ -77,7 +107,7 @@ highest.
   anchored file changed since the note was verified, an anchor is gone, the verified commit left
   the history, the note had no activity and nobody checked it for `expireDays` (90), nobody
   verified it for `decayDays` (180), or two titles are close. Activity is a `kb show` for a task,
-  a Read that named the note, or a verdict `helped`, on any machine. An expired note goes to the audit
+  a trigger that loaded the note, or a verdict `helped`, on any machine. An expired note goes to the audit
   as trash, and you decide: kb never deletes a note on its own. Two reasons come from the verdicts
   of all machines. `judged-wrong`: a session gave the note the verdict `wrong` after its last
   check. `not-needed`: at least 3 sessions judged it `not-needed` after its last check, and none
@@ -147,7 +177,50 @@ highest.
   activity/<machine>.json                       # the roll-up of each machine's log, synced
   INDEX.md  local.json  .state/                 # generated or per-machine, not committed
   .state/log/<YYYY-MM>.jsonl                    # the event log of this machine, 12 months
+  .state/triggers.json                          # the table of triggers and anchors that the hooks read
 ```
+
+## A note
+
+```markdown
+---
+id: zorp-wipe-removes-the-cache-of-every-project
+title: zorp --wipe removes the cache of every project
+scope: github.com/example-org/atlas-api
+kind: gotcha
+created: 2026-01-10T09:00:00Z
+last_verified: 2026-03-02T14:30:00Z
+verified_at_commit: 3f2a91c
+anchors:
+  - scripts/cache.sh
+triggers:
+  - "cmd: zorp --wipe"
+  - "err: cache index is missing"
+confidence: high
+---
+Pass `--project <name>`. A wipe with no project takes ten minutes to rebuild.
+```
+
+- `id` is the title in short form. `scope` is `global` or a repo id.
+- `kind` is `open-work`, `gotcha`, `convention`, `decision` or `how-to`. `confidence` is `high`, `medium` or `low`.
+- `last_verified` and `verified_at_commit` say when somebody last checked the fact. A new title, body or anchor is a check. A new trigger is not.
+- `anchors` are repo-relative paths, or `path#symbol`. They let `kb stale` find a note that the code left behind, and they load the note by path.
+- `triggers` are optional: `cmd:`, `stop:` and `err:`, as "Notes load at their trigger" says. A path is an anchor, not a trigger.
+
+kb also writes `promoted_to` (the instruction file a rule moved to), `supersedes` (the notes a merge
+took in) and `trashed_at`. `kb add` answers with `warnings`, and still saves the note, when a gotcha
+or a how-to has no trigger and no anchor, and when a body is over 700 characters.
+
+## Hooks
+
+- `SessionStart` (startup, resume, clear, compact, fork) prints `kb context`, the save rule and the notices.
+- `PreToolUse` on Bash, Edit, Write and NotebookEdit loads the notes of a `cmd` or a `stop` trigger, and the notes on a path.
+- `PostToolUseFailure` loads the notes of an `err` trigger. Claude Code sends the output of a failed call only there.
+- `PostToolUse` on Read loads the notes on the file.
+- `PreCompact` tells the summary what to keep, and `SessionEnd` on `/clear` records a session with no checkpoint.
+
+No hook can break or slow a session: on any failure it prints nothing and exits 0. The two hooks for
+tool calls have 2 and 3 seconds.
 
 ## Commands
 
@@ -202,7 +275,7 @@ Skills: `/kb:checkpoint`, `/kb:recover`, `/kb:audit`. Only you can start them. `
 user states to an instruction file, and the agent starts it on its own.
 
 `kb log` prints one row per note: how often a session got it as a body, as an index line or not at
-all, how often an agent opened it (for a task, and as a check), how often a Read named it, and its
+all, how often an agent opened it (for a task, and as a check), how often a trigger loaded it, and its
 verdicts. `--since <days>` takes the last days only. `--session <id>` prints the events of one
 session in time order, and the notes that session got and has not judged yet. The rows count the
 events of this machine. `last_activity` is the newest over all machines. A session that gives a

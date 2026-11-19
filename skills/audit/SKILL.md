@@ -25,9 +25,13 @@ kb budget --json
   - `anchor-missing` - an anchored path is gone, or the symbol is no longer in the file.
   - `commit-unknown` - the verified commit is not in the history (a rebase or a shallow clone).
   - `judged-wrong` - a session gave the note the verdict `wrong` after its last check. Read the note and the code. Then propose a rewrite, or trash when the fact is gone. When a session corrected the note already and it is true now, propose keep with `checked`.
-  - `expired` - the note had no activity on any machine and nobody checked it for `expireDays` (90). Activity is a `kb show` for a task, a Read that named the note, or a verdict `helped`. Propose trash, also for a gotcha or a convention, but not for open work that is not done. If the note still holds, the user picks keep on the card, and the keep records a check that resets the clock.
+  - `expired` - the note had no activity on any machine and nobody checked it for `expireDays` (90). Activity is a `kb show` for a task, a trigger that loaded the note, or a verdict `helped`. Propose trash, also for a gotcha or a convention, but not for open work that is not done. If the note still holds, the user picks keep on the card, and the keep records a check that resets the clock.
   - `decayed` - the note has not expired, but nobody verified it within the decay window.
-  - `not-needed` - in at least 3 sessions a Read of an anchored file named the note, and the session judged it `not-needed` after its last check. None judged it `helped`. The note loads where it has no bearing. Propose a rewrite with a narrower title, so a session knows from the index line when it applies. For narrower `anchors`, propose keep and name the anchors in `why`: a card cannot change anchors, so the user sends the note back and you set them in step 4. If the note loads in the right place, propose keep.
+  - `not-needed` - in at least 3 sessions a trigger loaded the note (a command, an error or a file), and the session judged it `not-needed` after its last check. None judged it `helped`. The note loads where it has no bearing.
+    - Read the note's `triggers` and `anchors` with `kb show <id> --check`. Propose a narrower trigger: more words in a `cmd:` (`cmd: git push --force`, not `cmd: git push`), a longer `err:` text, or an anchor on the file and not on its folder.
+    - A card cannot change triggers or anchors. So propose keep, and name the new triggers or anchors in `why`. The user sends the note back, and you set them in step 4.
+    - When the title is too wide, propose a rewrite with a narrower title, so a session knows from the index line when the note applies.
+    - If the note loads in the right place, propose keep.
   - `duplicate` - the title is close to the title of another note.
 - `kb budget` shows what a session of this scope loads. `notes` gives the size of each note and what a session gets of it, in rank order. In a repo, `index.capped` counts the global notes that stay out of its sessions on purpose, the lowest ranked. That is not a reason to change them here.
   - Bodies that did not fit (`context.dropped`) are normal: each of these notes still reaches the session as an index line. This alone is no reason to take a note out. The notes with the most `chars` are the bodies to shorten, so that more notes load whole.
@@ -118,7 +122,7 @@ KB_AUDIT
 
 When the user says it is applied, run `kb audit status`. It lists what the page did, and the notes the user sent back with what is wrong with each.
 
-For each note sent back, read it and the code again, and rewrite it with `kb add --json`. Add `"anchors"` when the request is for narrower anchors:
+For each note sent back, read it and the code again, and rewrite it with `kb add --json`. Add `"triggers"` or `"anchors"` when the request is for a narrower trigger or anchor. A list replaces the old list:
 
 ```bash
 kb add --json <<'KB_NOTE'
