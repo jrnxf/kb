@@ -132,9 +132,8 @@ describe("maskSecrets", () => {
       expect(findSecret(masked)).toBeNull();
       expect(masked).toContain(kind === "a password in a URL" ? "<masked: a password>" : `<masked: ${kind}>`);
       expect(masked).toStartWith("before\nthe command was: ");
-      // The first line of a key with no last line: the key was cut, so all that follows goes.
-      if (kind === "a private key") expect(masked).toBe("before\nthe command was: <masked: a private key>");
-      else expect(masked).toEndWith(" --verbose\nafter");
+      // Also after the first line of a key with no last line: the lines of the key go, and what is no key stays.
+      expect(masked).toEndWith(" --verbose\nafter");
     });
   }
 
@@ -155,7 +154,7 @@ describe("maskSecrets", () => {
   });
 
   // The lines of a key have no shape of their own, and the headers in front of them have another shape again.
-  test("masks a key with armor headers whole, and a key with no last line to the end of the text", () => {
+  test("masks a key with armor headers whole, and of a key with no last line the headers and the lines of base64", () => {
     const head = `-----BEGIN ${"RSA"} PRIVATE KEY-----`;
     const tail = `-----END ${"RSA"} PRIVATE KEY-----`;
     const body = [rand(64), rand(64), `${rand(10)}==`];
@@ -166,13 +165,33 @@ describe("maskSecrets", () => {
 
     const pgp = (end: boolean) => `-----BEGIN ${"PGP"} PRIVATE KEY BLOCK-----\nVersion: GnuPG v2\nComment: the key of the deploy bot\n\n${body.join("\n")}\n=${rand(4)}${end ? `\n-----END ${"PGP"} PRIVATE KEY BLOCK-----` : ""}`;
     expect(maskSecrets(`gpg --export-secret-keys\n${pgp(true)}\nexit 0`)).toBe("gpg --export-secret-keys\n<masked: a private key>\nexit 0");
-    // A key that the output cut short has no last line. All that follows its first line goes.
-    for (const cut of [pgp(false), `${head}\nProc-Type: 4,ENCRYPTED\n\n${body[0]}`, `${head}\n${body[0]}\n${body[1]}`]) {
-      const masked = maskSecrets(`the output was:\n${cut}\nmore lines of the key, or of what came after it`);
-      expect(masked).toBe("the output was:\n<masked: a private key>");
+    // A key that the output cut short has no last line. Its headers and its lines go, and the text after them stays.
+    const cuts = [pgp(false), `${head}\nProc-Type: 4,ENCRYPTED\n\n${body[0]}`, `${head}\n${body[0]}\n${body[1]}`, `${head}\r\n${body[0]}\r\n\r\n${body[1]}`];
+    for (const cut of cuts) {
+      const masked = maskSecrets(`the output was:\n${cut}\n\nmore lines, of what came after it`);
+      expect(masked).toBe("the output was:\n<masked: a private key>\n\nmore lines, of what came after it");
       expect(findSecret(masked)).toBeNull();
     }
+    // The same as one line: with \n written out as in a JSON file, and with spaces as in one line of output.
+    expect(maskSecrets(`"private_key": "${head}\\n${body[0]}\\n${body[1]}", "id": 7`)).toBe('"private_key": "<masked: a private key>", "id": 7');
+    expect(maskSecrets(`head -3 id_rsa: ${head} ${body[0]} ${body[1]} exit 1`)).toBe("head -3 id_rsa: <masked: a private key> exit 1");
     for (const left of ["Proc-Type", "DEK-Info", "GnuPG", "deploy bot", body[0]!]) expect(maskSecrets(`${encrypted}\n${pgp(true)}\n${pgp(false)}`)).not.toContain(left);
+  });
+
+  // An agent that writes about a key file names its first line. A mask to the end of the text took the rest of the turn.
+  test("a sentence that names the first line of a key loses that mark only", () => {
+    const head = `-----BEGIN ${"RSA"} PRIVATE KEY-----`;
+    const tail = `-----END ${"RSA"} PRIVATE KEY-----`;
+    const said = (mark: string) => `The file starts with ${mark} so I will check it.\n\nThen I ran the build.\nIt passed: 14 tests in /home/user/projects/shop/test.`;
+    expect(maskSecrets(said(head))).toBe(said("<masked: a private key>"));
+    expect(findSecret(maskSecrets(said(head)))).toBeNull();
+    // A line of a sentence after the mark is no line of a key, also when it has a colon or a long word.
+    const lines = "It is the deploy key of the shop.\nNote the internationalization of the comment.";
+    expect(maskSecrets(`${head}\n${lines}`)).toBe(`<masked: a private key>\n${lines}`);
+    // A sentence that names the first line does not reach the END line of a key far below it.
+    const key = `${head}\n${rand(64)}\n${tail}`;
+    expect(maskSecrets(`${said(head)}\n${key}\nexit 0`)).toBe(`${said("<masked: a private key>")}\n<masked: a private key>\nexit 0`);
+    expect(maskSecrets(`It starts with ${head} and it ends with ${tail}.`)).toBe("It starts with <masked: a private key>.");
   });
 
   test("leaves text with no secret as it is, also a text that names a format", () => {
@@ -212,6 +231,43 @@ describe("maskToolText", () => {
     for (const [text, masked] of cases) expect(maskToolText(text)).toBe(masked);
   });
 
+  // A command line gives a credential with no `=`: after a flag, after a user name, glued to -p, or in a URL.
+  test("masks the value after a flag that says secret, the password after a user name, and a short password in a URL", () => {
+    const cases: [string, string][] = [
+      ["curl -u admin:hunter2 --token abc123 https://api.example.com", "curl -u admin:<masked: a password> --token <masked: a secret value> https://api.example.com"],
+      ["deploy --password hunter2 --host db.example.com", "deploy --password <masked: a secret value> --host db.example.com"],
+      ["tool --api-key k1 --client-secret 's 2' -passwd p3 --auth me:pw --credential c4 --key k5", "tool --api-key <masked: a secret value> --client-secret '<masked: a secret value>' -passwd <masked: a secret value> --auth <masked: a secret value> --credential <masked: a secret value> --key <masked: a secret value>"],
+      ["tool --auth=me:pw --auth-token=t1", "tool --auth=<masked: a secret value> --auth-token=<masked: a secret value>"],
+      ["curl --user 'bob:pw' --proxy-user=p:q -x proxy.example.com", "curl --user 'bob:<masked: a password>' --proxy-user=p:<masked: a password> -x proxy.example.com"],
+      ["mysql -psecret -h db shop", "mysql -p<masked: a password> -h db shop"],
+      ["mysqldump -u root -p'se cret' shop | gzip", "mysqldump -u root -p'<masked: a password>' shop | gzip"],
+      ["sshpass -ppw ssh -p2222 host && psql -pS3cret shop", "sshpass -p<masked: a password> ssh -p2222 host && psql -p<masked: a password> shop"],
+      ["git clone https://bob:pw@example.com/shop.git", "git clone https://bob:<masked: a password>@example.com/shop.git"],
+      ["redis-cli -u redis://:p1@cache.example.com:6379", "redis-cli -u redis://:<masked: a password>@cache.example.com:6379"],
+    ];
+    for (const [text, masked] of cases) {
+      expect(maskToolText(text)).toBe(masked);
+      expect(maskToolText(masked)).toBe(masked);
+    }
+  });
+
+  test("keeps what is no secret after a flag: a file, a number, a variable, the next flag, and the flags of other tools", () => {
+    const kept = [
+      "curl --key-file /home/user/client.pem --password-file /run/secrets/db --token-file t.txt https://api.example.com",
+      "claude --max-tokens 4096 --keyboard us --author me",
+      "deploy --token $DEPLOY_TOKEN --password \"${DB_PASSWORD}\" --secret <secret> -u me:$PASSWORD",
+      "mysql --password --verbose",
+      "psql --no-password shop",
+      "git push -u origin main",
+      "docker run -u 1000:1000 -p8080:80 shop",
+      "psql -p5433 -U app shop",
+      "cp -pr src out; mkdir -pv build; ssh -p2222 host",
+      "the token abc is not a flag, and the key value is a pair",
+      "https://example.com:8080/a@b and https://user:${PASSWORD}@example.com",
+    ];
+    for (const text of kept) expect(maskToolText(text)).toBe(text);
+  });
+
   test("keeps a variable, a placeholder, and a word that only holds the letters of key or token", () => {
     for (const text of ["Authorization: Bearer $TOKEN", "API_KEY=${API_KEY} TOKEN=$1", "password: <password>", "token = process.env.GH_TOKEN", "KeyError: 'name'", "max_tokens=4096 monkey=1 keyboard: us", "Basic authentication failed", "password="]) expect(maskToolText(text)).toBe(text);
   });
@@ -224,7 +280,7 @@ describe("maskToolText", () => {
   });
 
   test("a long text with no secret is fast", () => {
-    const text = `${"a.b-c_d".repeat(5000)} ${"x".repeat(20_000)} ${"key ".repeat(5000)}`;
+    const text = `${"a.b-c_d".repeat(5000)} ${"x".repeat(20_000)} ${"key ".repeat(5000)} ${"mysql ".repeat(3000)} ${"--token ".repeat(3000)} ${"-----BEGIN ".repeat(2000)}`;
     const started = performance.now();
     expect(maskToolText(text)).toBe(text);
     expect(performance.now() - started).toBeLessThan(200);
