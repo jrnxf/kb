@@ -26,6 +26,8 @@ export function NoteView({ note, onEdit, onTrash, onRestore, onDelete }: Props) 
     note.clears_at && `deleted ${clearsIn(note.clears_at)}`,
     note.promoted_to && `promoted to ${note.promoted_to}`,
   ].filter(Boolean);
+  // A kb serve that started before triggers came sends this page notes that have none.
+  const triggers = (note.triggers as string[] | undefined) ?? [];
   return (
     <article className={`k-${note.kind}`}>
       <div className="mb-2.5 flex min-h-9 items-center gap-2.5 text-[12.5px] text-muted-foreground">
@@ -84,6 +86,14 @@ export function NoteView({ note, onEdit, onTrash, onRestore, onDelete }: Props) 
         <p className="mb-3.5 flex flex-wrap gap-1.5">
           {note.anchors.map((anchor) => (
             <code key={anchor}>{anchor}</code>
+          ))}
+        </p>
+      )}
+      {triggers.length > 0 && (
+        <p className="mb-3.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+          <span>loads at</span>
+          {triggers.map((trigger) => (
+            <code key={trigger}>{trigger}</code>
           ))}
         </p>
       )}

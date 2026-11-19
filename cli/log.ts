@@ -48,14 +48,18 @@ export interface StartEvent {
   holdback?: boolean;
 }
 
-/** A note that a trigger loaded. Today only a Read of an anchored file, which gives the title. */
+/**
+ * A note that a trigger loaded: a command (`cmd`), a command that was refused once (`stop`), an
+ * error (`err`), or a file that an anchor names (`path`). The agent got the body or the title.
+ */
 export interface FireEvent {
   ev: "fire";
-  kind: "path";
-  form: "title";
+  kind: "cmd" | "stop" | "err" | "path";
+  form: "body" | "title";
   note: string;
+  /** The tool of the call, as the harness names it. */
   tool: string;
-  /** What matched: for a path, the repo-relative path of the file. */
+  /** What matched: the words of the trigger, the text of the error trigger, or the repo-relative path of the file. */
   match: string;
 }
 
@@ -238,7 +242,7 @@ export interface NoteLog {
   hidden: number;
   /** `kb show`: for a task, and as a check. */
   opened: { task: number; check: number };
-  /** Times a trigger loaded the note, such as a Read of a file it is anchored to. */
+  /** Times a trigger loaded the note: a command, an error, or a tool call on a file it is anchored to. */
   fired: number;
   /** One verdict per session and note: the last one counts. See `finalVerdicts`. */
   verdicts: Record<Verdict, number>;

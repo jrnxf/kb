@@ -1,5 +1,5 @@
 {
-  "description": "Inject saved kb notes at every session start, name the notes on a file when the agent reads it, protect them through compaction, and record a session that ends with no checkpoint.",
+  "description": "Inject saved kb notes at every session start, load a note at its trigger (a command, an error or a file), protect the notes through compaction, and record a session that ends with no checkpoint.",
   "hooks": {
     "SessionStart": [
       {
@@ -30,6 +30,29 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/pre-compact.sh",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/tool-call.sh",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/tool-call.sh",
             "timeout": 2
           }
         ]

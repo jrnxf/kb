@@ -162,12 +162,17 @@ describe("plugin files", () => {
   test("hooks.json registers SessionStart for all five sources", () => {
     const hooks = JSON.parse(readFileSync(join(ROOT, "hooks", "hooks.json"), "utf8"));
     const entry = hooks.hooks.SessionStart[0];
-    expect(Object.keys(hooks.hooks).sort()).toEqual(["PostToolUse", "PreCompact", "SessionEnd", "SessionStart"]);
+    expect(Object.keys(hooks.hooks).sort()).toEqual(["PostToolUse", "PostToolUseFailure", "PreCompact", "PreToolUse", "SessionEnd", "SessionStart"]);
     // No matcher: every reason a session ends with is recorded, also one that a later Claude Code adds.
     expect(hooks.hooks.SessionEnd).toHaveLength(1);
     expect(hooks.hooks.SessionEnd[0].matcher).toBeUndefined();
     // An exact name, so the hook never runs for an MCP tool with "Read" in its name.
     expect(hooks.hooks.PostToolUse[0]).toMatchObject({ matcher: "Read", hooks: [{ command: '"${CLAUDE_PLUGIN_ROOT}"/hooks/post-read.sh', timeout: 3 }] });
+    // One hook for the tool calls a note can load at. It runs before each shell command, so its time limit is low.
+    const toolCall = { hooks: [{ command: '"${CLAUDE_PLUGIN_ROOT}"/hooks/tool-call.sh', timeout: 2 }] };
+    expect(hooks.hooks.PreToolUse).toEqual([{ matcher: "Bash|Edit|Write|NotebookEdit", hooks: [{ type: "command", ...toolCall.hooks[0] }] }]);
+    // A failed call of any tool can hold the text of an `err` trigger, so this one has no matcher.
+    expect(hooks.hooks.PostToolUseFailure).toEqual([{ hooks: [{ type: "command", ...toolCall.hooks[0] }] }]);
     expect(entry.matcher.split("|").sort()).toEqual(["clear", "compact", "fork", "resume", "startup"]);
     expect(entry.hooks[0].command).toBe('"${CLAUDE_PLUGIN_ROOT}"/hooks/session-start.sh');
   });
@@ -585,7 +590,7 @@ describe("session notices", () => {
     const store = tempStore();
     const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
     const scope = "github.com/acme/billing";
-    putNote(store, { id: "on-readme", scope, anchors: ["README.md"] });
+    putNote(store, { id: "on-readme", kind: "decision", scope, anchors: ["README.md"] });
     putNote(store, { id: "deleted", scope, anchors: ["src/rates.ts"] });
     const body = { session_id: "next", cwd: repo, hook_event_name: "PostToolUse", tool_name: "Read", tool_input: { file_path: join(repo, "README.md") }, tool_response: {} };
     const read = () => Bun.spawnSync([join(ROOT, "hooks", "post-read.sh")], { cwd: plain(), env: { ...process.env, KB_HOME: store.home }, stdin: Buffer.from(JSON.stringify(body)), stdout: "pipe", stderr: "pipe" }).stdout.toString();

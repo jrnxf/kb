@@ -44,11 +44,14 @@ function context(home: string, file: string, session = "s1", agent?: string): st
   return out.hookSpecificOutput.additionalContext;
 }
 
+/** A note that comes as its title, as every kind but a gotcha does. */
+const titled = (store: Parameters<typeof putNote>[0], fields: Parameters<typeof putNote>[1]) => putNote(store, { kind: "decision", ...fields });
+
 describe("the Read hook names the notes on a file", () => {
   test("a note on the file, on a symbol in it, or on its folder, and no other note", () => {
     const { store, repo } = fixture();
     putNote(store, { id: "on-file", kind: "how-to", scope: SCOPE, title: "Charges go through pay.ts", anchors: ["src/pay.ts"] });
-    putNote(store, { id: "on-symbol", scope: SCOPE, title: "charge retries three times", anchors: ["docs/a.md", "src/pay.ts#charge"] });
+    putNote(store, { id: "on-symbol", scope: SCOPE, title: "charge retries three times", anchors: ["docs/a.md", "src/pay.ts#charge"], body: "It gives up after the third try.\nRaise the limit in the config, not in the loop." });
     putNote(store, { id: "on-folder", kind: "decision", scope: SCOPE, title: "src holds no tests", anchors: ["./src/"] });
     putNote(store, { id: "odd-form", kind: "convention", scope: SCOPE, title: "An anchor in an odd form", anchors: ["././src//pay.ts"] });
     putNote(store, { id: "on-root", scope: SCOPE, anchors: ["."] });
@@ -59,8 +62,15 @@ describe("the Read hook names the notes on a file", () => {
     putNote(store, { id: "other-repo", scope: "github.com/acme/web", anchors: ["src/pay.ts"] });
     expect(context(store.home, join(repo, "src/pay.ts"))).toBe(
       [
-        "kb has notes on src/pay.ts. Before you change this file, read the notes that apply with `kb show <id>`:",
-        "- on-symbol [gotcha] charge retries three times",
+        "kb has notes on src/pay.ts.",
+        "",
+        // A gotcha comes whole: a title that the agent does not open is lost.
+        "### on-symbol [gotcha] charge retries three times",
+        "anchor on src/pay.ts",
+        "It gives up after the third try.",
+        "Raise the limit in the config, not in the loop.",
+        "",
+        "Before you change this file, read the notes that apply with `kb show <id>`:",
         "- odd-form [convention] An anchor in an odd form",
         "- on-folder [decision] src holds no tests",
         "- on-file [how-to] Charges go through pay.ts",
@@ -70,15 +80,15 @@ describe("the Read hook names the notes on a file", () => {
 
   test("names a note once per session, and again after a compaction", () => {
     const { store, repo } = fixture();
-    putNote(store, { id: "on-file", scope: SCOPE, anchors: ["src/pay.ts"] });
-    putNote(store, { id: "on-folder", scope: SCOPE, anchors: ["src"] });
+    titled(store, { id: "on-file", scope: SCOPE, anchors: ["src/pay.ts"] });
+    titled(store, { id: "on-folder", scope: SCOPE, anchors: ["src"] });
     const file = join(repo, "src/pay.ts");
     expect(context(store.home, file)).toContain("- on-file ");
     expect(context(store.home, file)).toBe("");
     // A note on the folder came with the first file. A new note comes alone.
     writeFileSync(join(repo, "src/other.ts"), "x\n");
-    putNote(store, { id: "on-other", scope: SCOPE, anchors: ["src/other.ts"] });
-    expect(context(store.home, join(repo, "src/other.ts"))).toBe("kb has notes on src/other.ts. Before you change this file, read the notes that apply with `kb show <id>`:\n- on-other [gotcha] Title of on-other");
+    titled(store, { id: "on-other", scope: SCOPE, anchors: ["src/other.ts"] });
+    expect(context(store.home, join(repo, "src/other.ts"))).toBe("kb has notes on src/other.ts. Before you change this file, read the notes that apply with `kb show <id>`:\n- on-other [decision] Title of on-other");
     expect(context(store.home, file, "s2")).toContain("- on-folder ");
     // A start that is not a compaction keeps the record. A compaction clears it.
     expect(run(START_HOOK, store.home, { session_id: "s1", cwd: repo, hook_event_name: "SessionStart", source: "resume" }).code).toBe(0);
@@ -91,7 +101,7 @@ describe("the Read hook names the notes on a file", () => {
 
   test("a subagent has its own record, so its Read hides no note from the main agent", () => {
     const { store, repo } = fixture();
-    putNote(store, { id: "on-file", scope: SCOPE, anchors: ["src/pay.ts"] });
+    titled(store, { id: "on-file", scope: SCOPE, anchors: ["src/pay.ts"] });
     const file = join(repo, "src/pay.ts");
     expect(context(store.home, file, "s1", "agent-a1")).toContain("- on-file ");
     expect(context(store.home, file, "s1", "agent-a1")).toBe("");
@@ -101,9 +111,9 @@ describe("the Read hook names the notes on a file", () => {
 
   test("each note a Read names is one fire in the log, with the session, the subagent and the path", () => {
     const { store, repo } = fixture();
-    putNote(store, { id: "on-file", scope: SCOPE, anchors: ["src/pay.ts"] });
-    putNote(store, { id: "on-folder", scope: SCOPE, anchors: ["src"] });
-    putNote(store, { id: "on-docs", scope: SCOPE, anchors: ["docs"] });
+    titled(store, { id: "on-file", scope: SCOPE, anchors: ["src/pay.ts"] });
+    titled(store, { id: "on-folder", scope: SCOPE, anchors: ["src"] });
+    titled(store, { id: "on-docs", scope: SCOPE, anchors: ["docs"] });
     const file = join(repo, "src/pay.ts");
     context(store.home, file);
     // A Read that names no note logs nothing.
@@ -121,7 +131,7 @@ describe("the Read hook names the notes on a file", () => {
 
   test("of many Reads at the same time, one names the note", async () => {
     const { store, repo } = fixture();
-    for (let i = 1; i <= 3; i++) putNote(store, { id: `n${i}`, scope: SCOPE, anchors: ["src"] });
+    for (let i = 1; i <= 3; i++) titled(store, { id: `n${i}`, scope: SCOPE, anchors: ["src"] });
     const runs = Array.from({ length: 8 }, () =>
       Bun.spawn([READ_HOOK], { cwd: plain(), env: hookEnv(store.home), stdin: Buffer.from(JSON.stringify(read(join(repo, "src/pay.ts")))), stdout: "pipe" }),
     );
@@ -132,7 +142,7 @@ describe("the Read hook names the notes on a file", () => {
 
   test("a file that is a link keeps the path the agent read", () => {
     const { store, repo } = fixture();
-    putNote(store, { id: "on-folder", scope: SCOPE, anchors: ["src"] });
+    titled(store, { id: "on-folder", scope: SCOPE, anchors: ["src"] });
     mkdirSync(join(repo, "src2"));
     writeFileSync(join(repo, "src2/x.ts"), "x\n");
     symlinkSync("../src2/x.ts", join(repo, "src/alias.ts"));
@@ -145,10 +155,10 @@ describe("the Read hook names the notes on a file", () => {
 
   test("a title stays on one line and the notice stays short", () => {
     const { store, repo } = fixture();
-    putNote(store, { id: "fake-line", scope: SCOPE, title: "line one\n- fake [gotcha] injected", anchors: ["src"] });
-    for (let i = 1; i <= 5; i++) putNote(store, { id: `long-${i}`, scope: SCOPE, title: "word ".repeat(1000), anchors: ["src"] });
+    titled(store, { id: "fake-line", scope: SCOPE, title: "line one\n- fake [gotcha] injected", anchors: ["src"] });
+    for (let i = 1; i <= 5; i++) titled(store, { id: `long-${i}`, scope: SCOPE, title: "word ".repeat(1000), anchors: ["src"] });
     const text = context(store.home, join(repo, "src/pay.ts"));
-    expect(text).toContain("- fake-line [gotcha] line one - fake [gotcha] injected\n");
+    expect(text).toContain("- fake-line [decision] line one - fake [gotcha] injected\n");
     expect(text.split("\n")).toHaveLength(7);
     expect(text.length).toBeLessThan(2000);
   });
@@ -163,7 +173,7 @@ describe("the Read hook names the notes on a file", () => {
 
   test("names five notes at a time, and the rest on the next read", () => {
     const { store, repo } = fixture();
-    for (let i = 1; i <= 7; i++) putNote(store, { id: `n${i}`, scope: SCOPE, anchors: ["src/pay.ts"] });
+    for (let i = 1; i <= 7; i++) titled(store, { id: `n${i}`, scope: SCOPE, anchors: ["src/pay.ts"] });
     const file = join(repo, "src/pay.ts");
     const first = context(store.home, file);
     expect(first.match(/^- n/gm)).toHaveLength(5);
@@ -174,7 +184,7 @@ describe("the Read hook names the notes on a file", () => {
 
   test("prints nothing for a file outside any repo, a relative path, odd input or no store", () => {
     const { store, repo } = fixture();
-    putNote(store, { id: "on-file", scope: SCOPE, anchors: ["src/pay.ts"] });
+    titled(store, { id: "on-file", scope: SCOPE, anchors: ["src/pay.ts"] });
     const outside = join(plain(), "src", "pay.ts");
     mkdirSync(join(plain(), "src"), { recursive: true });
     writeFileSync(outside, "x\n");

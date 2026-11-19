@@ -9,7 +9,7 @@ import { rememberRepo, repoRoot } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
 import { FORGET_WHYS, type ForgetWhy, type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
-import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
+import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { commitAt, resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
@@ -19,7 +19,8 @@ import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, isLive, markSave
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
-import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
+import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
@@ -87,11 +88,24 @@ The events of the log: start, fire, show, search, write, verdict, checkpoint, an
   recover    another session saved its knowledge: the notes it wrote
   forgotten  its record was dropped with no recovery: short, user, aged (7 days) or gone (no transcript)
 
-kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence"?, "supersedes"?}
+kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?, "confidence"?, "supersedes"?}
   scope: "repo" (the default inside a git repo), "global", or the id of a repo that has notes
   kind: ${KINDS.join(" | ")}
   confidence: ${CONFIDENCES.join(" | ")} (default medium)
+  anchors: repo-relative paths, or path#symbol. A repo note loads when the agent reads or changes
+    a file that an anchor names, or runs a command that names it.
+  triggers: when the note loads outside the session start, each "<kind>: <text>":
+    "cmd: pkill -f"  before a shell command that runs it. One simple command of the line must
+      hold the words in order, as whole words, the first as its command word. One word that is
+      a common command (ls, git, bun, ...) needs a second word.
+    "stop: git push --force"  the same match, and kb refuses the command once, with the note
+      as the reason. A run 3 seconds later passes. For a command where one run does damage.
+    "err: address already in use"  after a tool call that failed with this text in its error.
+      At least ${ERR_MIN_CHARS} characters. Case does not count.
+  A saved note can come with "warnings": a gotcha or a how-to with no trigger and no anchor, and
+  a body over ${BODY_CHARS} characters. The note is stored in each case.
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
+  New triggers alone do not.
   With --as-of (a full ISO time with a zone), the verification has that time and the newest commit
   of the repo at that time. An update of a note that was verified after that time changes nothing:
   the result is {"status": "newer", "id", "last_verified"}.
@@ -191,7 +205,7 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     }
     const updated = updateNote(store, input as Record<string, unknown> & { id: string }, repo, asOf, typeof from === "string" ? from : undefined);
     recovered(updated.id);
-    return { json: { status: "updated", ...updated }, text: `updated ${updated.id}` };
+    return added("updated", updated, store.notes().find((n) => n.id === updated.id) ?? existing);
   }
 
   const scope = resolveScopeInput(input.scope, repo.scope);
@@ -200,7 +214,7 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     throw new KbError(`${unknownScope(store, scope)} To start the notes of another repo, pass --repo <its directory>.`);
   }
   if (typeof input.title !== "string" || !input.title.trim()) throw new KbError("invalid note: title: required");
-  rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors }, "the note");
+  rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors, triggers: input.triggers }, "the note");
   const slug = slugify(input.title);
   if (!slug) throw new KbError("invalid note: title: needs letters or digits");
 
@@ -222,12 +236,22 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
   };
   const commit = asOf === undefined ? repo.head : commitAt(repo.root, asOf);
   if (scope !== "global" && repo.scope === scope && commit) raw.verified_at_commit = commit;
+  if (input.triggers !== undefined) raw.triggers = requireTriggers(input.triggers);
   const note: Note = validateNote(raw);
   const path = store.writeNote(note);
   afterWrite(store, `kb: add ${note.id}`);
   logWrites(store, "add", [note.id], typeof from === "string" ? from : undefined);
   recovered(note.id);
-  return { json: { status: "created", id: note.id, path }, text: `created ${note.id}` };
+  return added("created", { id: note.id, path }, note);
+}
+
+/** The result of a note that `kb add` saved, with what the writer should look at again. */
+function added(status: "created" | "updated", saved: { id: string; path: string }, note: Note): Output {
+  const warnings = noteWarnings(note);
+  return {
+    json: { status, ...saved, ...(warnings.length > 0 ? { warnings } : {}) },
+    text: [`${status} ${saved.id}`, ...warnings.map((warning) => `warning: ${warning}`)].join("\n"),
+  };
 }
 
 function resolveScopeInput(value: unknown, repoScope: string | null): string {
@@ -328,6 +352,7 @@ function cmdList(store: Store, args: Args): Output {
     title: n.title,
     last_verified: n.last_verified,
     confidence: n.confidence,
+    triggers: n.triggers ?? [],
     promoted_to: n.promoted_to ?? null,
     ...(trash ? { trashed_at: n.trashed_at ?? null, clears_at: n.trashed_at ? clearsAt(n.trashed_at, days) : null } : {}),
   }));
@@ -500,7 +525,8 @@ function eventText(event: Logged): string {
   const detail = (): string => {
     switch (e.ev) {
       case "start": return `${e.source}: ${count(e.bodies.length, "body", "bodies")}, ${count(e.index.length, "index line", "index lines")}, ${e.hidden.length} hidden, ${e.chars.total} characters`;
-      case "fire": return `${e.note} (${e.tool} of ${e.match})`;
+      // A path names the file. A trigger names itself: "cmd: pkill -f".
+      case "fire": return e.kind === "path" || !e.kind ? `${e.note} (${e.tool} of ${e.match})` : `${e.note} (${e.tool}, ${e.kind}: ${e.match})`;
       case "show": return `${e.note} (${e.why}${e.trashed ? ", in the trash" : ""})`;
       // A line of an older kb has no `complete`: its `hits` may count the closest notes.
       case "search": return `${JSON.stringify(e.query)}: ${e.complete === false ? `no note has every word, ${count(e.closest ?? 0, "closest note", "closest notes")}` : count(e.hits, "note", "notes")} (${e.why})`;
