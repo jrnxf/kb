@@ -1,0 +1,131 @@
+{
+  "about": "Notes for the seeded store of scripts/seed.ts. `rewrites` say a fact of one seeded note again in other words: `original` is the id of that note. `unrelated` are new facts that no seeded note holds. `session` are two notes that an agent wrote in a headless /kb:checkpoint on this store: one is a twin of `original`, and one is a new fact. A repo is the folder name under repos/, or null for a global note.",
+  "rewrites": [
+    {
+      "original": "never-run-the-migration-tool-against-the-shared",
+      "repo": null,
+      "title": "Staging DB is used by other teams: do not migrate it",
+      "body": "Running migrate up on staging removed a column that another team needed.\nMigrate a local copy, and let the user do the staging step."
+    },
+    {
+      "original": "the-deploy-cli-exits-0-when-the-upload-was",
+      "repo": null,
+      "title": "A rejected upload still gives exit code 0 from the deploy command",
+      "body": "The deploy tool returns success even when the server refused the upload.\nLook for status live in its JSON output before you report a deploy."
+    },
+    {
+      "original": "background-agents-cannot-answer-a-permission",
+      "repo": null,
+      "title": "Permission prompts time out in a background agent",
+      "body": "An agent that runs in the background gets no answer to a prompt, so the call is denied.\nAvoid rm in compound commands. Use mktemp directories and script files."
+    },
+    {
+      "original": "the-package-registry-mirror-serves-stale",
+      "repo": null,
+      "title": "Installs right after a publish can get the previous version",
+      "body": "The registry mirror lags up to 60 minutes behind.\nPin the exact version, and pass --prefer-online."
+    },
+    {
+      "original": "rebase-of-a-published-branch-drops-review",
+      "repo": null,
+      "title": "Do not rebase a branch that has an open PR",
+      "body": "The review tool loses the anchors of its comments after a rebase.\nMerge main into the PR branch instead."
+    },
+    {
+      "original": "atlas-api-amounts-are-integer-cents-never-floats",
+      "repo": "atlas-api",
+      "title": "Money in atlas-api is stored as whole cents",
+      "body": "Floating point in billing made totals wrong by a cent.\nKeep integers inside, and convert only at the boundary."
+    },
+    {
+      "original": "the-tidepool-test-database-must-be-reset-between",
+      "repo": "tidepool",
+      "title": "tidepool sync tests fail in random order without a database reset",
+      "body": "The test suites share a schema. Run make db-reset before each suite."
+    },
+    {
+      "original": "quarry-does-not-use-an-orm",
+      "repo": "quarry",
+      "title": "quarry talks to the database with plain SQL",
+      "body": "We chose typed SQL helpers over an ORM, because the ORM concealed a slow query for weeks."
+    },
+    {
+      "original": "release-ferry",
+      "repo": "ferry",
+      "title": "How to ship a new ferry version",
+      "body": "Run make check, raise the version number in package.json, and merge to main.\nThe build service does the deploy. Then look at the health endpoint for the new version."
+    },
+    {
+      "original": "the-orchard-dev-server-needs-port-4100-free",
+      "repo": "orchard",
+      "title": "orchard dev server reports module not found when port 4100 is busy",
+      "body": "The error is misleading. Free the port and start the server again."
+    }
+  ],
+  "unrelated": [
+    {
+      "repo": null,
+      "title": "git worktree prune removes the record of a worktree on an unmounted disk",
+      "body": "Mount the disk before you run prune, or the worktree must be added again."
+    },
+    {
+      "repo": null,
+      "title": "The JSON formatter reorders keys in lock files",
+      "body": "Exclude lock files from the format step. A reordered lock file makes a large diff with no change."
+    },
+    {
+      "repo": null,
+      "title": "Record a terminal session as a GIF",
+      "body": "Run the recorder with a fixed window size of 100 by 30, then convert the cast file with the gif tool at 2x speed."
+    },
+    {
+      "repo": null,
+      "title": "Fonts are self-hosted, not loaded from a CDN",
+      "body": "A third-party font host added 300 ms to the first paint and one more privacy notice."
+    },
+    {
+      "repo": "atlas-api",
+      "title": "atlas-api invoice PDFs render in the server time zone",
+      "body": "A customer in Tokyo got an invoice dated the day before. Pass the customer's zone to the renderer."
+    },
+    {
+      "repo": "tidepool",
+      "title": "tidepool websocket clients reconnect in a storm after a deploy",
+      "body": "Every client reconnects at once. Add jitter of up to 30 seconds to the reconnect delay."
+    },
+    {
+      "repo": "lantern-web",
+      "title": "lantern-web uses CSS container queries for the card grid",
+      "body": "Media queries could not see the sidebar width. Container queries removed three breakpoints."
+    },
+    {
+      "repo": "quarry",
+      "title": "Profile a slow quarry indexing run",
+      "body": "Start it with the --cpu-prof flag, open the profile in the browser dev tools, and sort by self time."
+    },
+    {
+      "repo": "harbor-cli",
+      "title": "harbor-cli shell completions break when the binary is renamed",
+      "body": "The completion script holds the binary name. Generate it again after a rename."
+    },
+    {
+      "repo": "mosaic",
+      "title": "mosaic image uploads over 10 MB need the chunked endpoint",
+      "body": "The plain endpoint answers 413. Split the file into 5 MB parts and call /upload/chunk."
+    }
+  ],
+  "session": [
+    {
+      "original": "preview-links-expire-after-seven-days",
+      "repo": "ferry",
+      "title": "Preview deployments are deleted one week after they are made",
+      "body": "Hosting support said this on 2026-11-19. A preview link in an old PR description gives a 404.\nDo not rely on a preview link as lasting evidence in a PR. Put screenshots, videos or test output in the PR itself.\nRe-deploy the preview when a reviewer needs it after a week.\nSource: hosting support, not checked by a test."
+    },
+    {
+      "original": null,
+      "repo": "ferry",
+      "title": "A Node version change does not rebuild native modules until CACHE_VERSION is raised",
+      "body": "The build cache key holds only the hash of the lockfile. Hosting support said this on 2026-11-19.\nA change of the Node version alone keeps the old native modules, so a build can be broken or stale.\nWhen the Node version changes, raise the CACHE_VERSION variable by hand, in the same PR or release step.\nSource: hosting support, not checked by a test."
+    }
+  ]
+}

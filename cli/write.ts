@@ -24,9 +24,12 @@ export function afterWrite(store: Store, message: string): void {
   if (store.commit(message)) kickSync(store);
 }
 
-/** Record a write of each note in the event log. The session comes from the command that runs. */
-export function logWrites(store: Store, op: WriteOp, ids: string[]): void {
-  logEvent(store, ids.map((note) => ({ ev: "write" as const, note, op })));
+/**
+ * Record a write of each note in the event log. The session comes from the command that runs.
+ * `neighbors` are the close notes that `kb add` showed with the write.
+ */
+export function logWrites(store: Store, op: WriteOp, ids: string[], neighbors: string[] = []): void {
+  logEvent(store, ids.map((note) => ({ ev: "write" as const, note, op, ...(neighbors.length > 0 ? { neighbors } : {}) })));
 }
 
 /** Ids that contain the given text. For a caller who remembers a part of an id. */

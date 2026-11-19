@@ -7,6 +7,7 @@ import { NOT_NEEDED_SESSIONS, judgments, lastActivity } from "./log.ts";
 import { normalizeTitle } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { git, type Store, type StoredNote, writeAtomic } from "./store.ts";
+import { STOP_WORDS } from "./words.ts";
 
 export const STALE_REASONS = ["anchor-changed", "anchor-missing", "commit-unknown", "judged-wrong", "expired", "decayed", "not-needed", "duplicate"] as const;
 export type StaleReason = (typeof STALE_REASONS)[number];
@@ -27,7 +28,6 @@ export interface StaleResult {
   candidates: StaleCandidate[];
 }
 
-const STOP_WORDS = new Set(["a", "an", "the", "is", "are", "be", "to", "of", "in", "on", "at", "for", "and", "or", "with", "by", "it", "its", "this", "that", "not", "no", "do", "does", "use", "uses", "when", "from", "as"]);
 const DUPLICATE_THRESHOLD = 0.6;
 
 function titleWords(title: string): Set<string> {

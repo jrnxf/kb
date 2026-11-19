@@ -69,7 +69,7 @@ describe("kb audit propose", () => {
     expect(readAudit(store, SCOPE)).toBeUndefined();
   });
 
-  test("the command reads stdin, prints the page link, and kb audit shows what is open", () => {
+  test("the command reads stdin or the file of --file, prints the page link, and kb audit shows what is open", () => {
     const store = setup();
     const dir = tempRepo({ remote: "https://example.com/team/app.git" });
     const env = { ...process.env, KB_HOME: store.home };
@@ -78,6 +78,10 @@ describe("kb audit propose", () => {
     expect(proposed.stderr.toString()).toBe("");
     expect(JSON.parse(proposed.stdout.toString())).toMatchObject({ scope: SCOPE, cards: 1, url: expect.stringContaining(`#audit=${encodeURIComponent(SCOPE)}`) });
     expect(run(["audit"]).stdout.toString()).toContain(`#audit=${encodeURIComponent(SCOPE)}`);
+    // A shell can refuse a heredoc with a brace and a quote. A file always passes.
+    writeFileSync(join(dir, "proposal.json"), JSON.stringify({ items: [ITEMS[0], ITEMS[3]] }));
+    expect(JSON.parse(run(["audit", "propose", "--json", "--file", "proposal.json"]).stdout.toString())).toMatchObject({ scope: SCOPE, cards: 2 });
+    expect(run(["audit", "propose", "--file", "none.json"]).stderr.toString().trim()).toBe("cannot read --file none.json: no such file");
   });
 });
 
