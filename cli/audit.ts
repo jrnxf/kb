@@ -113,7 +113,7 @@ const text = (value: unknown, field: string, i: number): string | undefined => {
 /** Check the agent's proposal against the store, and save it. It replaces an earlier audit of the scope. */
 export function proposeAudit(store: Store, input: unknown, repo: RepoInfo): Audit {
   const raw = input as { items?: unknown } | null;
-  if (raw === null || typeof raw !== "object" || !Array.isArray(raw.items)) throw new KbError('kb audit propose reads {"items": [...]} on stdin');
+  if (raw === null || typeof raw !== "object" || !Array.isArray(raw.items)) throw new KbError('kb audit propose reads {"items": [...]}, from --file <path> or on stdin');
   const scope = repo.scope ?? "global";
   const active = activeNotes(store);
   const seen = new Set<string>();

@@ -32,7 +32,7 @@ kb budget --json
     - A card cannot change triggers or anchors. So propose keep, and name the new triggers or anchors in `why`. The user sends the note back, and you set them in step 4.
     - When the title is too wide, propose a rewrite with a narrower title, so a session knows from the index line when the note applies.
     - If the note loads in the right place, propose keep.
-  - `duplicate` - the title is close to the title of another note.
+  - `duplicate` - the note is close to another note of this scope in its words, by the measure that `kb add` uses. The detail names the other note and the words both have. Read both. Propose a merge when they say one fact, and keep when they say two. A pair never has a note of another scope, so a merge always stays in the scope of the audit.
 - `kb budget` shows what a session of this scope loads. `notes` gives the size of each note and what a session gets of it, in rank order. In a repo, `index.capped` counts the global notes that stay out of its sessions on purpose, the lowest ranked. That is not a reason to change them here.
   - Bodies that did not fit (`context.dropped`) are normal: each of these notes still reaches the session as an index line. This alone is no reason to take a note out. The notes with the most `chars` are the bodies to shorten, so that more notes load whole.
   - `over` is true only when notes reach no session, because the index is full (`index.hidden`). Then `trim` lists the lowest ranked decisions and how-tos of this scope, the lowest first. Treat each one as a candidate too.
@@ -79,10 +79,9 @@ Never write the instructions file yourself. Apply writes it, at the end of the s
 
 ## 3. Propose in the page, then stop
 
-The user decides in the `kb serve` page, one card per note. Write the proposal as JSON, one item per candidate:
+The user decides in the `kb serve` page, one card per note. Write the proposal as JSON to a file in your scratchpad directory with the Write tool, one item per candidate. A write there needs no permission:
 
-```bash
-kb audit propose <<'KB_AUDIT'
+```json
 { "items": [
   { "id": "<id>", "action": "keep", "checked": true, "why": "I read cli/serve.ts. The port is still 4173.", "reason": "anchor-changed" },
   { "id": "<id>", "action": "rewrite", "why": "The flag is now --repo, not --dir.", "body": "<new body>" },
@@ -93,8 +92,15 @@ kb audit propose <<'KB_AUDIT'
   { "id": "<id>", "action": "keep", "why": "I could not check this note. It has no anchor, and the tap repo is not on this machine." },
   { "id": "<id>", "action": "promote", "why": "The user stated this rule. The two other notes say the same thing.", "rule": "- Write short sentences in the active voice.", "section": "Style", "merge": ["<id>", "<id>"] }
 ] }
-KB_AUDIT
 ```
+
+Then run this. Write the whole path of the file in the command itself:
+
+```bash
+kb audit propose --file /full/path/of/the/file.json
+```
+
+A session with normal permissions refuses a command that sets a shell variable for the path. It also refuses a heredoc that holds the JSON.
 
 - `action` is one of keep, rewrite, trash, merge and promote. A shorten is a rewrite.
 - A rewrite needs the new `title` or `body`, or both. A merge needs `merge`, the notes that go to the trash. The note `id` keeps every fact, so give it the merged text.
@@ -122,13 +128,17 @@ KB_AUDIT
 
 When the user says it is applied, run `kb audit status`. It lists what the page did, and the notes the user sent back with what is wrong with each.
 
-For each note sent back, read it and the code again, and rewrite it with `kb add --json`. Add `"triggers"` or `"anchors"` when the request is for a narrower trigger or anchor. A list replaces the old list:
+For each note sent back, read it and the code again, and rewrite it. Write this JSON to a new file with the Write tool, as in step 3. Add `"triggers"` or `"anchors"` when the request is for a narrower trigger or anchor. A list replaces the old list:
+
+```json
+{ "id": "<id>", "body": "<new body>" }
+```
 
 ```bash
-kb add --json <<'KB_NOTE'
-{ "id": "<id>", "body": "<new body>" }
-KB_NOTE
+kb add --json --file /full/path/of/the/file.json
 ```
+
+An update by `id` answers `updated` or an error. It never answers `neighbors`, the answer for which `kb add` exits with code 2.
 
 Never save a secret, token, password, key or credential in a note.
 

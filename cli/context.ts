@@ -33,7 +33,7 @@ export interface ContextResult {
  * whatever store its harness offers.
  */
 export const SAVE_RULE =
-  "When the user states a rule, a preference or a correction, write it to an instruction file in that turn with /kb:note, not to kb. Save what you learn (a gotcha, a decision, a how-to, open work) with `kb add` (`kb help` shows the JSON). Run `kb search` first, so you update a note instead of adding a twin.";
+  "When the user states a rule, a preference or a correction, write it to an instruction file in that turn with /kb:note, not to kb. Save what you learn (a gotcha, a decision, a how-to, open work) with `kb add --file` (`kb help` shows the JSON). Run `kb search` first, so you update a note instead of adding a twin.";
 
 /**
  * How to read the notes, in one line. It is fixed text that every session pays for, so it says

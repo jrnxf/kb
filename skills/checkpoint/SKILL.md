@@ -32,15 +32,13 @@ Never save a secret, token, password, key, or credential. Never save the content
 
 ## 2. Search before you write
 
-For each candidate, run `kb search --check <two or three key words>`. It finds the notes that have every word, in any order.
-`--check` tells the log that the search is a check before a write, not a need for a note.
-Each note is one line, `id | scope | title`, with the notes of this repo first. A hit in another repo's scope does not cover this repo.
-Use the nouns of the fact ("staging migration"), not a sentence. Also check the notes injected at session start.
-When the answer starts with `no note has every word. Closest:`, read those notes too: one of them can be the same fact in other words.
+For each candidate, run `kb search --check <two or three key words>`: the nouns of the fact ("staging migration"), not a sentence.
+It finds the notes that have every word, in any order. `--check` tells the log that the search is a check, not a need for a note.
+Each note is one line, `id | scope | title`, with this repo first. A hit in another repo's scope does not cover this repo. Also check the notes injected at session start.
 
 - A note already covers it and is still correct: skip it.
 - A note covers it but is incomplete or wrong: update that note (pass its `id`). Read it with `kb show <id> --check`, so the log records a check.
-- Nothing covers it: add a note.
+- Nothing covers it: add a note. When the search missed a close note, `kb add` answers `neighbors` (step 3).
 
 ### Move Claude Code's auto memory into kb
 
@@ -74,10 +72,9 @@ One idea per note. Aim for a body of 700 characters or fewer: the fact, why it m
 Write the title as a statement of the fact, not a topic ("Stripe signature check needs the raw body", not "Stripe webhooks").
 For a gotcha about a command or an error, put the command or the error word in the title.
 
-Pipe one JSON object to `kb add --json`. Use a quoted heredoc, so the shell changes nothing:
+Write one JSON object to a file with the Write tool. Use your scratchpad directory, or the system temp folder when you have none, and a new file name for each note:
 
-```bash
-kb add --json <<'KB_NOTE'
+```json
 {
   "title": "Stripe signature check needs the raw body",
   "kind": "gotcha",
@@ -86,8 +83,15 @@ kb add --json <<'KB_NOTE'
   "anchors": ["src/webhooks/stripe.ts#verifySignature", "src/server.ts"],
   "body": "express.json() runs before the webhook route and breaks the signature check.\nMount express.raw() on the webhook route before the JSON parser."
 }
-KB_NOTE
 ```
+
+Then run `kb add`, one note per call. Write the whole path of the file in the command itself:
+
+```bash
+kb add --json --file /full/path/of/the/file.json
+```
+
+A session with normal permissions refuses a command that sets a shell variable, such as `D=<dir>; kb add --file $D/note.json`. It also refuses a heredoc that holds the JSON.
 
 - `scope`: `"repo"` for a fact about this repository. `"global"` for a fact that holds in every repo (a tool, a user preference, a platform behavior).
 - `kind`: `gotcha`, `decision`, `convention`, `how-to` or `open-work`.
@@ -115,6 +119,15 @@ kb refuses one word that is a common command (`git`, `ls`, `bun`): add a subcomm
 
 Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id> --check`, then update it or skip.
 A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor, or a body over 700 characters. The note is saved. Fix it with an update, or give the reason in the report.
+
+`neighbors` means that nothing was written: stored notes are close to the new note in their words. `shared` names the words both have.
+`kb add` exits with code 2 for this answer, so the call shows as failed. It is an answer to read, not a failure of the tool. The note is not saved until you run the command again.
+Read each neighbor with `kb show <id> --check`. Then write the file again and run the command again:
+
+- A neighbor holds the same fact: update it. Pass its `id` and the full new body, and remove `scope` from the JSON. An update keeps the scope of the note. Skip it when it lacks nothing.
+- A neighbor says the opposite of the new fact: the two notes contradict. Update that note with what is true now. Do not add a second note.
+- Each neighbor holds a different fact: add `"new": true` to the JSON.
+- A neighbor is in another scope than the new fact, such as a `global` note for a fact about this repo: update it only when the fact holds in that scope too. For a global note, that means in every repo. Else add `"new": true`. Never put a fact about one repo into a global note.
 
 ## 4. Close finished work
 

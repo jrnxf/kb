@@ -46,17 +46,22 @@ For each entry, oldest first, start one subagent with the Agent tool: `subagent_
 > Use `"medium"` only when the conversation shows that the fact was verified.
 > Write no instruction file. For a rule the user stated, write nothing: list it in the report under **Rules**, with the rule as one line and the words "not written".
 > The session is old. Later sessions can have saved the same facts or finished its work. Search before every write.
+> When `kb add` answers `neighbors`, it exits with code 2 and the call shows as failed. It is an answer, not a failed command, and the note is not saved yet.
+> Do what step 3 says: read each neighbor, then update the one that holds the same fact, or pass `"new": true`.
+> Update a global neighbor only when the fact holds in every repo. Else pass `"new": true`.
+> A neighbor that says the opposite of the old session can be newer than it. Update it with the `--as-of` flag as always: `kb add` then answers `newer` when it is.
 > The file starts with the commits made since the session ended. Read them before you save open work.
 > Then it lists the notes that an earlier recovery of this session saved. Never add one of them again: update it when it lacks a fact.
 > Leave a note that the list marks "(in the trash)". The user retired it.
 > When `kb add` answers `newer`, somebody checked the note after the session ended, and nothing changed. Skip the note.
 > When the conversation holds a fact that such a note lacks, do not write it. List it in the report under **Check by hand**, with the title of the note and the fact in one line. Leave the group out when it is empty.
-> When the shell refuses the heredoc of step 3, write the JSON to a file in your scratchpad directory and run `kb add` with `< <file>`.
+> Write the JSON of each note to a file in your scratchpad directory, as step 3 says, and pass `--file <full path>` with the flags above.
+> A write there needs no permission. Write the whole path in each command, with no shell variable. Never pipe the JSON to `kb add`.
 > When `kb add` refuses a note because of a secret, write a placeholder for the secret. Never look for a way around the refusal.
 > Never run `kb checkpointed`.
 > End with the step 7 report, and nothing after it. Its first line is not the step 7 verdict.
 > Write `**Recovered the session of <date of ended> in <cwd>** - <the counts>` as the first line.
-> When a `kb` command failed, write `**Not recovered: the session of <date of ended> in <cwd>** - <what failed>` instead.
+> When a `kb` command failed with an error, write `**Not recovered: the session of <date of ended> in <cwd>** - <what failed>` instead. A `neighbors` answer is no error.
 > Never write "Safe to clear". The report is about the old session, not about the session that reads it.
 
 ## 4. Report

@@ -116,7 +116,8 @@ describe("kb context ranking", () => {
     expect(FORMAT_LINE).toContain("once");
     expect(FORMAT_LINE).toContain('"..."');
     expect(FORMAT_LINE.length).toBeLessThanOrEqual(100);
-    for (const part of ["/kb:note", "`kb add`", "`kb search`"]) expect(SAVE_RULE).toContain(part);
+    // `--file` is in the rule, because a shell policy can refuse the JSON in a heredoc.
+    for (const part of ["/kb:note", "`kb add --file`", "`kb search`"]) expect(SAVE_RULE).toContain(part);
     expect(FORMAT_LINE.length + SAVE_RULE.length).toBeLessThanOrEqual(400);
   });
 

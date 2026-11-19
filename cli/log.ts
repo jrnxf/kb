@@ -67,7 +67,10 @@ export type LogEvent = Who &
      * false, `hits` is 0 and `closest` counts the notes with the most words, which the search printed.
      */
     | { ev: "search"; query: string; hits: number; complete?: boolean; closest?: number; why: Why }
-    | { ev: "write"; note: string; op: WriteOp }
+    /** `neighbors`: the close notes that `kb add` showed when it wrote the note. */
+    | { ev: "write"; note: string; op: WriteOp; neighbors?: string[] }
+    /** `kb add` wrote nothing and showed these close notes. The next write of the session says what the writer did. */
+    | { ev: "neighbors"; title: string; neighbors: string[] }
     | { ev: "verdict"; note: string; verdict: Verdict }
     | { ev: "checkpoint" }
     | { ev: "unsaved"; reason?: string }
