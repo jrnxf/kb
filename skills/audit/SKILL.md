@@ -96,7 +96,7 @@ Then run this. Write the whole path of the file in the command itself:
 kb audit propose --file /full/path/of/the/file.json
 ```
 
-A session with normal permissions refuses a command that sets a shell variable for the path. It also refuses JSON in a pipe or a heredoc.
+A session with normal permissions refuses a command that sets a shell variable for the path. It also refuses a heredoc that holds the JSON.
 
 - `action` is one of keep, rewrite, trash, merge and promote. A shorten is a rewrite.
 - A rewrite needs the new `title` or `body`, or both. A merge needs `merge`, the notes that go to the trash. The note `id` keeps every fact, so give it the merged text.

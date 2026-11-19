@@ -90,7 +90,7 @@ Then run `kb add`, one note per call. Write the whole path of the file in the co
 kb add --json --file /full/path/of/the/file.json
 ```
 
-A session with normal permissions refuses a command that sets a shell variable, such as `D=<dir>; kb add --file $D/note.json`. It also refuses JSON in a pipe or a heredoc.
+A session with normal permissions refuses a command that sets a shell variable, such as `D=<dir>; kb add --file $D/note.json`. It also refuses a heredoc that holds the JSON.
 
 - `scope`: `"repo"` for a fact about this repository. `"global"` for a fact that holds in every repo (a tool, a user preference, a platform behavior).
 - `kind`: `gotcha`, `decision`, `convention`, `how-to` or `open-work`.
