@@ -435,32 +435,59 @@ There is one exception. A command names its session in the log with `--session <
 
 ## Install
 
-Requirements: a recent [Bun](https://bun.sh) (tested with 1.4) and git. There is no install step and no dependency to install:
-the page of `kb serve` comes built in `web/dist`.
+Requirements: Claude Code 2.1.275 or later, a recent [Bun](https://bun.sh) (tested with 1.4) and git.
+There is no build step and no dependency to install: the page of `kb serve` comes built in `web/dist`.
 
-This repository is the plugin only. A marketplace lists it with a `github` source:
-
-```json
-{ "name": "kb", "source": { "source": "github", "repo": "<owner>/kb" } }
-```
-
-Then install it from that marketplace:
+kb installs from the `jrnxf` marketplace ([jrnxf/plugins](https://github.com/jrnxf/plugins)). In Claude Code:
 
 ```bash
-/plugin install kb --marketplace <owner>/<marketplace-repo>
+/plugin install kb --marketplace jrnxf/plugins
 ```
 
-Turn off Claude Code's auto memory. It is a second store with the same job, and its system prompt
-tells the agent to save preferences there. In `~/.claude/settings.json`:
+Or in a terminal:
+
+```bash
+claude plugin marketplace add jrnxf/plugins
+claude plugin install kb@jrnxf
+```
+
+Your own marketplace can list it too, with a `github` source:
 
 ```json
-{ "autoMemoryEnabled": false }
+{ "name": "kb", "source": { "source": "github", "repo": "jrnxf/kb" } }
 ```
 
-While it is on, the first start of each session asks the agent to tell you, and every session start tells the agent to save nothing there. With it off, that rule is not sent. `/kb:checkpoint` empties it: rules go to instruction files, and facts go to kb.
+Then two settings in `~/.claude/settings.json`:
+
+```json
+{
+  "autoMemoryEnabled": false,
+  "permissions": { "allow": ["Bash(kb help)", "Bash(kb show *)", "Bash(kb search *)", "Bash(kb add *)"] }
+}
+```
+
+- `autoMemoryEnabled` turns off Claude Code's auto memory. It is a second store with the same job,
+  and its system prompt tells the agent to save preferences there. While it is on, the first start
+  of each session asks the agent to tell you, and every session start tells the agent to save
+  nothing there. With it off, that rule is not sent. `/kb:checkpoint` empties it: rules go to
+  instruction files, and facts go to kb.
+- The allow rules let the agent read and save notes with no question. The session start and the
+  hooks tell it to run these commands. The skills allow their own commands. Without the rules, the
+  default permission mode asks before each one.
 
 With auto-update on for the marketplace, each machine follows the default branch. The plugin
 sets no `version`, so every commit is a release.
+
+The plugin puts `kb` on the PATH of Claude Code's shell only. For `kb serve` and the other commands
+in your own terminal, add this function to `~/.bashrc` or `~/.zshrc`. It runs the installed version:
+
+```bash
+kb() {
+  local dir
+  dir=$(grep -o '"installPath": *"[^"]*/kb/[^"]*"' ~/.claude/plugins/installed_plugins.json | head -1 | cut -d'"' -f4)
+  bun "$dir/cli/main.ts" "$@"
+}
+```
 
 To work on the plugin, load a checkout for one session:
 
@@ -489,3 +516,7 @@ To try a change on a store that looks like months of use (about 165 invented not
 ```bash
 dir=$(mktemp -d) && bun scripts/seed.ts "$dir/seed"   # prints the KB_HOME to export
 ```
+
+## License
+
+[MIT](LICENSE)

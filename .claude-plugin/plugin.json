@@ -1,5 +1,8 @@
 {
   "name": "kb",
   "description": "A personal, repo-agnostic knowledge store for coding agents. Notes are plain markdown in ~/.kb.",
-  "author": { "name": "jrnxf" }
+  "author": { "name": "jrnxf" },
+  "license": "MIT",
+  "repository": "https://github.com/jrnxf/kb",
+  "homepage": "https://kb.jrnxf.co"
 }

@@ -3,7 +3,11 @@
 // store's per-machine state folder. `kb-transcript --measure` measures every unsaved session that
 // no session start measured yet, and forgets the short ones, so `kb unsaved` lists only sessions
 // that are worth a recovery. Both read a transcript, so they live here and not in the CLI.
+// `kb-transcript --memory` names Claude Code's auto memory folder of this project, for /kb:checkpoint.
 
+import { readdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { maskSecrets } from "../cli/secrets.ts";
 import { type UnsavedSession, allUnsaved, isDir, unsavedSession, writeRecoverFile } from "../cli/session.ts";
 import { Store, git } from "../cli/store.ts";
@@ -78,11 +82,38 @@ function write(store: Store, session: string): void {
   }
 }
 
+/** Claude Code cuts a project folder name over this length, and adds a hash after it. */
+const NAME_MAX = 200;
+
+/**
+ * Claude Code's auto memory folder of the project in this directory, and its files but MEMORY.md.
+ * The folder is named after the real path of the project, with each character that is not a
+ * letter or a digit changed to `-`. The checkpoint skill runs this command: in the default
+ * permission mode, Claude Code asks before a shell command with a variable, or a list of a folder
+ * outside the project.
+ */
+function memory(): void {
+  const config = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+  const projects = join(config, "projects");
+  const name = realpathSync(process.env.CLAUDE_PROJECT_DIR || process.cwd()).replace(/[^a-zA-Z0-9]/g, "-");
+  let dir = name;
+  if (name.length > NAME_MAX && !isDir(join(projects, name))) {
+    const list = isDir(projects) ? readdirSync(projects) : [];
+    dir = list.find((entry) => entry.startsWith(`${name.slice(0, NAME_MAX)}-`)) ?? name;
+  }
+  const folder = join(projects, dir, "memory");
+  const files = isDir(folder) ? readdirSync(folder).filter((file) => file.endsWith(".md") && file !== "MEMORY.md").sort().map((file) => join(folder, file)) : [];
+  console.log(JSON.stringify({ folder, files }));
+}
+
 const arg = process.argv[2];
 if (!arg) {
-  console.error("usage: kb-transcript <session id> | --measure");
+  console.error("usage: kb-transcript <session id> | --measure | --memory");
   process.exit(1);
 }
-const store = new Store();
-if (arg === "--measure") measure(store);
-else write(store, arg);
+if (arg === "--memory") memory();
+else {
+  const store = new Store();
+  if (arg === "--measure") measure(store);
+  else write(store, arg);
+}

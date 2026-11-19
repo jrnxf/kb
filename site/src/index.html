@@ -207,14 +207,18 @@ Before you change this file, read the notes that apply with `kb show &lt;id&gt;`
     <li class="turn you" id="install"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how do I install it?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>You need Bun and git. There is no build step and no dependency.</p>
-      <div class="tool"><div class="h"><b>install</b><span class="args">three steps</span></div><div class="b"><pre><span class="c"># a marketplace entry</span>
-{ "name": "kb", "source": { "source": "github", "repo": "jrnxf/kb" } }
+      <div class="tool"><div class="h"><b>install</b><span class="args">two steps</span></div><div class="b"><pre><span class="c"># in Claude Code</span>
+/plugin install kb --marketplace jrnxf/plugins
 
-<span class="c"># in Claude Code</span>
-/plugin install kb --marketplace &lt;owner&gt;/&lt;marketplace&gt;
-
-<span class="c"># ~/.claude/settings.json - kb replaces auto memory</span>
-{ "autoMemoryEnabled": false }</pre></div></div>
+<span class="c"># ~/.claude/settings.json: kb replaces auto memory,</span>
+<span class="c"># and the agent reads and saves notes with no question</span>
+{
+  "autoMemoryEnabled": false,
+  "permissions": { "allow": [
+    "Bash(kb help)", "Bash(kb show *)",
+    "Bash(kb search *)", "Bash(kb add *)"
+  ] }
+}</pre></div></div>
     </div></li>
 
     <li class="turn you prompt"><span class="g" aria-hidden="true">&gt;</span><div class="msg">/clear</div></li>
@@ -228,7 +232,7 @@ Before you change this file, read the notes that apply with `kb show &lt;id&gt;`
     <p>Plain files. A fixed budget. Nothing lost at /clear.</p>
     <div class="cta" style="margin:0"><a class="w-btn primary" href="#install">Install the plugin</a><a class="w-btn" href="https://github.com/jrnxf/kb">View on GitHub</a></div>
   </section>
-  <footer><span>kb · memory for coding agents</span><a href="https://github.com/jrnxf/kb">github.com/jrnxf/kb</a></footer>
+  <footer><span>kb · memory for coding agents · <a href="https://github.com/jrnxf/kb/blob/main/LICENSE">MIT license</a></span><a href="https://github.com/jrnxf/kb">github.com/jrnxf/kb</a></footer>
 </div></main>
 <script>
 /*SHARED_JS*/
