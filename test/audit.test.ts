@@ -4,13 +4,13 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import { join } from "node:path";
 import { applyAudit, auditData, openAudits, proposeAudit, readAudit } from "../cli/audit.ts";
 import { AGENT_ENV, auditPrompt, runState, startRun, waitRun } from "../cli/audit-run.ts";
-import { buildContext, contextFor } from "../cli/context.ts";
+import { buildContext, contextBudget, contextFor, indexLine } from "../cli/context.ts";
 import { auditableScopes, rememberRepo, repoRoot } from "../cli/repos.ts";
 import type { RepoInfo } from "../cli/scope.ts";
 import { type Served, runningPort, serve } from "../cli/serve.ts";
 import type { Store } from "../cli/store.ts";
-import type { AuditCard } from "../cli/wire.ts";
-import { changes, choiceForKey, choiceLabel, choices, freed, steps, summary, toPicks } from "../web/src/lib/audit.ts";
+import type { AuditCard, AuditData, AuditNote } from "../cli/wire.ts";
+import { type Pick, changes, choiceForKey, choiceLabel, choices, leaving, steps, stillHidden, summary, toPicks } from "../web/src/lib/audit.ts";
 import { MAIN, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const SCOPE = "example.com/team/app";
@@ -104,15 +104,47 @@ describe("the audit page data", () => {
     proposeAudit(store, { items }, GLOBAL);
     const places = () => Object.fromEntries(auditData(store, "global", "tok").cards.map((c) => [c.id, c.note.place]));
     expect(places()).toEqual({ work: "brief", plain: "index", "at-cmd": "trigger" });
-    expect(auditData(store, "global", "tok")).toMatchObject({ index: { lines: 1, hidden: 0 }, hidden: [] });
+    expect(auditData(store, "global", "tok")).toMatchObject({ index: { lines: 1, hidden: 0, others: 0 }, hidden: [] });
     // Over the character budget, the lowest ranked lines are gone: those notes reach no session.
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 500 } }));
     for (let i = 0; i < 30; i++) putNote(store, { id: `more-${String(i).padStart(2, "0")}` });
     const over = auditData(store, "global", "tok");
     expect(over.index.hidden).toBeGreaterThan(0);
     expect(over.hidden).toHaveLength(over.index.hidden);
-    expect(over.hidden.at(-1)).toBe("plain");
+    expect(over.hidden.at(-1)!.id).toBe("plain");
     expect(places()).toEqual({ work: "brief", plain: "hidden", "at-cmd": "trigger" });
+    // The limit is characters, so the page gets sizes: the room that is left, and what each line needs.
+    expect(over.index.room).toBe(contextBudget(500) - contextFor(store, null).chars);
+    expect(over.hidden.at(-1)!.chars).toBe(indexLine(store.find("plain")!).length + 1);
+    expect(over.index.room).toBeLessThan(over.hidden[0]!.chars);
+    const sizes = Object.fromEntries(over.cards.map((c) => [c.id, c.note.chars]));
+    expect(sizes).toMatchObject({ plain: over.hidden.at(-1)!.chars, "at-cmd": 0 });
+    expect(sizes.work).toBeGreaterThan(sizes.plain!);
+  });
+
+  test("the page counts only the hidden notes that its audit can give a line", () => {
+    const store = tempStore();
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 1000 } }));
+    const pad = (i: number) => String(i).padStart(2, "0");
+    putNote(store, { id: "r-howto", kind: "how-to", scope: SCOPE });
+    proposeAudit(store, { items: [{ id: "r-howto", action: "keep", why: "x" }] }, repo());
+    // A few global notes fit outside a repo, and the notes of the repo push some out: its audit makes room for them.
+    for (let i = 0; i < 20; i++) putNote(store, { id: `g-${pad(i)}`, kind: "decision" });
+    for (let i = 0; i < 14; i++) putNote(store, { id: `r-${pad(i)}`, scope: SCOPE });
+    const pushed = auditData(store, SCOPE, "tok");
+    expect(contextFor(store, null).hidden).toEqual([]);
+    expect(pushed.index.hidden).toBeGreaterThan(0);
+    expect(pushed.hidden.every((n) => n.id.startsWith("g-"))).toBe(true);
+    expect(pushed.index.others).toBe(0);
+    // The global notes do not fit on their own: an audit of the repo cannot change that, so its page counts none.
+    for (let i = 20; i < 60; i++) putNote(store, { id: `g-${pad(i)}`, kind: "decision" });
+    expect(auditData(store, SCOPE, "tok")).toMatchObject({ index: { hidden: 0, others: 0 }, hidden: [] });
+    // The repo's own notes do not fit: the page counts those, and the global notes behind them are the others.
+    for (let i = 14; i < 60; i++) putNote(store, { id: `r-${pad(i)}`, scope: SCOPE });
+    const own = auditData(store, SCOPE, "tok");
+    expect(own.index.hidden).toBeGreaterThan(0);
+    expect(own.hidden.every((n) => n.id.startsWith("r-"))).toBe(true);
+    expect(own.index.others).toBe(60);
   });
 });
 
@@ -524,7 +556,7 @@ describe("the page link", () => {
 });
 
 describe("the deck", () => {
-  const card = (fields: Partial<AuditCard>): AuditCard => ({ id: "x", action: "keep", why: "w", note: { id: "x", title: "T", kind: "gotcha", scope: SCOPE, body: "b", place: "index" }, ...fields });
+  const card = (fields: Partial<AuditCard>): AuditCard => ({ id: "x", action: "keep", why: "w", note: { id: "x", title: "T", kind: "gotcha", scope: SCOPE, body: "b", place: "index", chars: 20 }, ...fields });
 
   test("puts loose cards first, then each group after its divider", () => {
     const cards = [card({ id: "a", group: "G" }), card({ id: "b" }), card({ id: "c", group: "G" })];
@@ -551,15 +583,45 @@ describe("the deck", () => {
     expect(choiceForKey(card({ action: "merge", merge: [card({}).note] }), "r")).toBeUndefined();
   });
 
-  test("counts the notes the picks take out of the index", () => {
+  test("the picks take notes out of kb: a trash takes every note on its card, a merge all but the one that stays", () => {
     const cards = [card({}), card({}), card({ merge: [card({}).note, card({}).note] }), card({})];
-    expect(freed(cards, [{ action: "trash" }, { action: "trash" }, { action: "merge" }, { action: "keep" }])).toBe(4);
+    expect(leaving(cards, [{ action: "trash" }, { action: "trash" }, { action: "merge" }, { action: "keep" }])).toHaveLength(4);
+    expect(leaving(cards, [{ action: "keep" }, { action: "rewrite" }, { action: "trash" }, { action: "ask" }])).toHaveLength(3);
+  });
+
+  test("the meter counts by characters: a note that leaves makes room by the size of its line, and the hidden lines take it in rank order", () => {
+    const note = (id: string, place: AuditNote["place"], chars: number): AuditNote => ({ ...card({}).note, id, place, chars });
+    const data = (cards: AuditCard[], hidden = [40, 30, 30]): AuditData => ({ token: "t", scope: SCOPE, created: "", cards, index: { lines: 3, hidden: hidden.length, room: 5, others: 0 }, hidden: hidden.map((chars, i) => ({ id: `h${i}`, chars })) });
+    const short = card({ id: "short", note: note("short", "index", 20) });
+    const long = card({ id: "long", note: note("long", "index", 80) });
+    const keep: Pick = { action: "keep" };
+    const trash: Pick = { action: "trash" };
+    expect(stillHidden(data([short, long]), [keep, keep])).toBe(3);
+    // A short line that leaves does not make room for a longer one: a count of places would say it does.
+    expect(stillHidden(data([short, long]), [trash, keep])).toBe(3);
+    // 5 + 80 characters take the lines of 40 and 30, and not the third.
+    expect(stillHidden(data([short, long]), [keep, trash])).toBe(1);
+    expect(stillHidden(data([short, long]), [trash, trash])).toBe(0);
+    // The first line that does not fit ends the index: a shorter line below it does not jump ahead.
+    expect(stillHidden(data([short], [50, 10]), [trash])).toBe(2);
+    // A hidden note that leaves needs no line any more, and it gives no room: it had none.
+    const hidden = card({ id: "h0", note: note("h0", "hidden", 40) });
+    expect(stillHidden(data([hidden, short]), [trash, keep])).toBe(2);
+    expect(stillHidden(data([hidden, short], [40, 25]), [trash, trash])).toBe(0);
+    // A note that loads at its trigger takes no room. A brief gives back its own size, and so does each note of a merge or a move.
+    const atTrigger = card({ note: note("at", "trigger", 0) });
+    const brief = card({ note: note("work", "brief", 95) });
+    expect(stillHidden(data([atTrigger, brief]), [trash, keep])).toBe(3);
+    expect(stillHidden(data([atTrigger, brief]), [trash, trash])).toBe(0);
+    const merge = card({ action: "merge", note: note("stays", "index", 25), merge: [note("a", "index", 40), note("b", "index", 30)] });
+    expect(stillHidden(data([merge]), [{ action: "merge" }])).toBe(1);
+    expect(stillHidden(data([merge]), [trash])).toBe(0);
   });
 
   test("a moved rule takes its notes and the notes that move with it out of the index", () => {
     const promote = { file: "~/.claude/CLAUDE.md", path: "~/dotfiles/AGENTS.md", link: true, above: [], added: ["- r"], rule: "- r" };
     const moving = card({ action: "promote", promote, merge: [card({}).note, { ...card({}).note, place: "hidden" }] });
-    expect(freed([moving], [{ action: "promote" }])).toBe(2);
+    expect(leaving([moving], [{ action: "promote" }])).toHaveLength(3);
     // The summary counts notes, not cards: the move changes all three notes on its card.
     expect(changes([moving, card({})], [{ action: "promote" }, { action: "keep" }])).toEqual({ changed: 3, total: 4 });
     expect(changes([moving], [{ action: "keep" }])).toEqual({ changed: 0, total: 3 });
@@ -571,18 +633,9 @@ describe("the deck", () => {
     const two = card({ action: "merge", merge: [{ ...card({}).note, id: "y", title: "U" }] });
     const three = card({ action: "merge", merge: [card({}).note, { ...card({}).note, place: "hidden" }] });
     expect([two, three].map((c) => choiceLabel(c, "trash"))).toEqual(["trash both", "trash all 3"]);
-    expect(freed([three], [{ action: "trash" }])).toBe(2);
+    expect(leaving([three], [{ action: "trash" }])).toHaveLength(3);
     expect(changes([two, three], [{ action: "trash" }, { action: "keep" }])).toEqual({ changed: 2, total: 5 });
     expect(summary([two], [{ action: "trash" }])).toMatchObject([{ label: "trash", titles: ["T", "U"] }]);
-  });
-
-  test("counts no line for a note that had none", () => {
-    const out = card({ note: { ...card({}).note, place: "hidden" } });
-    expect(freed([out, card({})], [{ action: "trash" }, { action: "trash" }])).toBe(1);
-    // A global note that loads at its trigger has no line either. A brief gives its room back.
-    const atTrigger = card({ note: { ...card({}).note, place: "trigger" } });
-    const brief = card({ note: { ...card({}).note, place: "brief" } });
-    expect(freed([atTrigger, brief], [{ action: "trash" }, { action: "trash" }])).toBe(1);
   });
 
   test("sends every card to Apply, keep too, with the user's text", () => {

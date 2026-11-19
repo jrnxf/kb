@@ -76,6 +76,11 @@ export interface AuditNote {
    * `hidden`: its index line did not fit, so no session sees it.
    */
   place: "brief" | "index" | "trigger" | "hidden";
+  /**
+   * The characters of its brief or of its index line, with the newline: what the note takes at a
+   * session start now, or for a hidden note, what its line needs. 0 for a note that loads at its trigger.
+   */
+  chars: number;
 }
 
 export interface AuditCard {
@@ -137,10 +142,15 @@ export interface AuditData {
   scope: string;
   created: string;
   cards: AuditCard[];
-  /** The session index as it is now. hidden counts the notes that reach no session: their lines are over the character budget. */
-  index: { lines: number; hidden: number };
-  /** The ids of the notes that reach no session. */
-  hidden: string[];
+  /**
+   * The session index as it is now. hidden counts the notes that reach no session and that this
+   * audit can give a line: their lines are over the character budget. room is the characters that
+   * a session start has left. others counts the hidden notes of another scope: the global notes
+   * behind the hidden notes of a repo, which wait for the repo's notes to fit.
+   */
+  index: { lines: number; hidden: number; room: number; others: number };
+  /** Those notes in rank order, each with the characters its index line needs. */
+  hidden: { id: string; chars: number }[];
   result?: AuditResult;
 }
 
