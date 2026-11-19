@@ -81,3 +81,10 @@ export function resolveRepo(path: string, store: Store, options: { record?: bool
   }
   return { scope, root, head };
 }
+
+/** The newest commit of a checkout at or before a time, as `head` is written, or null. */
+export function commitAt(root: string | null, time: string): string | null {
+  if (!root) return null;
+  const found = git(root, "log", "-1", "--format=%h", `--before=${time}`);
+  return found.ok && found.out ? found.out : null;
+}

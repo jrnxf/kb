@@ -85,10 +85,34 @@ highest.
   `CLAUDE.md` when the repo has none), and the global audit moves a global rule to the global file. The card shows the lines it
   adds. Apply writes the file and does not commit it. This is the only write `kb` makes inside a
   repo. A moved note is no longer injected.
-- **A missed checkpoint leaves a trace.** Nothing can run before `/clear`. So a session that ends
-  with `/clear` and no checkpoint is recorded, and the next session in that directory gets one
-  line with the path of its transcript, also when one of the two was in a subdirectory of the checkout. Before a compaction, a hook tells the summary what to
-  keep, and the next start says once that no checkpoint ran.
+- **A missed checkpoint can be recovered.** Nothing can run before `/clear`, but `/clear` keeps the
+  transcript on disk. So a session that ends with `/clear` and no checkpoint is recorded, and a
+  new session in that checkout says in one line that `/kb:recover` saves it. The agent tells you
+  once per day and checkout. Other starts in that day only let the agent know, so a script or a
+  second window does not get the same sentence each time. `/kb:recover` hands
+  what the user and the agent said to a Sonnet subagent, which runs the checkpoint steps. No tool
+  call and no tool output gets through, also not the output of a `!` command. The reason you typed
+  when you rejected a tool call, and your answer to a question, stay in.
+  - The report starts with "Recovered" and the date and directory of the old session. It says
+    nothing about the session you are in, which still needs its own `/kb:checkpoint`.
+  - A recovered note is verified at the time the old session ended (`kb add --as-of`), with low
+    confidence. So `kb stale` sees the changes made since then. A note that somebody checked after
+    that time stays as it is: the report lists what the old session adds under "Check by hand".
+  - The subagent writes no instruction file. It lists each rule it found, and you say which still
+    hold. The session counts as saved only after that. Until then the line comes back. Each note
+    of a recovery is recorded in the session (`kb add --recovered-from`), so a second
+    `/kb:recover` adds no note twice.
+  - The text of the old session is in `.state/recover/`, readable by you only. It goes when the
+    session is saved or forgotten, and after 7 days.
+  - `/kb:recover forget` stops the line. A session with fewer than 2 prompts or 3000 characters
+    is not reported. A slash command counts only for the arguments you typed after it, and a
+    `/kb:recover` turn does not count, so a session that only recovered another one is not
+    reported. A record goes after 7 days.
+  - A session start never reads a transcript over 2 MB: such a session is reported as it is. The
+    whole step has 300 ms. A session it could not measure in that time waits for a later start.
+
+  Nothing runs in the background. Before a compaction, a hook tells the summary what to keep, and
+  the next start says once that no checkpoint ran.
 - **Sync.** If the store has a git remote, each write starts a background pull and push, and
   each session start does the same at most once per 5 minutes. Usage counters live in one file
   per machine, so two machines never edit the same file.
@@ -105,6 +129,8 @@ highest.
 ```
 kb context [--repo .]        what a session gets at start
 kb add [--repo .]            create or update a note from JSON on stdin
+kb add --as-of <ISO time>    the same for a fact from an earlier time: the note is verified then
+kb add --recovered-from <session-id>   also record the note in that unsaved session
 kb show <id> [--no-use]      kb search <words> [--scope s] [--trash]
 kb list [--scope s] [--trash]  kb use <id>...
 kb trash <id>...             kb restore <id>...
@@ -115,6 +141,7 @@ kb budget [--repo .]
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
 kb audit [--no-wait]         kb audit propose   kb audit status   (an agent audits the scope)
 kb instructions [--repo .]   kb sync      kb checkpointed <session-id>
+kb unsaved [--forget <session-id>]   sessions here that ended with no checkpoint
 ```
 
 `kb serve`, or `kb` alone in a terminal, opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
@@ -145,7 +172,7 @@ and the text or rule of an audit Apply. It knows the shape of common tokens and 
 Anthropic, Slack and more), a password in a URL, and a long random value given to a name such as
 `API_KEY`. The error names the kind and the place, never the secret. Write a placeholder instead.
 
-Skills: `/kb:checkpoint`, `/kb:audit`. Only you can start them. `/kb:note` writes a rule the
+Skills: `/kb:checkpoint`, `/kb:recover`, `/kb:audit`. Only you can start them. `/kb:note` writes a rule the
 user states to an instruction file, and the agent starts it on its own.
 
 Every command accepts `--json`. The CLI knows nothing about Claude Code: only `hooks/` and `skills/` do.
