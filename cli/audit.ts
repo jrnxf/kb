@@ -185,14 +185,15 @@ export function auditData(store: Store, scope: string, token: string): AuditData
   if (!audit) throw new KbError(`no audit for ${scope}. Run /kb:audit ${scope === "global" ? "outside any repo" : "in that repo"}.`);
   const active = activeNotes(store);
   const budget = budgetOf(store, audit.scope === "global" ? null : audit.scope);
-  const places = new Map(budget.notes.map((n) => [n.id, n.shown]));
+  const rows = new Map(budget.notes.map((n) => [n.id, n]));
   const shown = (n: StoredNote): AuditNote => ({
     id: n.id,
     title: n.title,
     kind: n.kind,
     scope: n.scope,
     body: n.body,
-    place: places.get(n.id) ?? "hidden",
+    place: rows.get(n.id)?.shown ?? "hidden",
+    chars: rows.get(n.id)?.chars ?? 0,
   });
   // A note that changed or left since the proposal is not on a card: the proposal no longer fits it.
   // So is a card whose action this kb does not know: an older kb wrote it, and Apply would refuse it.
@@ -240,8 +241,9 @@ export function auditData(store: Store, scope: string, token: string): AuditData
     scope: audit.scope,
     created: audit.created,
     cards,
-    index: { lines: budget.index.lines, budget: budget.index.budget, hidden: budget.index.hidden },
-    hidden: budget.notes.filter((n) => n.shown === "hidden").map((n) => n.id),
+    // The page counts the hidden notes that this audit can give a line. The limit is characters, so it gets sizes, not places.
+    index: { lines: budget.index.lines, hidden: budget.makeRoomFor.length, room: budget.room, others: budget.globalAudit ? 0 : budget.index.hidden - budget.makeRoomFor.length },
+    hidden: budget.makeRoomFor.map((id) => ({ id, chars: rows.get(id)!.chars })),
     result: audit.result,
   };
 }

@@ -81,18 +81,24 @@ function Header({ scope, data, children }: { scope: string; data: AuditData | un
   );
 }
 
-/** How many notes still reach no session: it counts down as the picks take notes out of the index. */
+/** What the page says when the picks make room for every hidden note of the audit. The global notes behind the hidden notes of a repo are not its to count. */
+const allSeen = (data: AuditData, future = false) => {
+  const text = `every note ${data.index.others > 0 ? "of this repo " : ""}${future ? "will reach" : "reaches"} a session`;
+  return future ? text[0]!.toUpperCase() + text.slice(1) : text;
+};
+
+/** How many notes still reach no session: it counts down as the picks make room, by the characters of each line. */
 function Meter({ data, left }: { data: AuditData; left: number }) {
   if (data.index.hidden === 0) return null;
   const done = left === 0;
   return (
     <span
       className="flex items-center gap-3 text-[13px]"
-      title={`A session lists at most ${data.index.budget} notes. ${data.index.hidden} did not fit, so no session sees them. Each trash or merge gives one of them a line.`}
+      title={`A session start has a character budget. The index lines of ${data.index.hidden} ${data.index.hidden === 1 ? "note" : "notes"} did not fit, so no session sees them. A note that leaves makes room by the size of its line. This count is an estimate, and kb budget gives the count after Apply.`}
     >
       <span className={cn("tabular-nums", done ? "text-(--k-convention)" : "text-muted-foreground")}>
         {done ? (
-          "every note reaches a session"
+          allSeen(data)
         ) : (
           <>
             <b className="font-semibold text-(--k-open-work)">{left}</b> {left === 1 ? "note still reaches" : "notes still reach"} no session
@@ -391,7 +397,7 @@ function Divider({ group, count, onOneByOne, onKeepAll }: { group: string; count
 }
 
 /** Where sessions see the note now, in the user's words. */
-const placeText = { body: "sessions load it in full", index: "sessions see its title only", hidden: "no session sees it" } as const;
+const placeText = { brief: "sessions see its next step", index: "sessions see its title", trigger: "loads at its trigger", hidden: "no session sees it" } as const;
 
 function Meta({ note, reason }: { note: AuditNote; reason?: string }) {
   return (
@@ -673,7 +679,7 @@ function End({ data, picks, left, applying, error, onApply }: { data: AuditData;
           <h2 className="text-[19px] font-semibold">Ready to apply</h2>
           <p className="mt-1 text-[13.5px] text-muted-foreground">
             {changed} of {total} notes change.
-            {data.index.hidden > 0 && (left === 0 ? " Every note will reach a session." : ` ${left} ${left === 1 ? "note" : "notes"} will still reach no session.`)}
+            {data.index.hidden > 0 && (left === 0 ? ` ${allSeen(data, true)}.` : ` ${left} ${left === 1 ? "note" : "notes"} will still reach no session.`)}
           </p>
         </>
       }

@@ -95,13 +95,14 @@ function put(scope: string, head: string | undefined, s: Seed): void {
 const para = (text: string, times: number) => Array.from({ length: times }, (_, i) => `${text} (case ${i + 1})`).join("\n");
 
 // ---- global: 46 notes. Gotchas the user must never lose, standing rules, a few procedures. ----
+// A global note with a trigger takes no index line: a session gets it at its command or its error.
 
 const GLOBAL: Seed[] = [
   // Gotchas. Several are long, as they get after months of additions.
   { kind: "gotcha", title: "Never run the migration tool against the shared staging database", opened: 9, age: 3, triggers: ["stop: migrate up"], body: "The staging database at db.staging.example.com is shared by four teams. `migrate up` there dropped a column in use.\nRun migrations on a local copy only. Ask the user to run the staging step." },
   { kind: "gotcha", title: "The deploy CLI exits 0 when the upload was rejected", opened: 6, age: 12, triggers: ["cmd: shipit deploy"], body: "Only `\"status\":\"live\"` in the JSON output means deployed. Check it every time.\n" + para("A rejected upload prints a warning line and still exits 0, so a script that checks only the exit code reports a deploy that did not happen.", 5) },
   { kind: "gotcha", title: "Background agents cannot answer a permission prompt", opened: 4, age: 20, body: "A prompt in a background agent times out and is denied. Ask for `mktemp -d` directories and script files instead of `rm` in a compound command." },
-  { kind: "gotcha", title: "A load test can outlive its run and pin the machine for hours", opened: 3, age: 31, body: "Every load or loop needs a hard time limit and cleanup on exit.\n" + para("A burner process started to reproduce a flake kept all cores busy long after the session ended, and nobody saw it until the fans started.", 4) },
+  { kind: "gotcha", title: "A load test can outlive its run and pin the machine for hours", opened: 3, age: 31, triggers: ["cmd: loadgen run"], body: "Every load or loop needs a hard time limit and cleanup on exit.\n" + para("A burner process started to reproduce a flake kept all cores busy long after the session ended, and nobody saw it until the fans started.", 4) },
   { kind: "gotcha", title: "The build host has no route to the office network", age: 40, body: "It reaches the internet only. Anything that needs the office network becomes a command for the user.\n" + para("Requests to internal names time out after 30 seconds without an error message, which looks like a slow service and not like a blocked route.", 6) },
   { kind: "gotcha", title: "The package registry mirror serves stale versions for an hour", age: 55, triggers: ["err: no matching version found"], body: "After a publish, `install` can get the old version for up to 60 minutes. Pin the exact version and pass `--prefer-online`." },
   { kind: "gotcha", title: "Screen recording permission resets after each OS update", age: 62, body: "The capture tool then records a black frame and exits 0. Check the first frame before a long recording." },
@@ -109,11 +110,11 @@ const GLOBAL: Seed[] = [
   { kind: "gotcha", title: "The operating system blocks agents from reading the Downloads folder", age: 75, body: "Ask the user to move the file to /home/user/work first. This holds for shell commands too." },
   { kind: "gotcha", title: "Rebase of a published branch drops review comments", age: 90, triggers: ["cmd: git rebase"], body: "Merge the default branch into a published PR head. Never rebase it: the review tool loses the comment anchors." },
   { kind: "gotcha", title: "The review pipeline writes local paths into its report", age: 101, body: "Remove `/home/user/...` paths from the report before it goes into a PR body." },
-  { kind: "gotcha", title: "The notification tool reports success when nothing was shown", age: 120, body: "Only `\"shown\":true` means delivered.\n" + para("The exit code is 0 in both cases, and the text output is the same, so only the JSON field tells the two apart.", 4) },
+  { kind: "gotcha", title: "The notification tool reports success when nothing was shown", age: 120, triggers: ["cmd: notify send"], body: "Only `\"shown\":true` means delivered.\n" + para("The exit code is 0 in both cases, and the text output is the same, so only the JSON field tells the two apart.", 4) },
   { kind: "gotcha", title: "Preview links expire after seven days", age: 140, body: "A link in an old PR can be dead. Make a new preview before the user is asked to look." },
   { kind: "gotcha", title: "The staging database is shared, never run migrations against it", age: 200, body: "Older wording of the same rule. Staging is shared by several teams." },
   { kind: "gotcha", title: "Time zone of the CI runners is UTC, not local", age: 230, body: "Date tests that pass on the laptop can fail in CI between 00:00 and 01:00 local time." },
-  { kind: "gotcha", title: "The old VPN client breaks DNS for containers", age: 300, confidence: "low", body: "Seen once in January. Restart the container runtime after the VPN connects." },
+  { kind: "gotcha", title: "The old VPN client breaks DNS for containers", age: 300, confidence: "low", triggers: ["err: temporary failure in name resolution"], body: "Seen once in January. Restart the container runtime after the VPN connects." },
 
   // Conventions: the largest group, most of them one or two lines.
   { kind: "convention", title: "Give one firm recommendation and hold it", opened: 5, age: 8, body: "Do not list options without a choice. Change the recommendation only for new facts." },
@@ -147,10 +148,11 @@ const GLOBAL: Seed[] = [
   { kind: "decision", title: "Dotfiles own every tool install", age: 160, body: "No ad hoc installs. A tool that is not in dotfiles does not exist on the next machine." },
   { kind: "how-to", title: "Checks and deploys by project", opened: 3, age: 9, body: para("atlas-api: `make check`, deploy by merge to main. Others follow the same shape with their own task name.", 9) },
   { kind: "how-to", title: "Publish a file for the user to open", age: 50, body: "Copy it under /home/user/pub and hand over the https://files.example.com link. Test the link first." },
-  { kind: "open-work", title: "Move the last two laptops to the new shell setup", age: 6, body: "Done: the desktop and the build host. Left: both laptops. Blocked on the keychain export." },
+  // Open work belongs to a repo. This one is global, so it is an index line in every repo and a brief only outside them.
+  { kind: "open-work", title: "Move the last two laptops to the new shell setup", age: 6, body: "Done: the desktop and the build host. Left: both laptops.\nNext: export the keychain on the older laptop, then run the setup script there." },
 ];
 
-// ---- repos: 9 projects, 12 notes each. ----
+// ---- repos: 9 projects, 13 notes each. atlas-api has three more: open work past the limit of the briefs. ----
 
 const REPOS: { name: string; remote: string; domain: string; file: string }[] = [
   { name: "atlas-api", remote: "git@github.com:example-org/atlas-api.git", domain: "billing", file: "src/billing.ts" },
@@ -166,7 +168,10 @@ const REPOS: { name: string; remote: string; domain: string; file: string }[] = 
 
 function repoNotes(name: string, domain: string, file: string): Seed[] {
   return [
-    { kind: "open-work", title: `Finish the ${domain} retry rework in ${name}`, age: 2, body: `Done: the backoff table and its tests. Left: the dead-letter path in \`${file}\`. Next step: make \`retryAll\` idempotent.`, anchors: [file] },
+    // Open work with a `Next:` line: a session start shows that line.
+    { kind: "open-work", title: `Finish the ${domain} retry rework in ${name}`, age: 2, body: `Done: the backoff table and its tests.\nLeft: the dead-letter path in \`${file}\`.\nNext: make \`retryAll\` idempotent, then run \`make test-${domain}\`.\nDone when the retry suite passes with a dead letter in the queue.`, anchors: [file] },
+    // Open work with no `Next:` line: a session start shows the start of the body.
+    { kind: "open-work", title: `Move the ${name} ${domain} metrics to the new dashboard`, age: 19, body: para(`Half of the ${domain} panels are moved. The old dashboard still gets the error rate and the queue depth, and the alert rules read from it.`, 3) },
     { kind: "gotcha", title: `${name} amounts are integer cents, never floats`, opened: 7, age: 5, anchors: [`${file}#total`], body: `A float in the ${domain} path gave totals that were off by one cent. Convert at the edge.` },
     { kind: "gotcha", title: `The ${name} test database must be reset between suites`, opened: 2, age: 30, triggers: [`cmd: make test-${domain}`], body: `Suites share one schema. Run \`make db-reset\` first, or ${domain} tests fail in a random order.` },
     { kind: "gotcha", title: `${name} cache keys include the tenant id`, age: 64, body: `A key without the tenant leaked ${domain} data between tenants in staging.\n${para(`Every helper that builds a key must take the tenant as its first argument, and the lint rule in ${name} checks only the helpers it knows.`, 5)}` },
@@ -180,6 +185,13 @@ function repoNotes(name: string, domain: string, file: string): Seed[] {
     { kind: "how-to", title: `Run the ${name} ${domain} suite against a local copy of the data`, age: 115, body: `${para(`Export with \`make export\`, load into the local database, remove the sign-in tables, and run \`make test-${domain}\`.`, 3)}` },
   ];
 }
+
+/** More open work for one repo than a session start shows in short form, so the others are index lines. */
+const MORE_OPEN_WORK: Seed[] = [
+  { kind: "open-work", title: "Split the atlas-api invoice export into pages", age: 4, body: "Done: the cursor and its test.\nNext: page the CSV writer in `src/billing.ts`, 500 rows per page.\nDone when an export of 10,000 invoices stays under 100 MB of memory." },
+  { kind: "open-work", title: "Remove the legacy tax table from atlas-api", age: 9, body: "The new table is live. Two reports still read the old one.\nNext:\n1. Point the two reports at the new table.\n2. Drop the old table in a migration.\n\nDone when no query names `tax_legacy`." },
+  { kind: "open-work", title: "Add a dry run to the atlas-api refund job", age: 26, body: "Asked for after a refund ran twice in staging.\nNext: add `--dry-run` to the job and print the refunds it would make." },
+];
 
 for (const s of GLOBAL) put("global", undefined, s);
 
@@ -195,7 +207,7 @@ for (const repo of REPOS) {
   const head = git(dir, "rev-parse", "--short", "HEAD");
   const r = Bun.spawnSync([process.execPath, join(import.meta.dir, "..", "cli", "main.ts"), "scope", "--repo", dir], { env: { ...process.env, KB_HOME: store.home }, stdout: "pipe" });
   const scope = r.stdout.toString().trim();
-  for (const s of repoNotes(repo.name, repo.domain, repo.file)) put(scope, head, s);
+  for (const s of [...repoNotes(repo.name, repo.domain, repo.file), ...(repo.name === "atlas-api" ? MORE_OPEN_WORK : [])]) put(scope, head, s);
 }
 
 store.writeIndex();

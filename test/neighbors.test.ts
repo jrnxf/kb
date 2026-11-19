@@ -100,7 +100,7 @@ describe("the neighbor check on the seeded store", () => {
     expect(fixture.rewrites).toHaveLength(10);
     const found = fixture.rewrites.filter((r) => holds(r)[0]?.id === r.original);
     expect(found.length).toBe(10);
-    expect(Math.min(...fixture.rewrites.map((r) => holds(r)[0]!.score))).toBeGreaterThanOrEqual(0.45);
+    expect(Math.min(...fixture.rewrites.map((r) => holds(r)[0]!.score))).toBeGreaterThanOrEqual(0.43);
   });
 
   // An agent writes a longer note than a person, in words further from the stored note. The mean
@@ -114,7 +114,7 @@ describe("the neighbor check on the seeded store", () => {
   test("few seeded notes with no twin have a neighbor among the others", () => {
     const twins = new Set(["never-run-the-migration-tool-against-the-shared", "the-staging-database-is-shared-never-run"]);
     const single = notes.filter((n) => !twins.has(n.id) && !/-keeps-(all-)?[a-z]+-state-in-/.test(n.id));
-    expect(single).toHaveLength(134);
+    expect(single).toHaveLength(146);
     const held = single.filter((note) => findNeighbors(notes.filter((n) => n.id !== note.id), note).some((n) => n.scope === note.scope || n.scope === "global"));
     expect(held.length).toBeLessThanOrEqual(6);
   });

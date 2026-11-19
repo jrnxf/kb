@@ -21,6 +21,10 @@ Sweep the whole session. Candidates:
 - **rule** - a rule the user stated or corrected you on. It goes to an instruction file, not to kb: see "Write a rule" below. Skip it when this session wrote it there already.
 - **how-to** - a non-obvious procedure that worked.
 - **open-work** - unfinished work. Write enough that a fresh session can resume: current state, the next step, the files, and what done looks like.
+  - Open work goes to the repo it belongs to: save it there with the scope `"repo"`. Outside any repo it is `"global"`.
+  - In a repo, never save open work as `"global"`: a session start shows the next step only for the open work of its own repo.
+  - Give the body one line that starts with `Next:` and names the next step. A session start shows that line, and `kb show` gives the rest. For several steps, write `Next:` on its own line and a list below it.
+  - Put no date in the title. kb records when the note was verified.
 
 Skip a candidate when:
 
@@ -118,7 +122,7 @@ kb refuses one word that is a common command (`git`, `ls`, `bun`): add a subcomm
 `-rf` and `-fr` are two words, so give one trigger for each form.
 
 Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id> --check`, then update it or skip.
-A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor, or a body over 700 characters. The note is saved. Fix it with an update, or give the reason in the report.
+A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor, open work that a repo session saved as `"global"`, or a body over 700 characters. The note is saved. Fix it with an update, or give the reason in the report.
 
 `neighbors` means that nothing was written: stored notes are close to the new note in their words. `shared` names the words both have.
 `kb add` exits with code 2 for this answer, so the call shows as failed. It is an answer to read, not a failure of the tool. The note is not saved until you run the command again.
@@ -131,7 +135,7 @@ Read each neighbor with `kb show <id> --check`. Then write the file again and ru
 
 ## 4. Close finished work
 
-For each `open-work` note that this session finished, run `kb trash <id>`. If part of the work remains, update the note to the new state.
+For each `open-work` note that this session finished, run `kb trash <id>`. If part of the work remains, update the note to the new state, with a new `Next:` line.
 
 ## 5. Give a verdict on the notes you got
 
@@ -141,7 +145,7 @@ Run this:
 kb log --session ${CLAUDE_SESSION_ID}
 ```
 
-It prints the events of this session. Under `no verdict yet:` it lists each note you got and how: `body` (whole, at the session start), `opened` (you ran `kb show`) or `fired` (a trigger loaded it: a command, an error or a file).
+It prints the events of this session. Under `no verdict yet:` it lists each note you got and how: `brief` (open work, at the session start), `body` (whole, at the session start), `opened` (you ran `kb show`) or `fired` (a trigger loaded it: a command, an error or a file).
 No such list means there is nothing to judge: go to step 6.
 
 Give a verdict only for a note you can judge:
@@ -153,7 +157,7 @@ Give a verdict only for a note you can judge:
 Pass `--session ${CLAUDE_SESSION_ID}` on each verdict, so the verdict belongs to the session that the list above read.
 Skip a note when you cannot tell. An index line gets no verdict.
 Give `not-needed` only to a note that the list marks `fired`. kb refuses it for any other note.
-A `body` loads in every session, and most sessions do not need it. It gets `helped`, `wrong` or no verdict.
+A `brief` or a `body` loads in every session, and most sessions do not need it. It gets `helped`, `wrong` or no verdict.
 A verdict `wrong` sends the note to the next audit.
 Give no `wrong` to a note that this session corrected or rewrote: the correction is the record.
 

@@ -28,7 +28,10 @@ const NEIGHBORS_EXIT = 2;
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
-  kb context [--repo .]                  text for a session start: index, top notes, pointer
+  kb context [--repo .]                  text for a session start: the open work of the repo in short
+                                         form, the index, a pointer. No note loads its body there.
+                                         1 start in 10 keeps the older form, with whole bodies, so an
+                                         audit can compare. --session <id> prints what that session got
   kb add --file <path> [--repo .] [--as-of <ISO time>] [--recovered-from <session-id>]
                                          create or update a note from the JSON in a file. Without
                                          --file, the JSON comes from stdin.
@@ -61,7 +64,8 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          or missing anchor, no use, an old check, a close note, or
                                          the verdicts wrong and not-needed of sessions on any machine
   kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
-  kb budget [--repo .]                   what a session loads, and what reaches no session
+  kb budget [--repo .]                   what a session start gives of each note: a brief, an index
+                                         line, nothing until its trigger, or nothing at all
   kb audit [--repo .] [--no-wait]        start an agent that audits this repo's notes, and print the
                                          page link. Outside any repo, it audits the global notes
   kb audit propose --file <path> [--repo .]
@@ -115,8 +119,9 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
       as the reason. A run 3 seconds later passes. For a command where one run does damage.
     "err: address already in use"  after a tool call that failed with this text in its error.
       At least ${ERR_MIN_CHARS} characters. Case does not count.
-  A saved note can come with "warnings": a gotcha or a how-to with no trigger and no anchor, and
-  a body over ${BODY_CHARS} characters. The note is stored in each case.
+  A saved note can come with "warnings": a gotcha or a how-to with no trigger and no anchor, open
+  work that a repo session saves with the scope "global", and a body over ${BODY_CHARS} characters.
+  The note is stored in each case.
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
   New triggers alone do not.
   An update never changes the scope of a note, so leave "scope" out of it.
@@ -182,7 +187,9 @@ type Output = { json: unknown; text: string; code?: number };
 const MAX_HIT_LINES = 3;
 
 function cmdContext(store: Store, args: Args): Output {
-  const result = buildContext(store, String(args.flags.get("repo") ?? "."));
+  // HOLDBACK: the arm comes from --session alone, so the command prints the new policy unless a session is named.
+  const session = args.flags.get("session");
+  const result = buildContext(store, String(args.flags.get("repo") ?? "."), typeof session === "string" ? session : undefined);
   return { json: result, text: result.text.trimEnd() };
 }
 
@@ -264,7 +271,7 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
     }
     const updated = updateNote(store, input as Record<string, unknown> & { id: string }, repo, asOf, typeof from === "string" ? from : undefined);
     recovered(updated.id);
-    return added("updated", updated, store.notes().find((n) => n.id === updated.id) ?? existing);
+    return added("updated", updated, store.notes().find((n) => n.id === updated.id) ?? existing, repo.scope !== null);
   }
 
   const scope = resolveScopeInput(input.scope, repo.scope);
@@ -320,12 +327,12 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   afterWrite(store, `kb: add ${note.id}`);
   logWrites(store, "add", [note.id], shown, typeof from === "string" ? from : undefined);
   recovered(note.id);
-  return added("created", { id: note.id, path }, note, neighbors);
+  return added("created", { id: note.id, path }, note, repo.scope !== null, neighbors);
 }
 
 /** The result of a note that `kb add` saved, with what the writer should look at again. */
-function added(status: "created" | "updated", saved: { id: string; path: string }, note: Note, neighbors: Neighbor[] = []): Output {
-  const warnings = noteWarnings(note);
+function added(status: "created" | "updated", saved: { id: string; path: string }, note: Note, inRepo: boolean, neighbors: Neighbor[] = []): Output {
+  const warnings = noteWarnings(note, inRepo);
   const close = neighbors.length > 0;
   return {
     json: { status, ...saved, ...(close ? { neighbors } : {}), ...(warnings.length > 0 ? { warnings } : {}) },
@@ -543,22 +550,31 @@ function cmdVerify(store: Store, args: Args): Output {
 
 function cmdBudget(store: Store, args: Args): Output {
   const b = buildBudget(store, String(args.flags.get("repo") ?? "."));
-  const count = (n: number) => `${n} ${n === 1 ? "note" : "notes"}`;
+  const count = (n: number, noun = "note") => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  // Repo notes rank first, so the hidden notes are counted by owner: an audit covers one scope only.
+  const hidden = [b.index.hiddenRepo > 0 ? count(b.index.hiddenRepo, "repo note") : "", b.index.hiddenGlobal > 0 ? count(b.index.hiddenGlobal, "global note") : ""].filter(Boolean).join(" and ");
+  const reach = b.index.hidden === 1 ? "reaches" : "reach";
+  // No note loads its body at a session start. Each note is in one of the four rows below.
   const lines = [
     `scope    ${b.scope ?? "global only"}`,
-    `index    ${b.index.lines} of ${b.index.budget} lines`,
-    `context  ${b.context.chars} of ${b.context.budget} characters, ${b.context.bodies} bodies shown, ${b.index.lines} in the index only`,
+    `context  ${b.context.chars} of ${b.context.budget} characters at a session start`,
+    `briefs   ${b.briefs.count} of ${count(b.briefs.open, "open-work note")} here, at most ${b.briefs.limit}: the title, the next step and a pointer. ${b.briefs.chars} of ${b.briefs.budget} characters`,
+    `index    ${count(b.index.lines, "line")}, one per other note, in rank order`,
+    `trigger  ${count(b.index.triggerOnly, "global note")} with no line: ${b.index.triggerOnly === 1 ? "it loads" : "each loads"} at its cmd, stop or err trigger`,
+    `hidden   ${hidden || "0 notes"}`,
   ];
-  // One long body ends the list of bodies, so the longest ones are the first to shorten.
-  const longest = b.notes.filter((n) => n.shown === "body").sort((x, y) => y.chars - x.chars).slice(0, 3);
-  if (b.context.dropped > 0 && longest.length > 0) lines.push(`longest  ${longest.map((n) => `${n.id} (${n.chars})`).join(", ")}`);
-  if (b.index.capped > 0) lines.push(`global   ${b.index.globalBudget} global notes load here, the highest ranked. ${count(b.index.capped)} of lower rank stay out, on purpose.`);
-  if (b.over) {
-    lines.push(`${count(b.index.hidden)} ${b.index.hidden === 1 ? "reaches" : "reach"} no session, because the index is full.`);
+  if (b.globalAudit) {
+    // Repo notes rank first, so only global notes are hidden, and they do not fit outside a repo either.
+    lines.push(`${hidden} ${reach} no session here, because the global notes do not fit the index. No note of this repo is hidden, and an audit of this repo covers its own notes only.`);
+    lines.push("Run /kb:audit outside any repo: the global audit makes room. `kb budget` there lists the candidates.");
+  } else if (b.over) {
+    lines.push(`${hidden} ${reach} no session, because the index is over its character budget.`);
+    // The global notes fit on their own. Here the notes of the repo take their room, so its audit makes room.
+    if (b.scope && b.index.hiddenRepo === 0) lines.push("The global notes fit outside a repo. Here the notes of this repo take their room, so room comes from the notes of this repo.");
     if (b.trim.length > 0) lines.push(`Trash or merge first: ${b.trim.map((d) => `${d.id} (${d.reason})`).join(", ")}`);
     if (b.ask.length > 0) lines.push(`Then ask the user, because these are rules: ${b.ask.map((d) => `${d.id} (${d.kind}, ${d.reason})`).join(", ")}`);
     if (b.trim.length === 0 && b.ask.length === 0) lines.push("Nothing to take out: only open work is left.");
-  } else lines.push(b.notes.length === 0 ? "no notes load here" : "every note reaches a session, as a body or as an index line");
+  } else lines.push(b.notes.length === 0 ? "no notes load here" : "every note reaches a session: as a brief, as an index line or at its trigger");
   return { json: b, text: lines.join("\n") };
 }
 
@@ -613,7 +629,11 @@ function eventText(event: Logged): string {
   const e = event as Logged & Record<string, any>;
   const detail = (): string => {
     switch (e.ev) {
-      case "start": return `${e.source}: ${count(e.bodies.length, "body", "bodies")}, ${count(e.index.length, "index line", "index lines")}, ${e.hidden.length} hidden, ${e.chars.total} characters`;
+      case "start": {
+        // A start of an older kb has bodies and no briefs. HOLDBACK: so has a start of the hold-back arm.
+        const top = [...(e.briefs ? [count(e.briefs.length, "brief", "briefs")] : []), ...(e.bodies.length > 0 || !e.briefs ? [count(e.bodies.length, "body", "bodies")] : [])];
+        return `${e.source}${e.holdback ? " (hold-back)" : ""}: ${top.join(", ")}, ${count(e.index.length, "index line", "index lines")}, ${e.hidden.length} hidden, ${e.chars.total} characters`;
+      }
       // A path names the file. A trigger names itself: "cmd: pkill -f".
       case "fire": return e.kind === "path" || !e.kind ? `${e.note} (${e.tool} of ${e.match})` : `${e.note} (${e.tool}, ${e.kind}: ${e.match})`;
       case "show": return `${e.note} (${e.why}${e.trashed ? ", in the trash" : ""})`;
@@ -672,8 +692,8 @@ function cmdLog(store: Store, args: Args): Output {
 
   if (typeof session === "string") {
     const notes = logged.map(row);
-    // The notes the session can judge: it got the body, opened the note for a task, or a hook named it.
-    const got = (n: (typeof notes)[number]) => [n.body > 0 ? "body" : "", n.opened.task > 0 ? "opened" : "", n.fired > 0 ? "fired" : ""].filter(Boolean);
+    // The notes the session can judge: it got the body or a brief, opened the note for a task, or a hook named it.
+    const got = (n: (typeof notes)[number]) => [n.body > 0 ? "body" : "", n.brief > 0 ? "brief" : "", n.opened.task > 0 ? "opened" : "", n.fired > 0 ? "fired" : ""].filter(Boolean);
     const judged = (n: (typeof notes)[number]) => VERDICTS.some((v) => n.verdicts[v] > 0);
     const unjudged = notes.filter((n) => n.state !== "gone" && got(n).length > 0 && !judged(n));
     const scope = events.find((e) => typeof e.scope === "string" && e.scope)?.scope ?? null;
@@ -686,8 +706,8 @@ function cmdLog(store: Store, args: Args): Output {
   const named = new Set(logged.map((n) => n.id));
   const quiet = [...active.keys()].filter((id) => !named.has(id));
   const notes = [...logged, ...quiet.map(emptyNoteLog)].map(row).sort((a, b) => a.id.localeCompare(b.id));
-  const columns = ["body", "index", "hidden", "opened", "checked", "fired", ...VERDICTS];
-  const cells = (n: (typeof notes)[number]) => [n.body, n.index, n.hidden, n.opened.task, n.opened.check, n.fired, ...VERDICTS.map((v) => n.verdicts[v])];
+  const columns = ["body", "brief", "index", "hidden", "opened", "checked", "fired", ...VERDICTS];
+  const cells = (n: (typeof notes)[number]) => [n.body, n.brief, n.index, n.hidden, n.opened.task, n.opened.check, n.fired, ...VERDICTS.map((v) => n.verdicts[v])];
   const wId = Math.max(2, ...logged.map((n) => n.id.length));
   const table = (id: string, values: (string | number)[]) => `${id.padEnd(wId)}  ${values.map((v, i) => String(v).padStart(columns[i]!.length)).join("  ")}`;
   const lines = [

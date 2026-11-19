@@ -98,6 +98,7 @@ For each entry, oldest first, start one subagent with the Agent tool: `subagent_
 > Update a global neighbor only when the fact holds in every repo. Else pass `"new": true`.
 > A neighbor that says the opposite of the old session can be newer than it. Update it with the `--as-of` flag as always: `kb add` then answers `newer` when it is.
 > The file starts with the commits made since the session ended. Read them before you save open work.
+> Save open work as step 1 says: in the repo it belongs to, and as `"global"` only when the session ran outside any repo. Give it one line that starts with `Next:`, and no date in the title.
 > Then it lists the notes that an earlier recovery of this session saved. Never add one of them again: update it when it lacks a fact.
 > Leave a note that the list marks "(in the trash)". The user retired it.
 > When `kb add` answers `newer`, somebody checked the note after the session ended, and nothing changed. Skip the note.

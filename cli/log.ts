@@ -36,16 +36,21 @@ export interface StartEvent {
   ev: "start";
   /** startup, resume, clear, compact or fork. */
   source: string;
-  /** The note ids by the form the session got: a whole body, or an index line. */
-  bodies: string[];
-  index: string[];
-  /** Notes in no session: over the index budget, or over the global cap. */
-  hidden: string[];
-  /** Characters of the whole hook output. `fixed` is all that is not an index line or a body. */
-  chars: { fixed: number; index: number; bodies: number; total: number };
-  /** Room for later forms. Nothing writes them yet. */
+  /**
+   * The note ids by the form the session got. `briefs`: open work in short form. `index`: an index
+   * line. `bodies`: a whole body, which only a start of an older kb or of the hold-back arm gives.
+   */
   briefs?: string[];
+  index: string[];
+  bodies: string[];
+  /** Global notes that took no line, because each loads at its trigger. */
+  triggerOnly?: string[];
+  /** Notes in no session: the index line did not fit the character budget. HOLDBACK: in the arm, the notes over its old limits. */
+  hidden: string[];
+  /** HOLDBACK: true for a start that kept the old policy for bodies. A line of an older kb has no flag. */
   holdback?: boolean;
+  /** Characters of the whole hook output. `fixed` is all that is not a brief, an index line or a body. */
+  chars: { fixed: number; briefs?: number; index: number; bodies: number; total: number };
 }
 
 /**
@@ -241,8 +246,9 @@ export function readLog(store: Store, filter: { since?: Date; session?: string }
 /** What the log says about one note. */
 export interface NoteLog {
   id: string;
-  /** Session starts that gave the note whole, as an index line, or not at all. */
+  /** Session starts that gave the note whole, as a brief, as an index line, or not at all. */
   body: number;
+  brief: number;
   index: number;
   hidden: number;
   /** `kb show`: for a task, and as a check. */
@@ -274,7 +280,7 @@ export interface LogSummary {
   notes: NoteLog[];
 }
 
-export const emptyNoteLog = (id: string): NoteLog => ({ id, body: 0, index: 0, hidden: 0, opened: { task: 0, check: 0 }, fired: 0, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } });
+export const emptyNoteLog = (id: string): NoteLog => ({ id, body: 0, brief: 0, index: 0, hidden: 0, opened: { task: 0, check: 0 }, fired: 0, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } });
 
 /** A field of a line as the reader takes it: a later kb, or a hand edit, may have written another shape. */
 const text = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
@@ -330,6 +336,7 @@ export function summarize(events: Logged[]): LogSummary {
       case "start":
         summary.starts++;
         for (const id of texts(event.bodies)) of(id)!.body++;
+        for (const id of texts(event.briefs)) of(id)!.brief++;
         for (const id of texts(event.index)) of(id)!.index++;
         for (const id of texts(event.hidden)) of(id)!.hidden++;
         break;
@@ -700,7 +707,7 @@ export function idsWithHistory(store: Store): Set<string> {
       const note = text(event.note);
       if (note) ids.add(note);
       // A session start names its notes by the form the session got.
-      for (const form of ["bodies", "index", "hidden", "briefs"]) for (const id of texts(event[form])) ids.add(id);
+      for (const form of ["bodies", "briefs", "index", "triggerOnly", "hidden"]) for (const id of texts(event[form])) ids.add(id);
     }
   } catch {
     // a log that cannot be read leaves the ids that the roll-ups name

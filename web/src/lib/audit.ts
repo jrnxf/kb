@@ -63,22 +63,16 @@ export function choiceForKey(card: AuditCard, key: string): Choice | undefined {
 
 export const agentPick = (card: AuditCard): Pick => ({ action: card.action });
 
-/** True when the note takes a place in a session now, so taking it out frees a line for another note. */
-const placed = (note: AuditNote) => note.place !== "hidden";
-
 /**
- * The index lines the picks give back. A note that leaves gives its line to a note that reaches no
- * session, but only if it had one.
+ * The notes that the picks take out of kb. A trash takes every note on the card. So does a move:
+ * the rule then loads from the instruction file. A merge takes all but the note that stays.
  */
-export function freed(cards: AuditCard[], picks: Pick[]): number {
-  return cards.reduce((n, card, i) => {
-    const pick = picks[i]!;
-    if (pick.action === "trash") return n + [card.note, ...(card.merge ?? [])].filter(placed).length;
-    if (pick.action === "merge") return n + (card.merge ?? []).filter(placed).length;
-    // A moved rule loads from the instructions file, so its notes leave the index.
-    if (pick.action === "promote") return n + [card.note, ...(card.merge ?? [])].filter(placed).length;
-    return n;
-  }, 0);
+export function leaving(cards: AuditCard[], picks: Pick[]): AuditNote[] {
+  return cards.flatMap((card, i) => {
+    const action = picks[i]!.action;
+    if (action === "trash" || action === "promote") return [card.note, ...(card.merge ?? [])];
+    return action === "merge" ? (card.merge ?? []) : [];
+  });
 }
 
 /** The notes on a card: its note, and the notes a merge or a move takes along. */
@@ -93,8 +87,22 @@ export function changes(cards: AuditCard[], picks: Pick[]): { changed: number; t
   return { changed, total: cards.reduce((n, card) => n + notesOf(card), 0) };
 }
 
-/** Notes that still reach no session after the picks. */
-export const stillHidden = (data: AuditData, picks: Pick[]) => Math.max(0, data.index.hidden - freed(data.cards, picks));
+/**
+ * Notes that still reach no session after the picks. The limit of the index is characters, so a
+ * note that leaves makes room by the size of its line or of its brief, not by one place. A note
+ * that had no line makes none: it loads at its trigger, or it is hidden itself. The hidden lines
+ * take the room in rank order, and the first one that does not fit ends the index, as at a session
+ * start. The count is an estimate: a new title changes the size of a line. `kb budget` counts
+ * again after Apply.
+ */
+export function stillHidden(data: AuditData, picks: Pick[]): number {
+  const out = leaving(data.cards, picks);
+  const gone = new Set(out.map((note) => note.id));
+  let room = data.index.room + out.reduce((sum, note) => sum + (note.place === "index" || note.place === "brief" ? note.chars : 0), 0);
+  const waiting = data.hidden.filter((note) => !gone.has(note.id));
+  const first = waiting.findIndex((note) => (room -= note.chars) < 0);
+  return first < 0 ? 0 : waiting.length - first;
+}
 
 /** The file a promote card writes, by its name alone: CLAUDE.md. */
 export const promoteFile = (card: AuditCard) => card.promote?.file.split("/").pop() ?? "CLAUDE.md";

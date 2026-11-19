@@ -76,8 +76,8 @@ describe("SessionStart hook", () => {
       const result = runHook({ home: store.home, stdin: input(repo, source) });
       expect(result.code).toBe(0);
       expect(result.stdout).toContain("# kb: saved knowledge for github.com/acme/billing");
-      expect(result.stdout).toContain("### repo-note [gotcha]");
-      expect(result.stdout).toContain("### global-note [gotcha]");
+      expect(result.stdout).toContain("\n- repo-note [gotcha]");
+      expect(result.stdout).toContain("\n- global-note [gotcha]");
     }
     const elsewhere = runHook({ home: store.home, stdin: input(tempRepo({ remote: "git@github.com:acme/web.git" })) });
     expect(elsewhere.stdout).not.toContain("repo-note");
@@ -88,29 +88,138 @@ describe("SessionStart hook", () => {
     const store = tempStore();
     const scope = "github.com/acme/billing";
     const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
-    // One body fits, the index has one line and one global note may load. So a repo note and a
-    // global note are over the index budget, and one global note is over the global cap.
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 1, contextChars: 1100, globalIndexLines: 1 } }));
-    for (const id of ["r-1", "r-2", "r-3"]) putNote(store, { id, scope, body: "x".repeat(400) });
-    putNote(store, { id: "g-new", body: "x".repeat(400), last_verified: "2026-02-01T00:00:00Z" });
-    putNote(store, { id: "g-old", body: "x".repeat(400) });
+    putNote(store, { id: "r-work", kind: "open-work", scope, body: "State: half done.\nNext: write the pager." });
+    for (const id of ["r-1", "r-2"]) putNote(store, { id, scope, body: "x".repeat(400) });
+    putNote(store, { id: "g-plain", body: "x".repeat(400) });
+    putNote(store, { id: "g-cmd", triggers: ["cmd: zorp --wipe"] });
     const out = runHook({ home: store.home, stdin: input(repo, "resume") }).stdout;
     const events = logged(store) as any[];
     expect(events).toHaveLength(1);
     const { chars, ...start } = events[0];
-    expect(start).toEqual({ ev: "start", session: "abc", scope, source: "resume", bodies: ["r-1"], index: ["r-2"], hidden: ["r-3", "g-new", "g-old"] });
+    expect(start).toEqual({ ev: "start", session: "abc", scope, source: "resume", holdback: false, briefs: ["r-work"], bodies: [], index: ["r-1", "r-2", "g-plain"], triggerOnly: ["g-cmd"], hidden: [] });
     // The parts are measured where the text is built. They add up to what the session got.
     const at = (text: string) => out.indexOf(text);
     expect(chars.total).toBe(out.length);
-    expect(chars.index).toBe(at("\n\n## Notes") - at("\n\n## Index"));
-    expect(chars.bodies).toBe(at("1 note is in the index only") - at("\n\n## Notes") - 1);
-    expect(chars.fixed).toBe(chars.total - chars.index - chars.bodies);
-    expect(out).toContain("The kb store is over its index budget here: 2 notes are hidden");
+    expect(chars.briefs).toBe(at("\n\n## Index") - at("\n\n## Open work"));
+    expect(chars.index).toBe(at("\n\n1 more global note loads only at its trigger") - at("\n\n## Index"));
+    expect(chars.bodies).toBe(0);
+    expect(chars.fixed).toBe(chars.total - chars.briefs - chars.index);
+    expect(out).not.toContain("x".repeat(10));
+
+    // A note whose line is over the character budget is in no session, and the log names it.
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 500 } }));
+    for (let i = 0; i < 30; i++) putNote(store, { id: `g-more-${String(i).padStart(2, "0")}` });
+    const over = runHook({ home: store.home, stdin: input(repo, "resume") }).stdout;
+    const cut = (logged(store) as any[])[1];
+    expect(cut.hidden.length).toBeGreaterThan(0);
+    expect(cut.index.length + cut.hidden.length).toBe(33);
+    expect(cut.hidden.at(-1)).toBe("g-plain");
+    // The notice counts the hidden notes of the repo apart from the global ones.
+    expect(over).toContain(`The kb store is over its index budget here: 1 note of this repo and ${cut.hidden.length - 1} global notes are hidden from the index.`);
 
     // A start outside any repo has the scope "global". A store with no note still logs the start.
     const empty = tempStore();
     runHook({ home: empty.home, stdin: JSON.stringify({ session_id: "s9", cwd: plain(), source: "clear" }) });
-    expect(logged(empty)).toEqual([{ ev: "start", session: "s9", scope: "global", source: "clear", bodies: [], index: [], hidden: [], chars: { fixed: SAVING.length, index: 0, bodies: 0, total: SAVING.length } }]);
+    expect(logged(empty)).toEqual([{ ev: "start", session: "s9", scope: "global", source: "clear", holdback: false, briefs: [], bodies: [], index: [], triggerOnly: [], hidden: [], chars: { fixed: SAVING.length, briefs: 0, index: 0, bodies: 0, total: SAVING.length } }]);
+  });
+
+  test("the notice for hidden notes says whose notes they are, and which audit makes room", () => {
+    const scope = "github.com/acme/billing";
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    const pad = (i: number) => String(i).padStart(2, "0");
+    const seeded = (repoNotes: number, globalNotes: number) => {
+      const store = tempStore();
+      writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 1000 }, holdback: 0 }));
+      for (let i = 0; i < repoNotes; i++) putNote(store, { id: `r-${pad(i)}`, scope });
+      for (let i = 0; i < globalNotes; i++) putNote(store, { id: `g-${pad(i)}`, kind: "decision" });
+      return store;
+    };
+    const start = (store: ReturnType<typeof tempStore>, cwd: string) => {
+      const out = runHook({ home: store.home, stdin: input(cwd) }).stdout;
+      const hidden: string[] = (logged(store) as any[]).at(-1).hidden;
+      return { out, repo: hidden.filter((id) => id.startsWith("r-")).length, global: hidden.filter((id) => id.startsWith("g-")).length };
+    };
+    const TELL = "Tell the user in one line, in your first reply, that";
+
+    // The notes of the repo do not fit: its own audit makes room. The global notes behind them are counted apart.
+    const own = start(seeded(60, 3), repo);
+    expect(own.repo).toBeGreaterThan(0);
+    expect(own.global).toBe(3);
+    expect(own.out).toContain(`The kb store is over its index budget here: ${own.repo} notes of this repo and 3 global notes are hidden from the index. ${TELL} /kb:audit fixes this.\n`);
+
+    // The global notes fit outside a repo, and the notes of this repo take their room: still the audit of the repo.
+    const pushed = start(seeded(14, 20), repo);
+    expect(pushed).toMatchObject({ repo: 0 });
+    expect(pushed.global).toBeGreaterThan(0);
+    expect(pushed.out).toContain(`The kb store is over its index budget here: ${pushed.global} global notes are hidden from the index. ${TELL} /kb:audit fixes this.\n`);
+
+    // The global notes do not fit on their own. An audit of the repo covers repo notes only, so the notice names the global audit.
+    const globals = seeded(14, 60);
+    const blamed = start(globals, repo);
+    expect(blamed).toMatchObject({ repo: 0 });
+    expect(blamed.global).toBeGreaterThan(20);
+    expect(blamed.out).toContain(`The global kb notes do not fit the index: ${blamed.global} global notes are hidden here, and no note of this repo is. ${TELL} /kb:audit outside any repo, the global audit, fixes this. An audit of this repo does not.\n`);
+    expect(blamed.out).not.toContain("over its index budget");
+    // Outside any repo the same store asks for the audit there, which is the global one.
+    const outside = start(globals, plain());
+    expect(outside.out).toContain(`The kb store is over its index budget here: ${outside.global} global notes are hidden from the index. ${TELL} /kb:audit fixes this.\n`);
+    for (const each of [own, pushed, blamed, outside]) expect(each.out.match(/hidden/g)).toHaveLength(1);
+  });
+
+  // HOLDBACK: this test goes with the arm.
+  test("a held-back start gives no notice for the notes that only its old limits hide", () => {
+    const store = tempStore();
+    const scope = "github.com/acme/billing";
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    putNote(store, { id: "r-trap", scope });
+    for (let i = 0; i < 25; i++) putNote(store, { id: `g-${String(i).padStart(2, "0")}` });
+    const held = runHook({ home: store.home, stdin: JSON.stringify({ session_id: "held-3", cwd: repo, hook_event_name: "SessionStart", source: "startup" }) }).stdout;
+    // The old limit of 20 global notes leaves 5 out, and the log says so. No audit changes that limit.
+    expect((logged(store) as any[]).at(-1)).toMatchObject({ holdback: true, hidden: ["g-20", "g-21", "g-22", "g-23", "g-24"] });
+    expect(held).toContain("5 global notes of lower rank are left out here.");
+    expect(held).not.toContain("/kb:audit");
+    // Notes that the new policy hides too are a reason for the notice, with the count of the new policy.
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 700 } }));
+    const free = runHook({ home: store.home, stdin: JSON.stringify({ session_id: "held-0", cwd: repo, hook_event_name: "SessionStart", source: "startup" }) }).stdout;
+    const notice = free.split("\n").find((line) => line.includes("/kb:audit"))!;
+    expect(notice).toStartWith("The global kb notes do not fit the index: ");
+    expect((logged(store) as any[]).at(-1)).toMatchObject({ holdback: false });
+    const again = runHook({ home: store.home, stdin: JSON.stringify({ session_id: "held-3", cwd: repo, hook_event_name: "SessionStart", source: "startup" }) }).stdout;
+    expect((logged(store) as any[]).at(-1)).toMatchObject({ holdback: true });
+    expect(again.split("\n")).toContain(notice);
+  });
+
+  // HOLDBACK: this test goes with the arm.
+  test("1 session in 10 keeps the old policy for bodies: the arm is the same at every start of a session, and the log has the flag", () => {
+    const store = tempStore();
+    const scope = "github.com/acme/billing";
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    putNote(store, { id: "r-work", kind: "open-work", scope, body: "State: half done.\nNext: write the pager." });
+    putNote(store, { id: "r-trap", scope, body: "The body of the trap." });
+    const start = (session: string, source: string) => runHook({ home: store.home, stdin: JSON.stringify({ session_id: session, cwd: repo, hook_event_name: "SessionStart", source }) }).stdout;
+    // "held-3" is in the tenth that the hash holds back, and "held-0" is not.
+    for (const source of ["startup", "resume", "compact", "clear"]) {
+      const held = start("held-3", source);
+      expect(held).toContain("## Notes (2 of 2, by rank)\n### r-work [open-work]");
+      expect(held).toContain("State: half done.\nNext: write the pager.\n\n### r-trap [gotcha] Title of r-trap\n");
+      expect(held).toContain("The body of the trap.");
+      expect(held).not.toContain("## Open work");
+      const free = start("held-0", source);
+      expect(free).toContain("## Open work\n### r-work [open-work] Title of r-work\nNext: write the pager.\n");
+      expect(free).not.toContain("The body of the trap.");
+    }
+    const events = logged(store) as any[];
+    expect(events).toHaveLength(8);
+    for (const event of events) {
+      const held = event.session === "held-3";
+      expect(event).toMatchObject({ ev: "start", holdback: held, briefs: held ? [] : ["r-work"], bodies: held ? ["r-work", "r-trap"] : [], index: held ? [] : ["r-trap"] });
+      expect(event.chars.bodies > 0).toBe(held);
+      expect(event.chars.fixed + event.chars.briefs + event.chars.index + event.chars.bodies).toBe(event.chars.total);
+    }
+    // A share of 0 in the config turns the arm off.
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ holdback: 0 }));
+    expect(start("held-3", "startup")).toContain("## Open work");
+    expect((logged(store) as any[]).at(-1)).toMatchObject({ session: "held-3", holdback: false, bodies: [] });
   });
 
   test("a log that cannot be written changes nothing in the output", () => {
@@ -123,13 +232,14 @@ describe("SessionStart hook", () => {
     writeFileSync(join(store.home, ".state", "log"), "a file where the folder should be");
     const second = runHook({ home: store.home, stdin: input(repo) });
     expect(second).toMatchObject({ code: 0, stdout: first.stdout, stderr: "" });
-    expect(first.stdout).toContain("### repo-note [gotcha]");
+    expect(first.stdout).toContain("\n- repo-note [gotcha]");
   });
 
   test("stays under the 10,000 character limit at the largest budget, with every notice", () => {
     const store = tempStore();
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 1, contextChars: 20000 } }));
-    for (let i = 0; i < 40; i++) putNote(store, { id: `big-${i}`, body: "x".repeat(400) });
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 20000 } }));
+    // More index lines than the largest budget takes, so the context is as long as it can get.
+    for (let i = 0; i < 300; i++) putNote(store, { id: `big-${i}`, title: `A fact with a title that takes some room in the index, number ${i}` });
     const repo = tempRepo();
     const END = join(ROOT, "hooks", "session-end.sh");
     const dir = tempDir("kb-transcripts-");
@@ -142,6 +252,8 @@ describe("SessionStart hook", () => {
     }
     const out = runHook({ home: store.home, stdin: input(repo), env: { CLAUDE_CONFIG_DIR: tempDir("kb-claude-") } }).stdout;
     expect(out).toContain("20 earlier sessions here ended with no /kb:checkpoint");
+    expect(out).toContain("The global kb notes do not fit the index");
+    expect(out.length).toBeGreaterThan(8800);
     expect(out.length).toBeLessThan(10000);
   });
 
@@ -340,7 +452,7 @@ describe("session notices", () => {
     expect(runHook({ home: store.home, stdin: startInput(other, "clear") }).stdout).not.toContain(NOTICE);
     expect(unsaved(store, other)).toEqual([]);
     const first = runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout;
-    expect(first).toContain("### g [gotcha]");
+    expect(first).toContain("\n- g [gotcha]");
     expect(first).toContain(NOTICE);
     const worth = () => logged(store).filter((event) => event.ev === "unsaved");
     expect(worth()).toEqual([{ ev: "unsaved", session: "lost", scope: "github.com/acme/billing", reason: "clear", prompts: 3, failed: 0 }]);
@@ -499,7 +611,7 @@ describe("session notices", () => {
       expect(unsaved(store, repo)).toEqual(["huge"]);
 
       const hook = runHook({ home: store.home, stdin: startInput(repo, "startup") });
-      expect(hook.stdout).toContain("### g [gotcha]");
+      expect(hook.stdout).toContain("\n- g [gotcha]");
       expect(hook.stdout).toContain(QUIET);
       expect(hook.ms).toBeLessThan(1500);
     });
@@ -562,7 +674,7 @@ describe("session notices", () => {
         expect(unsavedNotice(store, repo, repo)).toBe(QUIET);
         const out = runHook({ home: store.home, stdin: startInput(repo, "startup") });
         expect(out).toMatchObject({ code: 0, stderr: "" });
-        expect(out.stdout).toContain("### g [gotcha]");
+        expect(out.stdout).toContain("\n- g [gotcha]");
         // The day cannot be recorded, so the line never asks the agent to speak.
         expect(out.stdout).toContain(QUIET);
         expect(unsavedSession(store, "lost")?.size).toBeUndefined();
@@ -1300,9 +1412,9 @@ describe("session notices", () => {
     for (const source of ["startup", "resume", "clear", "compact", "fork"]) {
       // Off: the fixed text is the header, the format line and the save rule.
       expect(start(source)).not.toContain(MEMORY_RULE);
-      expect(start(source)).toContain(`${SAVE_RULE}\n\n## Notes`);
+      expect(start(source)).toContain(`${SAVE_RULE}\n\n## Index`);
       // On: the rule is right under the save rule, also after a compaction.
-      expect(start(source, { CLAUDE_CONFIG_DIR: on })).toContain(`${SAVE_RULE}\n${MEMORY_RULE}\n\n## Notes`);
+      expect(start(source, { CLAUDE_CONFIG_DIR: on })).toContain(`${SAVE_RULE}\n${MEMORY_RULE}\n\n## Index`);
     }
     expect(start("compact", { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "0" })).toContain(MEMORY_RULE);
     expect(start("compact", { CLAUDE_CONFIG_DIR: on, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" })).not.toContain(MEMORY_RULE);
@@ -1318,13 +1430,16 @@ describe("session notices", () => {
 
   test("a store over its index budget gives one line, and a store within it gives none", () => {
     const store = tempStore();
-    const repo = tempRepo();
-    // Long bodies: one fits the small budget below, so the other three need an index line each.
-    for (let i = 0; i < 4; i++) putNote(store, { id: `n-${i}`, body: "x".repeat(400) });
+    const repo = plain();
+    for (let i = 0; i < 12; i++) putNote(store, { id: `n-${String(i).padStart(2, "0")}`, title: "A fact with a title that takes some room in the index" });
     const line = "The kb store is over its index budget here";
-    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain(line);
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 2, contextChars: 1100 } }));
-    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(`${line}: 1 note is hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain("/kb:audit");
+    // A small budget: the last lines do not fit, so those notes reach no session.
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 1000 } }));
+    const hidden = kb(store, ["context", "--json"], { cwd: repo }).json.hidden.length;
+    expect(hidden).toBeGreaterThan(1);
+    expect(hidden).toBeLessThan(12);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(`${line}: ${hidden} global notes are hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
   });
 
   test("the state directory stays out of git, also in a store made by an older version", () => {

@@ -32,6 +32,13 @@ export class KbError extends Error {}
 /** A body up to this length loads whole at a trigger. A longer one is cut there, and `kb add` warns about it. */
 export const BODY_CHARS = 700;
 
+/** The day of a time in the local zone of this machine, as a session reads it: 2026-03-02. */
+export function localDate(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 const SCOPE_RE = /^[a-z0-9._-]+(\/[a-z0-9._~-]+)*$/;
 
 export function isValidScope(scope: string): boolean {
