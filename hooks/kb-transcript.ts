@@ -70,7 +70,8 @@ function write(store: Store, session: string): void {
     // A mask knows the common shapes only. The file is private, and it goes when the session is
     // marked or forgotten, or after 7 days.
     const file = writeRecoverFile(store, session, `${head}\n${conversation.text}`);
-    console.log(JSON.stringify({ file, prompts: conversation.prompts, chars: conversation.chars, failed: conversation.failed }));
+    // `ended` is the end that this read is of. `kb checkpointed --ended` marks the session only while that is its last end.
+    console.log(JSON.stringify({ file, prompts: conversation.prompts, chars: conversation.chars, failed: conversation.failed, ended: mark.ended }));
   } catch (error) {
     // No path and no stack: the caller must not go and read the raw transcript, which holds tool output.
     fail(`the conversation of session ${session} cannot be read now (${(error as { code?: string })?.code ?? "error"}). Its mark stays.`);

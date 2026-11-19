@@ -7,7 +7,7 @@
 // `kb-transcript <session id>` (hooks/kb-transcript.ts) writes the result for /kb:recover.
 
 import { readFileSync } from "node:fs";
-import { maskSecrets, maskToolText } from "../cli/secrets.ts";
+import { maskKeys, maskSecrets, maskToolText } from "../cli/secrets.ts";
 
 /** How much a session holds. A later session start measures it once, and the mark keeps it. */
 export interface Size {
@@ -15,7 +15,10 @@ export interface Size {
   prompts: number;
   /** The characters the user and the agent said. Headings and the name of a slash command do not count. */
   chars: number;
-  /** The tool calls that failed. A call the user refused or stopped is not one: no tool gave an error. */
+  /**
+   * The assistant messages with a tool call that failed. Parallel calls are one message, so they
+   * count once. A call that the user refused or stopped, and a call that did not run, is not one.
+   */
   failed: number;
 }
 
@@ -31,7 +34,7 @@ type Line = {
   isSidechain?: boolean;
   isCompactSummary?: boolean;
   toolUseResult?: unknown;
-  message?: { content?: string | Block[] };
+  message?: { id?: string; content?: string | Block[] };
 };
 
 // The harness adds these to user turns. They are not the user's words. A task notification is
@@ -58,13 +61,17 @@ const REFUSED = /^The user doesn't want to (?:proceed with this tool use|take th
 // The result of a call that the user stopped while it ran: the stop itself, or output that ends with it.
 const STOPPED = /^\[Request interrupted by user[^\]]*\]|\[Request interrupted by user[^\]]*\]$/;
 // The fixed text around the reason a user types when they refuse a tool call.
+// The fixed text that starts the result of a call that did not run: a parallel call that the
+// harness cancelled when another one failed (two wordings), a call that it dropped, and a write
+// to a file that the agent must read first. No tool gave an error, so there is no lesson in it.
+const NOT_RUN = /^(?:Cancelled: |Sibling tool call errored|(?:Error: )?Streaming fallback - tool execution discarded|File has not been read yet|File has been modified since read)/;
 const SAID = "To tell you how to proceed, the user said:";
 const AFTER_REASON = "\n\nNote: The user's next message may contain";
 
 /** The longest call, error or next call that gets through. */
 export const SPAN_LIMIT = 300;
-/** No mask reads more of a tool result than this. The cut is at a space, so it splits no token. */
-const READ_LIMIT = 20_000;
+/** No mask of a line reads more of a tool result than this. */
+export const READ_LIMIT = 20_000;
 /** The fields of a tool input that say what the call did. Never the new text of a file. */
 const INPUT_KEYS = ["command", "file_path", "notebook_path", "pattern", "path", "url", "query"];
 /** The tools that write a file, and the field that names the file. Their call is the path, and nothing more. */
@@ -77,15 +84,20 @@ export const OUTPUT_CLOSE = "</tool-output>";
 const LEFT_OUT = "(text of the file left out)";
 
 const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+/** A text as one line. The mask for a private key reads lines, so it comes before they are joined. */
+const oneLine = (text: string) => flat(maskKeys(text));
+
+/** The first `READ_LIMIT` characters. The cut is at a space, so it splits no token. A text with no space there is cut at the limit. */
+function head(text: string): string {
+  if (text.length <= READ_LIMIT) return text;
+  const cut = text.slice(0, READ_LIMIT);
+  const space = cut.search(/\s\S*$/);
+  return space > 0 ? cut.slice(0, space) : cut;
+}
 
 /** One line of at most `SPAN_LIMIT` characters. The mask comes before the cut, so no half of a secret is left. */
 function short(text: string): string {
-  let head = text;
-  if (head.length > READ_LIMIT) {
-    head = head.slice(0, READ_LIMIT);
-    head = head.slice(0, Math.max(0, head.search(/\s\S*$/)));
-  }
-  const line = maskToolText(flat(head));
+  const line = maskToolText(oneLine(head(text)));
   return line.length > SPAN_LIMIT ? `${line.slice(0, SPAN_LIMIT)}...` : line;
 }
 
@@ -126,7 +138,8 @@ function fileTexts(input: unknown, pathKey: string): string[] {
   const found: string[] = [];
   const walk = (value: unknown, key?: string) => {
     if (typeof value === "string") {
-      if (key !== pathKey && flat(value).length >= MIN_HIDDEN) found.push(flat(value));
+      // As the error is read: a key in the text of the file is masked in both.
+      if (key !== pathKey && oneLine(value).length >= MIN_HIDDEN) found.push(oneLine(value));
     } else if (Array.isArray(value)) for (const each of value) walk(each);
     else if (value && typeof value === "object") for (const [name, each] of Object.entries(value)) walk(each, name);
   };
@@ -151,18 +164,33 @@ const refused = (block: Block) => block.is_error === true && REFUSED.test(result
 const stoppedByUser = (block: Block) => refused(block) || (block.is_error === true && STOPPED.test(resultText(block)));
 
 /** A tool call that ran and gave an error. */
-const failedCall = (block: Block) => block?.type === "tool_result" && block.is_error === true && !stoppedByUser(block);
+const failedCall = (block: Block) => block?.type === "tool_result" && block.is_error === true && !stoppedByUser(block) && !NOT_RUN.test(resultText(block));
+
+const TAG = /<\/?tool-output>/gi;
+
+/**
+ * A text with no open or close mark of the block in it, in any case. Taking a mark out can join
+ * the text around it to a new one (`<</tool-output>/tool-output>`), so this goes on until none is left.
+ */
+function unmarked(text: string): string {
+  let out = text;
+  for (let before = ""; before !== out; ) {
+    before = out;
+    out = out.replace(TAG, "");
+  }
+  return out;
+}
 
 /**
  * The error of a failed call as a block of one line. The error of a file tool can repeat the text
- * it was given for the file, which goes. A tag that would end the block goes too, so what a tool
- * wrote cannot stand outside of it.
+ * it was given for the file, which goes. A mark that would end the block goes too, so what a tool
+ * wrote cannot stand outside of it. The masks and the cut come after that: they add no mark, and
+ * a secret that a mark stood in is whole when they read it.
  */
 function errorOf(block: Block, call: Call | undefined): string {
-  let text = flat(resultText(block));
+  let text = oneLine(resultText(block));
   for (const hidden of call?.hide ?? []) text = text.replaceAll(hidden, LEFT_OUT);
-  text = text.replace(/<\/?tool-output>/gi, "");
-  return `${OUTPUT_OPEN}\n${short(text) || "(no error text)"}\n${OUTPUT_CLOSE}`;
+  return `${OUTPUT_OPEN}\n${short(unmarked(head(text))) || "(no error text)"}\n${OUTPUT_CLOSE}`;
 }
 
 /** The reason the user typed when they refused a tool call, or "". */
@@ -228,9 +256,13 @@ export function readConversation(path: string, measure = false): Conversation {
   const asked = new Set<string>();
   /** Each tool call that waits for its result, by its id, so a result that failed can name its call. */
   const calls = new Map<string, Call>();
+  /** The assistant message of each tool call that waits for its result. Parallel calls share one. */
+  const messages = new Map<string, string>();
+  /** The assistant messages with a failed call. Three failures of one message are one for the floor. */
+  const failed = new Set<string>();
   let prompts = 0;
   let chars = 0;
-  let failed = 0;
+  let lines = 0;
   /** A call failed, and the next call is not written yet. */
   let awaiting = false;
   /** The call that was written last as the next call. When it fails too, its error goes under it. */
@@ -257,6 +289,7 @@ export function readConversation(path: string, measure = false): Conversation {
     }
     // A line can parse to null or to a bare value.
     if (!line || typeof line !== "object") continue;
+    lines++;
     // A compaction summary repeats turns the file still holds. A sidechain is a subagent's own work.
     if ((line.type !== "user" && line.type !== "assistant") || line.isMeta || line.isSidechain || line.isCompactSummary) continue;
     if (line.type === "assistant") {
@@ -266,6 +299,8 @@ export function readConversation(path: string, measure = false): Conversation {
       for (const block of Array.isArray(content) ? content : []) {
         if (block?.type !== "tool_use" || !block.id) continue;
         if (block.name === "AskUserQuestion") asked.add(block.id);
+        // Claude Code writes each call of a message as a line of its own, with the id of the message.
+        messages.set(block.id, line.message?.id ?? `line ${lines}`);
         if (measure) continue;
         const call = callOf(block);
         calls.set(block.id, call);
@@ -283,8 +318,10 @@ export function readConversation(path: string, measure = false): Conversation {
       const call = calls.get(id);
       // The call has its result now. The text of a file that it holds is not kept to the end of the read.
       calls.delete(id);
+      const message = messages.get(id) ?? `result ${lines} ${id}`;
+      messages.delete(id);
       if (!failedCall(block) || recovering) continue;
-      failed++;
+      failed.add(message);
       if (measure) continue;
       const error = errorOf(block, call);
       add("agent", id && id === shown ? `(it failed too)\n${error}` : `(a tool call failed)\ncall: ${call?.text ?? "(not in the transcript)"}\n${error}`, 0);
@@ -312,7 +349,7 @@ export function readConversation(path: string, measure = false): Conversation {
   }
   // The user and the agent can have typed a secret. The file goes to a subagent, so each line is masked.
   const text = turns.map((turn) => `## ${turn.role}\n\n${maskSecrets(turn.text)}\n`).join("\n");
-  return { prompts, chars, failed, text };
+  return { prompts, chars, failed: failed.size, text };
 }
 
 /**

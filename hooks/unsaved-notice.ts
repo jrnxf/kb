@@ -10,7 +10,8 @@ import { worthRecovering } from "./transcript.ts";
  * A session under this floor has nothing to recover. The reader counts no slash command without
  * arguments and no /kb:recover turn, so a session that only cleared, or only recovered another
  * session, is under it. An autonomous run has one prompt and learns from its errors, so three
- * failed tool calls are enough with any number of prompts.
+ * failed tool calls are enough with any number of prompts. Parallel calls that fail are one, and
+ * a call that did not run is none: one error must not make a short run worth a recovery.
  */
 const MIN_PROMPTS = 2;
 const MIN_CHARS = 3000;
@@ -36,7 +37,7 @@ const ELSEWHERE = "kb: sessions in other directories";
 function worthIt(store: Store, entry: UnsavedSession, inTime: () => boolean): boolean | null {
   // Measured once, then kept in the mark. A mark that an older kb measured has no line in the log yet.
   if (entry.size) {
-    if (worth(entry.size) && !entry.logged) recordWorth(store, entry.session);
+    if (worth(entry.size) && !entry.logged) recordWorth(store, entry.session, entry.size);
     return worth(entry.size);
   }
   let bytes: number;
