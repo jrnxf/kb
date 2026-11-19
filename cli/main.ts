@@ -66,7 +66,7 @@ const USAGE = `kb - a personal knowledge store for coding agents
 
 Every command accepts --json. The store is ~/.kb, or KB_HOME.
 A read, a write and a verdict each add one line to a log on this machine. The line names the
-session: --session <id>, or KB_SESSION.
+session: --session <id>, or KB_SESSION, or the id that Claude Code sets for the command.
 
 kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence"?, "supersedes"?}
   scope: "repo" (the default inside a git repo), "global", or the id of a repo that has notes

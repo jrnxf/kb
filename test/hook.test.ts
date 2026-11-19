@@ -159,11 +159,15 @@ describe("plugin files", () => {
     expect(entry.hooks[0].command).toBe('"${CLAUDE_PLUGIN_ROOT}"/hooks/session-start.sh');
   });
 
-  test("the CLI source reads no CLAUDE_ variable", async () => {
+  test("the CLI source reads no CLAUDE_ variable, but for the session id that the event log takes", async () => {
     const glob = new Bun.Glob("cli/**/*.ts");
     for await (const file of glob.scan(ROOT)) {
-      expect(readFileSync(join(ROOT, file), "utf8"), file).not.toMatch(/CLAUDE_/);
+      const source = readFileSync(join(ROOT, file), "utf8");
+      // One name, in one file: an agent runs `kb show` with no flag, and the log must name its session.
+      const allowed = file.endsWith("log.ts") ? source.replaceAll("CLAUDE_CODE_SESSION_ID", "") : source;
+      expect(allowed, file).not.toMatch(/CLAUDE_/);
     }
+    expect(readFileSync(join(ROOT, "cli", "log.ts"), "utf8").split("CLAUDE_CODE_SESSION_ID")).toHaveLength(2);
   });
 
   test("bin/kb runs from another directory", () => {

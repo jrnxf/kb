@@ -161,8 +161,8 @@ verdicts. `--since <days>` takes the last days only. `--session <id>` prints the
 session in time order, and the notes that session got and has not judged yet.
 
 Every command accepts `--json`. The CLI knows nothing about Claude Code: only `hooks/` and `skills/` do.
-A command names its session in the log with `--session <id>`, or else `KB_SESSION`. The launcher
-`bin/kb` sets `KB_SESSION` from the session id of Claude Code.
+There is one exception. A command names its session in the log with `--session <id>`, or else
+`KB_SESSION`, or else `CLAUDE_CODE_SESSION_ID`, which Claude Code sets for each command an agent runs.
 
 ## Install
 

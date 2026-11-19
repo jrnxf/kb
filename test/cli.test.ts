@@ -179,14 +179,17 @@ describe("the event log from the CLI", () => {
     ]);
   });
 
-  test("the launcher passes the session id of the harness on as KB_SESSION, and an own KB_SESSION wins", () => {
+  test("the session is the --session flag, else KB_SESSION, else the id that Claude Code sets for the command", () => {
     const store = tempStore();
     putNote(store, { id: "a" });
-    const run = (env: Record<string, string>) => Bun.spawnSync([join(ROOT, "bin", "kb"), "show", "a"], { cwd: tempDir(), env: { ...process.env, KB_HOME: store.home, ...env }, stdout: "pipe", stderr: "pipe" });
-    expect(run({ CLAUDE_CODE_SESSION_ID: "from-harness" }).exitCode).toBe(0);
-    run({ CLAUDE_CODE_SESSION_ID: "from-harness", KB_SESSION: "own" });
-    run({});
-    expect(logged(store).map((e) => e.session)).toEqual(["from-harness", "own", undefined]);
+    const harness = { CLAUDE_CODE_SESSION_ID: "from-harness" };
+    kb(store, ["show", "a"], { env: harness });
+    kb(store, ["show", "a"], { env: { ...harness, KB_SESSION: "own" } });
+    kb(store, ["show", "a", "--session", "flag"], { env: { ...harness, KB_SESSION: "own" } });
+    kb(store, ["show", "a"]);
+    // The launcher that skills call passes the environment on as it is.
+    Bun.spawnSync([join(ROOT, "bin", "kb"), "show", "a"], { cwd: tempDir(), env: { ...process.env, KB_HOME: store.home, ...harness }, stdout: "pipe", stderr: "pipe" });
+    expect(logged(store).map((e) => e.session)).toEqual(["from-harness", "own", "flag", undefined, "from-harness"]);
   });
 
   test("verdict records what a note did for the session, and use is the older name of verdict helped", () => {

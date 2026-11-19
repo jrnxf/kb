@@ -79,11 +79,13 @@ function logId(value: unknown): string | undefined {
 }
 
 /**
- * The session a command belongs to: the --session flag, else KB_SESSION. The launcher in bin/ sets
- * KB_SESSION from the harness, so the CLI needs no harness name.
+ * The session a command belongs to: the --session flag, else KB_SESSION, else the id that Claude
+ * Code gives each command of a session. That name is the one thing the CLI knows of a harness. An
+ * agent runs `kb show` with no flag, often through a shell function and not the launcher, and an
+ * event with no session tells the audit little. Every id of a session is resolved here.
  */
 export function sessionOf(flag: unknown, env: Record<string, string | undefined> = process.env): string | undefined {
-  return logId(flag) ?? logId(env.KB_SESSION);
+  return logId(flag) ?? logId(env.KB_SESSION) ?? logId(env.CLAUDE_CODE_SESSION_ID);
 }
 
 /** Who a hook input names: the session, and the subagent when a subagent did it. */

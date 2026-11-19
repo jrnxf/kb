@@ -70,9 +70,11 @@ describe("the event log", () => {
     ]);
   });
 
-  test("the session id is the --session flag, else KB_SESSION, and an id that is not a short text is no id", () => {
-    expect(sessionOf("flag", { KB_SESSION: "env" })).toBe("flag");
-    expect(sessionOf(undefined, { KB_SESSION: "env" })).toBe("env");
+  test("the session id is the --session flag, else KB_SESSION, else the id of the harness, and an id that is not a short text is no id", () => {
+    const harness = { CLAUDE_CODE_SESSION_ID: "harness" };
+    expect(sessionOf("flag", { KB_SESSION: "env", ...harness })).toBe("flag");
+    expect(sessionOf(undefined, { KB_SESSION: "env", ...harness })).toBe("env");
+    expect(sessionOf(undefined, harness)).toBe("harness");
     expect(sessionOf(undefined, {})).toBeUndefined();
     // A flag with no value parses as true.
     expect(sessionOf(true, { KB_SESSION: "env" })).toBe("env");
