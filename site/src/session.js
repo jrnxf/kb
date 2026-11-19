@@ -1,5 +1,5 @@
 // Mirrors cli/context.ts buildContext: rank, index first, then whole bodies in rank order.
-const SENT = 'These notes come from earlier sessions. Each is below once: with its body, or as an index line. An index line is the id, then after "..." the words of the title that the id cut.';
+const SENT = 'Each note is below once. An index line is the id, then "..." and the rest of the title.';
 function rankNotes(list, D) {
   const desc = (a, b) => (b ?? "").localeCompare(a ?? "");
   return [...list].sort((a, b) => D.kinds.indexOf(a.kind) - D.kinds.indexOf(b.kind) || Number(a.scope === "global") - Number(b.scope === "global") || desc(a.last_used, b.last_used) || desc(a.verified, b.verified) || a.id.localeCompare(b.id));

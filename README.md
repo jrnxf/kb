@@ -23,7 +23,8 @@ highest.
   An index line is the id of the note, which is its title
   in short form, and after `...` the words of the title that the id cut. So a title that states
   the rule in full reaches every session, also when the body does not. It runs at startup,
-  resume, `/clear`, compaction and fork.
+  resume, `/clear`, compaction and fork. With auto memory off, the fixed text is three lines:
+  the scope, one line on how to read the notes, and the save rule.
 - **Notes load by path.** When the agent reads a file, a hook names the repo notes whose anchors
   name that file or a folder above it: the id, the kind and the title, at most five at a time. So
   a note reaches the agent when it works on the file, also when the note has no place in the

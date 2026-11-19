@@ -33,6 +33,13 @@ export const SAVE_RULE =
   "When the user states a rule, a preference or a correction, write it to an instruction file in that turn with /kb:note, not to kb. Save what you learn (a gotcha, a decision, a how-to, open work) with `kb add` (`kb help` shows the JSON). Run `kb search` first, so you update a note instead of adding a twin.";
 
 /**
+ * How to read the notes, in one line. It is fixed text that every session pays for, so it says
+ * only what the text below cannot show: a note is never there twice, and an id is a title that was
+ * cut, with the words it lost after "...".
+ */
+export const FORMAT_LINE = 'Each note is below once. An index line is the id, then "..." and the rest of the title.';
+
+/**
  * Characters a session may get. The save rule is fixed text, so it comes on top of the notes
  * budget: a store tuned for N bodies still shows N. The hard cap holds for the whole text.
  */
@@ -152,7 +159,7 @@ export function contextFor(store: Store, scope: string | null, root: string | nu
   const listedFor = (bodyCount: number, lines: number) => ranked.slice(bodyCount, bodyCount + lines);
 
   const render = (listed: StoredNote[], bodies: StoredNote[]): string => {
-    const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, "These notes come from earlier sessions. Each is below once: with its body, or as an index line. An index line is the id, then after \"...\" the words of the title that the id cut.", SAVE_RULE];
+    const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, FORMAT_LINE, SAVE_RULE];
     if (syncError) lines.push(`kb sync did not finish: ${syncError} \`kb sync\` shows the detail.`);
     // A note whose file or symbol is gone may be wrong now. The session checks it before it acts on it.
     const gone = goneIn([...bodies, ...listed]);

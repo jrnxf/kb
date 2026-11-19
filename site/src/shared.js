@@ -18,7 +18,7 @@ const TERM = [
   ["c-dim", "SessionStart hook ran: kb context"],
   ["", " "],
   ["c-h", "# kb: saved knowledge for github.com/acme/shop"],
-  ["c-dim", "These notes come from earlier sessions. Each is below once: with its body, or as an index line."],
+  ["c-dim", 'Each note is below once. An index line is the id, then "..." and the rest of the title.'],
   ["c-dim", "A stated rule goes to an instruction file, not to kb. Save what you learn with `kb add`."],
   ["", " "],
   ["c-h", "## Index"],
