@@ -21,8 +21,9 @@ Sweep the whole session. Candidates:
 - **rule** - a rule the user stated or corrected you on. It goes to an instruction file, not to kb: see "Write a rule" below. Skip it when this session wrote it there already.
 - **how-to** - a non-obvious procedure that worked.
 - **open-work** - unfinished work. Write enough that a fresh session can resume: current state, the next step, the files, and what done looks like.
-  - Save it in the repo it belongs to, with the scope `"repo"`. Never save open work as `"global"`: a session start shows the next step only for the open work of its own repo.
-  - Give the body one line that starts with `Next:` and names the next step. A session start shows that line, and `kb show` gives the rest.
+  - Open work goes to the repo it belongs to: save it there with the scope `"repo"`. Outside any repo it is `"global"`.
+  - In a repo, never save open work as `"global"`: a session start shows the next step only for the open work of its own repo.
+  - Give the body one line that starts with `Next:` and names the next step. A session start shows that line, and `kb show` gives the rest. For several steps, write `Next:` on its own line and a list below it.
   - Put no date in the title. kb records when the note was verified.
 
 Skip a candidate when:
@@ -117,7 +118,7 @@ kb refuses one word that is a common command (`git`, `ls`, `bun`): add a subcomm
 `-rf` and `-fr` are two words, so give one trigger for each form.
 
 Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id> --check`, then update it or skip.
-A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor, or a body over 700 characters. The note is saved. Fix it with an update, or give the reason in the report.
+A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor, open work that a repo session saved as `"global"`, or a body over 700 characters. The note is saved. Fix it with an update, or give the reason in the report.
 
 ## 4. Close finished work
 

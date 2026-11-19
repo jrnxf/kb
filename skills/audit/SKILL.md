@@ -36,13 +36,16 @@ kb budget --json
 - `kb budget` shows what a session start of this scope gives. No note loads its body there. `notes` lists each note in rank order, with what a session gets of it (`shown`):
   - `brief` - open work of this scope in short form: the title, the `Next:` line and a pointer. At most 3 notes, the newest verified first.
   - `index` - one line with the id and the title.
-  - `trigger` - a global note with a `cmd:`, `stop:` or `err:` trigger. It takes no line on purpose, and loads at its trigger. That is not a reason to change it.
+  - `trigger` - a global note with a `cmd:`, `stop:` or `err:` trigger. It takes no line on purpose, and loads at its trigger. That is not a reason to change it. Open work always keeps its line.
   - `hidden` - the index line did not fit the character budget, so no session sees the note.
-  - `over` is true only when notes are `hidden` (`index.hidden`). Then `trim` lists the lowest ranked decisions and how-tos of this scope, the lowest first. Treat each one as a candidate too.
-  - `ask` fills the rest of the hidden count with gotchas and conventions, the lowest ranked first. Only the user can trash one of them.
-  - Open work with no line that starts with `Next:` gets a brief of its first 240 characters. Propose a rewrite that adds the line. Open work with the scope `global` is a brief in no repo: say in `why` which repo it belongs to.
+- `over` is true only when notes are `hidden`. Repo notes rank first, so global notes are the first to go. `index.hiddenRepo` counts the hidden notes of the repo, and `index.hiddenGlobal` counts the hidden global notes.
+  - `globalAudit` is true when only the global audit makes room. This happens in a repo: no repo note is hidden, and the global notes do not fit outside a repo either. Then `trim` and `ask` are empty. Propose no trash and no merge of a repo note to make room: this audit covers repo notes only. Tell the user to run /kb:audit outside any repo.
+  - In every other case `makeRoomFor` lists the hidden notes that this audit can give a line. In a repo with no hidden note of its own, they are global notes: they fit outside a repo, and the notes of this repo take their room.
+  - `trim` lists the lowest ranked decisions and how-tos of this scope, the lowest first. Treat each one as a candidate too. The limit is characters, so the list ends when its lines make room. It can be longer or shorter than `makeRoomFor`.
+  - `ask` fills the rest of the room with gotchas and conventions, the lowest ranked first. Only the user can trash one of them.
+- Open work with no `Next:` line gets a brief of its first 240 characters. Propose a rewrite that adds the line. In a repo audit, open work with the scope `global` is one index line: say in `why` which repo it belongs to.
 
-A candidate is a reason to look, not a verdict. If `kb stale` has no candidate and `over` is false, say so and stop.
+A candidate is a reason to look, not a verdict. If `kb stale` has no candidate and `over` is false, say so and stop. If `kb stale` has no candidate and `globalAudit` is true, say that the global audit makes room, and stop.
 
 ## 2. Judge each candidate
 
@@ -60,7 +63,7 @@ Read the note with `kb show <id> --check`, so the log records a check and not a 
 Rules:
 
 - Check a note against the code or a source before you say that it is still true. When you checked it, set `"checked": true` on the keep, and kb records the check. If you cannot tell, propose `keep` without `checked` and say what is unknown.
-- When `over` is true, make room with merge and trash. Shortening a `trim` note frees nothing, because it ranks low. Propose trash for a `trim` note only when it is obsolete or adds nothing. Never trash `open-work` that is not done.
+- When `over` is true and `globalAudit` is false, make room with merge and trash. A shorter body frees nothing: only the index line of a note takes room. A shorter title frees a few characters. Propose trash for a `trim` note only when it is obsolete or adds nothing. Never trash `open-work` that is not done.
 - Never propose trash for a `gotcha` or a `convention` only because it ranks low or no session opened it: a rule that works leaves no trace in the log. Propose `keep`, and the user decides. The one exception is an `expired` note: then nobody checked it either, so propose trash. A `not-needed` reason alone is no reason to trash a rule.
 - For a rewrite, a merge or a shorten, write the new text now, so the user sees it on the card.
 
@@ -147,9 +150,12 @@ rewritten: <ids>
 merged: <kept id> <- <trashed ids>
 moved to <file>: <ids>
 trashed: <ids>
-budget: <chars> of <budget> characters, <bodies> bodies, <lines> notes in the index only, <hidden> in no session
+budget: <chars> of <budget> characters, <briefs> briefs, <lines> index lines, <trigger> notes at a trigger only, <hidden repo> repo notes and <hidden global> global notes in no session
 ```
 
-The rewritten line includes the notes you rewrote in step 4. The budget line takes `context.chars`, `context.budget`, `context.bodies`, `index.lines` and `index.hidden` from `kb budget --json`.
+The rewritten line includes the notes you rewrote in step 4.
+The budget line takes its numbers from `kb budget --json`, in this order: `context.chars`, `context.budget`, `briefs.count`, `index.lines`, `index.triggerOnly`, `index.hiddenRepo` and `index.hiddenGlobal`.
+Outside any repo there are no repo notes: write `<hidden global> global notes in no session`.
+When `globalAudit` is true, add one line: `the global notes do not fit: run /kb:audit outside any repo`.
 
 Leave out an empty group.

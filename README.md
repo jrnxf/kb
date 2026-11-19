@@ -23,14 +23,16 @@ notes, and a note loads when it applies.
     agent learns goes to `kb add`. While Claude Code's auto memory is on, one more line says that
     nothing goes there.
   - The open work of this repo, as at most 3 briefs, the newest verified first. A brief is the id,
-    the kind and the title, then the `Next:` line of the body, then the day of the last check and
-    a pointer to `kb show`. A body with no line that starts with "Next" gives its first 240
-    characters. Other open work gets an index line. Open work with the scope `global` is an index
-    line in a repo, and a brief only outside any repo.
+    the kind and the title, then the next step, then the day of the last check and a pointer to
+    `kb show`. The next step is the first line of the body that starts with `Next:`, `Next step:`
+    or `Next steps:`, also after a list mark, a number or a checkbox. A label alone, or a
+    `## Next steps` heading, takes the list or the paragraph below it. A body with no next step
+    gives its first 240 characters. Other open work gets an index line. Open work with the scope
+    `global` is an index line in a repo, and a brief only outside any repo.
   - The index: one line for each other note, the repo's notes first. A line is the id of the note,
     which is its title in short form, and after `...` the words of the title that the id cut. So a
     title that states the rule in full reaches every session. A global note with a `cmd`, `stop` or
-    `err` trigger gets no line: it loads at its trigger.
+    `err` trigger gets no line: it loads at its trigger. Open work always keeps its line.
   - A pointer to `kb show` and `kb search`. It counts the global notes that load only at their trigger.
 
   It runs at startup, resume, `/clear`, compaction and fork.
@@ -86,14 +88,16 @@ notes, and a note loads when it applies.
 - **Context stays small.** Budgets in `kb.config.json`: `contextChars` (8000, clamped under the
   10,000 character hook cap, with the save rule on top) and `briefChars` (1500, the part of it that
   the briefs may take). The characters are the one limit of the index. When the index does not
-  fit, lines drop from the bottom, and the session start says how many notes reach no session. The
+  fit, lines drop from the bottom, and the session start says how many notes of the repo and how
+  many global notes reach no session. The
   repo's own notes rank first, by kind (open-work, gotcha, convention, decision, how-to), then last
   activity on any machine, then last verified. Global notes come after them: open work first, then
   by last activity, then by kind, then last verified. So the first lines to go are global notes
   that no session opened. No count of reads is in the order. kb ignores the `indexLines` and
   `globalIndexLines` of an older config: a count of lines hid notes that fit.
-- **One start in 10 keeps the older form**, so an audit can compare the two. That start fills its
-  room with whole bodies in rank order, and has no briefs. A hash of the session id picks the arm,
+- **One start in 10 keeps the older form**, so an audit can compare the two. That start is what kb
+  gave before the briefs, note for note: an index of at most 60 lines, at most 20 global notes in
+  a repo, whole bodies in rank order in the room that is left, and no briefs. A hash of the session id picks the arm,
   so a resume, a compaction and a `/clear` of one session stay in one arm. The log marks each
   start with `holdback`. `holdback` in `kb.config.json` sets the share (0.1), and 0 turns it off.
 - **A log says what each session got.** Each machine keeps an event log in `.state/log/`. It
@@ -149,13 +153,17 @@ notes, and a note loads when it applies.
   shows the lines that Apply adds to the file. Apply writes them and does not commit the file. You decide in the `kb serve` page, one
   card per note: each card shows the note, the new text struck against the old, and the agent's
   pick with its reason. `a` accepts the agent's pick, `k` keeps the note as is and records that
-  you checked it, `t` trashes it, a meter counts the notes that still reach no session, and Apply makes
+  you checked it, `t` trashes it, a meter counts the notes that still reach no session (by the characters that each pick frees), and Apply makes
   every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. In a repo it audits that repo. Outside any repo it audits the global notes, in an empty folder that no repo reaches. The Audit button in the page does the same for the global notes, and for any repo a session has opened once. `kb budget` says
   what a session start gives of each note: a brief, an index line, nothing until its trigger, or
   nothing at all. It asks for room only when the index is over its character budget and a note
-  reaches no session. It names the lowest ranked decisions and how-tos to trash or
-  merge, and leaves gotchas and conventions for you to name, because a rule that works leaves no
-  trace in the log.
+  reaches no session. It counts the hidden notes of the repo and the hidden global notes apart.
+  It names the lowest ranked decisions and how-tos to trash or
+  merge, as many as free the characters that the hidden lines need, and leaves gotchas and
+  conventions for you to name, because a rule that works leaves no trace in the log. An audit
+  covers one scope. So when a repo hides only global notes, and those do not fit outside a repo
+  either, `kb budget` and the session start name no repo note: they say to run `/kb:audit`
+  outside any repo.
   A session start says so in one
   line when more than 5 notes are candidates.
 - **Rules move to an instruction file.** A rule you stated belongs where every session loads it
@@ -238,8 +246,8 @@ Pass `--project <name>`. A wipe with no project takes ten minutes to rebuild.
 
 kb also writes `promoted_to` (the instruction file a rule moved to), `supersedes` (the notes a merge
 took in) and `trashed_at`. `kb add` answers with `warnings`, and still saves the note, when a gotcha
-or a how-to has no trigger and no anchor, when open work has the scope `global`, and when a body is
-over 700 characters.
+or a how-to has no trigger and no anchor, when a session in a repo saves open work with the scope
+`global`, and when a body is over 700 characters.
 
 ## Hooks
 
