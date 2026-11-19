@@ -102,7 +102,7 @@ Read the result. `created` and `updated` are done. `exists` means a note in this
 
 `neighbors` means that nothing was written: stored notes are close to the new note in their words. `shared` names the words both have. Read each neighbor with `kb show <id> --check`. Then write the file again and run the command again:
 
-- A neighbor holds the same fact: update it. Pass its `id` and the full new body. Skip it when it lacks nothing.
+- A neighbor holds the same fact: update it. Pass its `id` and the full new body, and remove `scope` from the JSON. An update keeps the scope of the note. Skip it when it lacks nothing.
 - A neighbor says the opposite of the new fact: the two notes contradict. Update that note with what is true now. Do not add a second note.
 - Each neighbor holds a different fact: add `"new": true` to the JSON.
 

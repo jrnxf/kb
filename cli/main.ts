@@ -25,9 +25,10 @@ import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, e
 const USAGE = `kb - a personal knowledge store for coding agents
 
   kb context [--repo .]                  text for a session start: index, top notes, pointer
-  kb add [--file <path>] [--repo .] [--as-of <ISO time>] [--recovered-from <session-id>]
-                                         create or update a note from JSON: the file of --file, or
-                                         stdin. --as-of is for a fact learned at an earlier time: the
+  kb add --file <path> [--repo .] [--as-of <ISO time>] [--recovered-from <session-id>]
+                                         create or update a note from the JSON in a file. Without
+                                         --file, the JSON comes from stdin.
+                                         --as-of is for a fact learned at an earlier time: the
                                          note is verified then.
                                          --recovered-from records the note in that unsaved session
   kb show <id> [--check]                 print one note. A part of the id is enough when one note has
@@ -53,15 +54,15 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          notes for good, and empty-trash --scope only its trash. Each
                                          takes the exact repo id, never "global". Only when the user asks
   kb stale [--repo .]                    notes that may no longer be true, each with a reason: a changed
-                                         or missing anchor, no use, an old check, a close title, or
+                                         or missing anchor, no use, an old check, a close note, or
                                          the verdicts wrong and not-needed of sessions on any machine
   kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
   kb budget [--repo .]                   what a session loads, and what reaches no session
   kb audit [--repo .] [--no-wait]        start an agent that audits this repo's notes, and print the
                                          page link. Outside any repo, it audits the global notes
-  kb audit propose [--file <path>] [--repo .]
-                                         save /kb:audit's proposal for the page, from JSON: the file
-                                         of --file, or stdin
+  kb audit propose --file <path> [--repo .]
+                                         save /kb:audit's proposal for the page, from the JSON in a
+                                         file. Without --file, the JSON comes from stdin
   kb audit status [--repo .]             where the audit of this scope stands, and the notes the user
                                          sent back for a rewrite
   kb instructions [--repo .]             the instruction files for a rule the user states: the global
@@ -84,10 +85,13 @@ session: --session <id>, or KB_SESSION, or the id that Claude Code sets for the 
 The log stays on its machine. A small roll-up of it syncs with the store, at most once per day.
 
 kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence"?, "supersedes"?, "new"?}
+  Write the JSON to a file and pass --file <path>. A shell policy can refuse a command that
+  holds the JSON in a heredoc. A file always passes.
   scope: "repo" (the default inside a git repo), "global", or the id of a repo that has notes
   kind: ${KINDS.join(" | ")}
   confidence: ${CONFIDENCES.join(" | ")} (default medium)
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
+  An update never changes the scope of a note, so leave "scope" out of it.
   With --as-of (a full ISO time with a zone), the verification has that time and the newest commit
   of the repo at that time. An update of a note that was verified after that time changes nothing:
   the result is {"status": "newer", "id", "last_verified"}.
@@ -98,8 +102,10 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence
   Without "id", kb also compares the words of the new note with the notes of its scope and the
   global notes. When a note is close, nothing is written: the result is {"status": "neighbors",
   "neighbors": [{"id", "scope", "kind", "title", "first_line", "shared", "score"}]}, at most ${MAX_NEIGHBORS}.
+  A note named in "supersedes" is never a neighbor: the new note replaces it.
   "shared" names the words both notes have. Read each neighbor with kb show <id> --check. Then pass
-  "id" to update the note that holds the same fact, or "new": true when this is a different fact.
+  its "id" with no "scope" to update the note that holds the same fact, or "new": true when this is
+  a different fact.
   With "new": true the note is written, and the result still lists the neighbors.`;
 
 interface Args {
@@ -168,7 +174,7 @@ async function inputText(args: Args): Promise<string> {
 /** One close note as text: the line of `kb search`, with the kind, then the first line and the shared words. */
 const neighborText = (n: Neighbor) => `${n.id} | ${n.scope} | ${n.kind} | ${n.title}\n  ${n.first_line}\n  shared: ${n.shared.join(", ")}`;
 
-const NEIGHBORS_HINT = 'Read each with `kb show <id> --check`. Pass "id" to update the note that holds the same fact, or "new": true when this is a different fact. When a neighbor says the opposite, update it with what is true now.';
+const NEIGHBORS_HINT = 'Read each with `kb show <id> --check`. To update the note that holds the same fact, pass its "id" and remove "scope". Pass "new": true when this is a different fact. When a neighbor says the opposite, update it with what is true now.';
 
 const ADD_INPUT = "kb add reads one JSON object, from --file <path> or on stdin";
 
@@ -201,8 +207,9 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   if (typeof input.id === "string") {
     const existing = active.find((n) => n.id === input.id);
     if (!existing) throw new KbError(`no active note with id "${input.id}"`);
+    // The neighbor check names a global note for a repo draft. The draft's scope must not send the writer to the trash.
     if (input.scope !== undefined && resolveScopeInput(input.scope, repo.scope) !== existing.scope) {
-      throw new KbError("a note cannot change scope. Trash it and add a new one.");
+      throw new KbError(`the note ${existing.id} has the scope "${existing.scope}", and an update keeps it. Remove "scope" from the input to update the note.`);
     }
     // The note was checked after that time. Old text must not go under the newer check, so nothing changes.
     if (asOf !== undefined && Date.parse(existing.last_verified) > Date.parse(asOf)) {
@@ -247,8 +254,10 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   const note: Note = validateNote(raw);
 
   // A known fact in other words has another title, so it passes the check above. The writer
-  // decides: update the close note, or say with "new" that this is a different fact.
-  const close = findNeighbors(active, note);
+  // decides: update the close note, or say with "new" that this is a different fact. A note that
+  // this one supersedes is close by design, so it is left out.
+  const replaced = new Set(note.supersedes ?? []);
+  const close = findNeighbors(active.filter((n) => !replaced.has(n.id)), note);
   // A repo note that is close to a global note never stops the write: it cannot become global.
   const own = close.filter((n) => n.scope === scope || n.scope === "global");
   const neighbors = [...own, ...close.filter((n) => !own.includes(n))].slice(0, MAX_NEIGHBORS);

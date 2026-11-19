@@ -227,14 +227,15 @@ describe("kb add: close notes", () => {
     expect(held.code).toBe(0);
     expect(held.json.status).toBe("neighbors");
     expect(held.json.neighbors).toEqual([
-      { id: "raw-body", scope: "global", kind: "gotcha", title: stored.title, first_line: "express.json() runs before the webhook route and breaks the signature check.", shared: ["raw", "route", "stripe", "signature", "check"], score: expect.any(Number) },
+      { id: "raw-body", scope: "global", kind: "gotcha", title: stored.title, first_line: "express.json() runs before the webhook route and breaks the signature check.", shared: ["route", "raw", "stripe", "webhook", "body"], score: expect.any(Number) },
     ]);
     expect(held.json.hint).toContain('"new": true');
     expect(store.notes()).toHaveLength(2);
     // The text form says the same, for a caller that passes no --json.
     const text = kb(store, ["add"], { stdin: JSON.stringify({ ...twin, scope: "global" }) }).stdout;
     expect(text).toStartWith("neighbors: 1 note is close to this one. Nothing was written.\nraw-body | global | gotcha | Stripe signature check needs the raw body\n");
-    expect(text).toContain('Pass "id" to update the note that holds the same fact, or "new": true when this is a different fact.');
+    // An update keeps the scope of the note, so the hint says to leave the scope of the draft out.
+    expect(text).toContain('To update the note that holds the same fact, pass its "id" and remove "scope". Pass "new": true when this is a different fact.');
   });
 
   test("with \"new\": true the note is written, the result still lists the neighbors, and the flag is not stored", () => {
@@ -283,6 +284,42 @@ describe("kb add: close notes", () => {
     expect(kb(store, ["add"], { stdin: JSON.stringify({ ...twin, title: "Stripe webhooks need the raw body", scope: "global", new: true }) }).stdout).toContain("close notes, not changed:\n");
   });
 
+  // The draft says with "supersedes" that it replaces the note. The check held it for that same note.
+  test("a note that the new note supersedes is no neighbor", () => {
+    const store = tempStore();
+    putNote(store, stored);
+    expect(add(store, { ...twin, scope: "global" }).json.status).toBe("neighbors");
+    const made = add(store, { ...twin, scope: "global", supersedes: ["raw-body"] });
+    expect(made.json).toEqual({ status: "created", id: "the-stripe-webhook-route-must-get-the-raw-body", path: expect.any(String) });
+    expect(store.find(made.json.id)).toMatchObject({ supersedes: ["raw-body"] });
+    // Another close note still holds the write.
+    putNote(store, { ...stored, id: "second-raw-body", title: "Stripe needs the raw body for its signature check" });
+    const held = add(store, { ...twin, title: "Give the Stripe webhook the raw body", scope: "global", supersedes: ["raw-body", made.json.id] });
+    expect(held.json).toMatchObject({ status: "neighbors", neighbors: [{ id: "second-raw-body" }] });
+  });
+
+  // An agent in a repo wrote a draft with "scope": "repo", got a global neighbor, and passed its id.
+  // The old error said to trash the note. The agent then trashed the global note.
+  test("an update by id with the scope of the draft says which scope the note has, and never to trash it", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/web.git" });
+    putNote(store, stored);
+    const held = add(store, { ...twin, scope: "repo" }, repo);
+    expect(held.json).toMatchObject({ status: "neighbors", neighbors: [{ id: "raw-body", scope: "global" }] });
+    expect(held.json.hint).toContain('pass its "id" and remove "scope"');
+    const refused = add(store, { ...twin, scope: "repo", id: "raw-body" }, repo);
+    expect(refused.code).toBe(1);
+    expect(refused.json.error).toBe('the note raw-body has the scope "global", and an update keeps it. Remove "scope" from the input to update the note.');
+    expect(refused.json.error).not.toMatch(/trash/i);
+    expect(store.find("raw-body")).toMatchObject({ title: stored.title, scope: "global" });
+    // What the hint says works: the id, and no scope.
+    const { scope: _scope, ...noScope } = { ...twin, scope: "repo", id: "raw-body" };
+    expect(add(store, noScope, repo).json).toMatchObject({ status: "updated", id: "raw-body" });
+    expect(store.find("raw-body")).toMatchObject({ title: twin.title, scope: "global" });
+    // The scope of the note itself is no error.
+    expect(add(store, { id: "raw-body", scope: "global", body: "The same scope." }, repo).json.status).toBe("updated");
+  });
+
   test("a note in the trash, and a rule that moved to an instruction file, are no neighbors", () => {
     const store = tempStore();
     putNote(store, stored, true);
@@ -296,6 +333,21 @@ describe("kb add: close notes", () => {
     const bad = add(store, { ...twin, kind: "idea", scope: "global" });
     expect(bad.code).toBe(1);
     expect(bad.json.error).toContain("kind: must be one of");
+  });
+});
+
+describe("kb help", () => {
+  // A shell policy can refuse a command with the JSON in a heredoc. The help sent every reader there.
+  test("it names --file as the first way to pass the JSON, says why, and names no product", () => {
+    const help = kb(tempStore(), ["help"]).stdout;
+    expect(help).toContain("kb add --file <path>");
+    expect(help).toContain("kb audit propose --file <path>");
+    expect(help.indexOf("--file <path>")).toBeLessThan(help.indexOf("stdin"));
+    expect(help).toContain("Write the JSON to a file and pass --file <path>. A shell policy can refuse a command that\n  holds the JSON in a heredoc.");
+    expect(help).toContain('leave "scope" out');
+    // The CLI knows nothing about the harness that runs it, so the reason names no product.
+    const why = help.slice(help.indexOf("Write the JSON to a file"), help.indexOf("A file always passes."));
+    expect(why).not.toMatch(/claude|session|permission/i);
   });
 });
 

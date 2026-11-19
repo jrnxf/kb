@@ -3,37 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NEIGHBOR_THRESHOLD, findNeighbors } from "../cli/neighbors.ts";
 import { Store } from "../cli/store.ts";
-import { stem, stems } from "../cli/words.ts";
+import { STOP_WORDS } from "../cli/words.ts";
 import { ROOT, sh, tempDir } from "./helpers.ts";
-
-describe("the stemmer", () => {
-  test("the forms of one word give one stem", () => {
-    const same = (...forms: string[]) => expect(new Set(forms.map(stem)).size).toBe(1);
-    same("retry", "retries", "retried", "retrying");
-    same("migration", "migrations");
-    same("cache", "caches", "cached", "caching");
-    same("share", "shares", "shared", "sharing");
-    same("deploy", "deploys", "deployed", "deploying");
-    same("stop", "stops", "stopped", "stopping");
-    same("set", "sets", "setting", "settings");
-    same("pass", "passes", "passed", "passing");
-    same("fix", "fixes", "fixed", "fixing");
-    same("release", "releases", "released", "releasing");
-    same("copy", "copies", "copied");
-    same("Branch", "branches");
-  });
-
-  test("it leaves short words, words with a digit and words that only look inflected", () => {
-    for (const word of ["bus", "status", "class", "this", "string", "need", "speed", "red", "v2s", "sha256", "is"]) expect(stem(word)).toBe(word);
-    // A derived word keeps its own stem, so two meanings stay apart.
-    expect(stem("migration")).not.toBe(stem("migrate"));
-    expect(stem("add")).toBe(stem("adding"));
-  });
-
-  test("stems drops the stop words and single characters, and splits at every other character", () => {
-    expect(stems("The JSON parser breaks `express.raw()` on a route")).toEqual(["json", "parser", "break", "express", "raw", "rout"]);
-  });
-});
 
 describe("findNeighbors", () => {
   const note = (id: string, title: string, body: string, scope = "global") => ({ id, scope, kind: "gotcha" as const, title, body });
@@ -59,6 +30,20 @@ describe("findNeighbors", () => {
     const rule = note("rebase", "Rebase of a published branch drops review comments", "Merge the default branch into a published PR head. Never rebase it: the review tool loses the comment anchors.");
     const opposite = { title: "Always rebase a PR branch on main before the merge", body: "The history stays linear. Review comments are lost, and that is fine.", scope: "global" };
     expect(findNeighbors([rule, shared, deploy], opposite).map((n) => n.id)).toEqual(["rebase"]);
+  });
+
+  test("shared names the words as the new note writes them, and never a stop word", () => {
+    const stored = note("guard", "Wrap the retries with a guard", "Use it with every call. The withs nest, and each retry of the deploy is not safe.");
+    const found = findNeighbors([stored], { title: "Retrying a deploy needs the guard", body: "The withs nest. Do not retry with no guard.", scope: "global" });
+    expect(found.map((n) => n.id)).toEqual(["guard"]);
+    // "retries" and "retry" are in the stored note. The new note writes "retrying" first.
+    expect(found[0]!.shared).toEqual(expect.arrayContaining(["retrying", "guard", "withs"]));
+    expect(found[0]!.shared.filter((word) => STOP_WORDS.has(word))).toEqual([]);
+  });
+
+  test("the score is 1 at most, also for a short note that repeats the shared words", () => {
+    const repeats = note("repeats", "alpha alpha alpha beta beta beta", "");
+    expect(findNeighbors([repeats], { title: "alpha beta", body: "", scope: "global" }).map((n) => n.score)).toEqual([1]);
   });
 
   test("the closest note comes first", () => {

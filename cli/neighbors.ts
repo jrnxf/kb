@@ -3,7 +3,7 @@
 // it. The measure is plain text only: no server, no model, no dependency.
 
 import type { Kind } from "./note.ts";
-import { stem, stems, words } from "./words.ts";
+import { meaningWords, stem } from "./words.ts";
 
 export interface Neighbor {
   id: string;
@@ -12,7 +12,7 @@ export interface Neighbor {
   title: string;
   /** The first line of the body. */
   first_line: string;
-  /** Why it matched: the words both notes have, the heaviest first, as the stored note writes them. */
+  /** Why it matched: the words both notes have, the heaviest first, as the new note writes them. Never a stop word. */
   shared: string[];
   /** 0 to 1. See `closeness`. */
   score: number;
@@ -45,16 +45,33 @@ const K1 = 1.2;
 const B = 0.75;
 
 interface Doc {
+  /** The text the rest is made from. A note that changed is read again. */
+  source: string;
   /** Stem to count, over the title and the body. */
   tf: Map<string, number>;
   length: number;
+  /** Stem to the first word of the text that has it, in the order of the text. */
+  written: Map<string, string>;
 }
 
-function toDoc(title: string, body: string): Doc {
+// `kb stale` compares each note of a scope with the others, so the words of a stored note are read once.
+const docs = new WeakMap<object, Doc>();
+
+function toDoc(text: { title: string; body: string }): Doc {
+  const source = `${text.title}\n${text.body}`;
+  const known = docs.get(text);
+  if (known?.source === source) return known;
   const tf = new Map<string, number>();
-  const all = stems(`${title}\n${body}`);
-  for (const s of all) tf.set(s, (tf.get(s) ?? 0) + 1);
-  return { tf, length: all.length };
+  const written = new Map<string, string>();
+  const all = meaningWords(source);
+  for (const word of all) {
+    const s = stem(word);
+    tf.set(s, (tf.get(s) ?? 0) + 1);
+    if (!written.has(s)) written.set(s, word);
+  }
+  const doc = { source, tf, length: all.length, written };
+  docs.set(text, doc);
+  return doc;
 }
 
 /**
@@ -83,7 +100,8 @@ function scorer(corpus: Doc[]): { closeness: (a: Doc, b: Doc) => number; weight:
     }
     return score;
   };
-  const share = (query: Doc, doc: Doc) => bm25(query, doc) / (bm25(query, query) || 1);
+  // A short note that repeats the shared words scores them higher than the query scores itself, so the share has a ceiling.
+  const share = (query: Doc, doc: Doc) => Math.min(1, bm25(query, doc) / (bm25(query, query) || 1));
   const closeness = (a: Doc, b: Doc) => {
     let common = 0;
     for (const term of a.tf.keys()) if (b.tf.has(term)) common++;
@@ -92,17 +110,15 @@ function scorer(corpus: Doc[]): { closeness: (a: Doc, b: Doc) => number; weight:
   return { closeness, weight };
 }
 
-/** The shared words that weigh most, as the note writes them. Words of one weight keep the order of the note, so the title comes first. */
-function sharedWords(draft: Doc, doc: Doc, note: NoteText, weight: (term: string) => number): string[] {
-  const written = new Map<string, string>();
-  for (const word of words(`${note.title}\n${note.body}`)) if (!written.has(stem(word))) written.set(stem(word), word);
+/** The shared words that weigh most, as the new note writes them. Words of one weight keep the order of the new note, so its title comes first. */
+function sharedWords(draft: Doc, doc: Doc, weight: (term: string) => number): string[] {
   const heavy = (term: string) => weight(term) * Math.min(draft.tf.get(term)!, doc.tf.get(term)!);
-  return [...written.keys()]
-    .filter((term) => draft.tf.has(term) && doc.tf.has(term))
+  return [...draft.written.keys()]
+    .filter((term) => doc.tf.has(term))
     .map((term, place) => ({ term, place }))
     .sort((x, y) => heavy(y.term) - heavy(x.term) || x.place - y.place)
     .slice(0, MAX_SHARED)
-    .map(({ term }) => written.get(term)!);
+    .map(({ term }) => draft.written.get(term)!);
 }
 
 /**
@@ -115,9 +131,9 @@ function sharedWords(draft: Doc, doc: Doc, note: NoteText, weight: (term: string
 export function findNeighbors(notes: NoteText[], draft: { title: string; body: string; scope: string }, threshold = NEIGHBOR_THRESHOLD): Neighbor[] {
   const stored = notes
     .filter((note) => !note.promoted_to && (draft.scope === "global" || note.scope === draft.scope || note.scope === "global"))
-    .map((note) => ({ note, doc: toDoc(note.title, note.body) }));
+    .map((note) => ({ note, doc: toDoc(note) }));
   const { closeness, weight } = scorer(stored.map((s) => s.doc));
-  const mine = toDoc(draft.title, draft.body);
+  const mine = toDoc(draft);
   return stored
     .map(({ note, doc }) => ({ note, doc, score: closeness(mine, doc) }))
     .filter((found) => found.score >= threshold)
@@ -128,7 +144,7 @@ export function findNeighbors(notes: NoteText[], draft: { title: string; body: s
       kind: note.kind,
       title: note.title,
       first_line: note.body.split("\n").find((line) => line.trim())?.trim() ?? "",
-      shared: sharedWords(mine, doc, note, weight),
+      shared: sharedWords(mine, doc, weight),
       score: Math.round(score * 100) / 100,
     }));
 }
