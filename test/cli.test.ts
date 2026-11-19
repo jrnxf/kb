@@ -211,6 +211,98 @@ describe("kb add", () => {
   });
 });
 
+describe("kb add with triggers", () => {
+  const gotcha = { title: "zorp --wipe removes the cache of every project", kind: "gotcha", scope: "global", body: "Pass --project." };
+
+  test("stores them with single spaces, each once, after the anchors, and show and list give them", () => {
+    const store = tempStore();
+    const result = add(store, { ...gotcha, triggers: ["cmd:  zorp   --wipe", "cmd: zorp --wipe", "STOP: zorp nuke", "err: Flux capacitor underflow"] });
+    expect(result.json).toEqual({ status: "created", id: "zorp-wipe-removes-the-cache-of-every-project", path: result.json.path });
+    const triggers = ["cmd: zorp --wipe", "stop: zorp nuke", "err: Flux capacitor underflow"];
+    expect(readFileSync(result.json.path, "utf8")).toContain('anchors: []\ntriggers:\n  - "cmd: zorp --wipe"\n  - "stop: zorp nuke"\n  - "err: Flux capacitor underflow"\nconfidence: medium\n');
+    expect(store.find(result.json.id)!.triggers).toEqual(triggers);
+    expect(kb(store, ["show", result.json.id, "--json"]).json.triggers).toEqual(triggers);
+    expect(kb(store, ["show", result.json.id]).stdout).toContain('  - "cmd: zorp --wipe"');
+    expect(kb(store, ["list", "--json"]).json[0].triggers).toEqual(triggers);
+    // A note with no trigger has no such key in its file, so an old note does not change, and list gives an empty list.
+    const bare = add(store, { ...gotcha, title: "No trigger here", anchors: [] });
+    expect(readFileSync(bare.json.path, "utf8")).not.toContain("triggers");
+    expect(kb(store, ["list", "--json"]).json.find((n: { id: string }) => n.id === "no-trigger-here").triggers).toEqual([]);
+  });
+
+  test("refuses a trigger that is wrong, names each one, and writes nothing", () => {
+    const store = tempStore();
+    const bad = add(store, { ...gotcha, triggers: ["cmd: git", "err: short", "when: x"] });
+    expect(bad.code).toBe(1);
+    expect(bad.json.error).toBe('invalid note: triggers: "cmd: git" matches too many commands. Add a second word, such as a subcommand or a flag; "err: short" needs at least 8 characters of the error text; "when: x" must start with cmd:, stop:, err:');
+    expect(add(store, { ...gotcha, triggers: "cmd: zorp --wipe" }).json.error).toContain("triggers: must be a list");
+    expect(store.notes()).toHaveLength(0);
+    // The same check on an update, and the note stays as it was.
+    putNote(store, { id: "a", triggers: ["cmd: zorp --wipe"] });
+    expect(add(store, { id: "a", triggers: ["cmd: ls"] }).json.error).toContain("matches too many commands");
+    expect(store.find("a")!.triggers).toEqual(["cmd: zorp --wipe"]);
+    // A trigger syncs to git with the note, so it holds no secret.
+    expect(add(store, { id: "a", triggers: [`cmd: curl -H ${"ghp_"}${"a1B2".repeat(9)}`] }).json.error).toContain("triggers, item 1");
+  });
+
+  test("an update of triggers alone is no verification, and an update of other fields keeps them", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    putNote(store, { id: "a", scope: "github.com/acme/billing", triggers: ["cmd: zorp --wipe"], verified_at_commit: "abc1234" });
+    expect(add(store, { id: "a", triggers: ["stop: zorp --wipe", "err: flux capacitor underflow"] }, repo).json.status).toBe("updated");
+    // A trigger says when the note loads, not that somebody checked the fact.
+    expect(store.find("a")).toMatchObject({ triggers: ["stop: zorp --wipe", "err: flux capacitor underflow"], last_verified: "2026-01-01T00:00:00Z", verified_at_commit: "abc1234" });
+    add(store, { id: "a", body: "a new body" }, repo);
+    const note = store.find("a")!;
+    expect(note).toMatchObject({ body: "a new body", triggers: ["stop: zorp --wipe", "err: flux capacitor underflow"] });
+    expect(note.last_verified > "2026-01-01T00:00:00Z").toBe(true);
+    // An empty list takes the triggers off.
+    add(store, { id: "a", triggers: [] }, repo);
+    expect(store.find("a")!.triggers).toBeUndefined();
+    expect(readFileSync(store.find("a")!.path, "utf8")).not.toContain("triggers");
+  });
+
+  test("every other write keeps the triggers: verify, trash and restore, and the trash that gets its time", () => {
+    const store = tempStore();
+    const triggers = ["cmd: zorp --wipe", "err: flux capacitor underflow"];
+    putNote(store, { id: "a", triggers });
+    putNote(store, { id: "by-hand", triggers }, true);
+    kb(store, ["verify", "a"]);
+    expect(store.find("a")!.triggers).toEqual(triggers);
+    kb(store, ["trash", "a"]);
+    expect(store.find("a")).toMatchObject({ trashed: true, triggers });
+    kb(store, ["restore", "a"]);
+    expect(store.find("a")).toMatchObject({ trashed: false, triggers });
+    // A note that a hand moved to the trash gets its time there from the next command.
+    expect(store.find("by-hand")!.trashed_at).toBeDefined();
+    expect(store.find("by-hand")!.triggers).toEqual(triggers);
+  });
+
+  test("a saved gotcha or how-to with no trigger and no anchor, and a long body, come with warnings, never a refusal", () => {
+    const store = tempStore();
+    const none = "with no trigger and no anchor loads only at the session start";
+    const bare = add(store, gotcha);
+    expect(bare.json.status).toBe("created");
+    expect(bare.json.warnings).toEqual([`a gotcha ${none}. Give it "triggers" (cmd:, stop: or err:) or "anchors", or say in your report why it has none.`]);
+    expect(add(store, { ...gotcha, title: "A how-to", kind: "how-to" }).json.warnings[0]).toStartWith(`a how-to ${none}`);
+    // A trigger or an anchor is enough, and the other kinds load by their place in the session start.
+    expect(add(store, { ...gotcha, title: "With a trigger", triggers: ["err: flux capacitor underflow"] }).json.warnings).toBeUndefined();
+    expect(add(store, { ...gotcha, title: "With an anchor", anchors: ["src/pay.ts"] }).json.warnings).toBeUndefined();
+    for (const kind of ["decision", "convention", "open-work"]) expect(add(store, { ...gotcha, title: `A ${kind}`, kind }).json.warnings).toBeUndefined();
+    // A body of 700 characters is fine. One more is worth a second look.
+    expect(add(store, { ...gotcha, title: "At the aim", kind: "decision", body: "x".repeat(700) }).json.warnings).toBeUndefined();
+    const long = add(store, { ...gotcha, title: "Over the aim", body: "x".repeat(701) });
+    expect(long.json.status).toBe("created");
+    expect(long.json.warnings).toEqual([expect.stringContaining(none), "the body has 701 characters. Aim for under 700: the fact, why it matters, how to apply it."]);
+    // An update answers for the note as it is stored now, and the text form prints each warning on a line.
+    expect(add(store, { id: bare.json.id, confidence: "high" }).json.warnings).toHaveLength(1);
+    expect(add(store, { id: bare.json.id, triggers: ["cmd: zorp --wipe"] }).json).toEqual({ status: "updated", id: bare.json.id, path: bare.json.path });
+    const text = kb(store, ["add"], { stdin: JSON.stringify({ ...gotcha, title: "In text" }) });
+    expect(text.code).toBe(0);
+    expect(text.stdout).toBe(`created in-text\nwarning: a gotcha ${none}. Give it "triggers" (cmd:, stop: or err:) or "anchors", or say in your report why it has none.\n`);
+  });
+});
+
 describe("a read is not a write", () => {
   test("show, search, verdict and log leave the store as it was: no commit, no changed file, no usage file", () => {
     const store = tempStore();
@@ -268,7 +360,7 @@ describe("a read is not a write", () => {
     expect(shown).toMatchObject({ id: "a", title: "Title of a" });
     expect(Object.keys(shown)).not.toContain("uses");
     expect(kb(store, ["show", "a"]).stdout).toStartWith("# notes/global/a.md\n---\n");
-    expect(Object.keys(kb(store, ["list", "--json"]).json[0])).toEqual(["id", "kind", "scope", "title", "last_verified", "confidence", "promoted_to"]);
+    expect(Object.keys(kb(store, ["list", "--json"]).json[0])).toEqual(["id", "kind", "scope", "title", "last_verified", "confidence", "triggers", "promoted_to"]);
     expect(kb(store, ["list"]).stdout.split("\n")[0]).toMatch(/^id +kind +scope +verified +title$/);
   });
 });

@@ -14,6 +14,11 @@ export interface Note {
   last_verified: string;
   verified_at_commit?: string;
   anchors: string[];
+  /**
+   * When the note loads outside the session start, each `<kind>: <text>`: `cmd` and `stop` before
+   * a shell command, `err` after an error. trigger.ts reads them. A path is an anchor, not a trigger.
+   */
+  triggers?: string[];
   confidence: Confidence;
   promoted_to?: string;
   supersedes?: string[];
@@ -73,6 +78,8 @@ export function validateNote(raw: Record<string, unknown>): Note {
   need(KINDS.includes(raw.kind as Kind), `kind: must be one of ${KINDS.join(", ")}`);
   need(CONFIDENCES.includes(raw.confidence as Confidence), `confidence: must be one of ${CONFIDENCES.join(", ")}`);
   need(raw.anchors === undefined || (Array.isArray(raw.anchors) && raw.anchors.every(isString)), "anchors: must be a list of paths");
+  // Only the shape is checked here. `kb add` checks each trigger, so a trigger that a later kb wrote does not hide the note.
+  need(raw.triggers === undefined || isStringArray(raw.triggers), "triggers: must be a list of texts");
   need(raw.supersedes === undefined || isStringArray(raw.supersedes), "supersedes: must be a list of ids");
   need(raw.promoted_to === undefined || isString(raw.promoted_to), "promoted_to: must be a file name");
   need(raw.verified_at_commit === undefined || isString(raw.verified_at_commit), "verified_at_commit: must be a commit");
@@ -102,6 +109,7 @@ export function validateNote(raw: Record<string, unknown>): Note {
     confidence: raw.confidence as Confidence,
     body: (raw.body as string).trim(),
   };
+  if (raw.triggers !== undefined && (raw.triggers as string[]).length > 0) note.triggers = raw.triggers as string[];
   if (raw.verified_at_commit !== undefined) note.verified_at_commit = raw.verified_at_commit as string;
   if (raw.promoted_to !== undefined) note.promoted_to = raw.promoted_to as string;
   if (raw.supersedes !== undefined && (raw.supersedes as string[]).length > 0) note.supersedes = raw.supersedes as string[];
@@ -134,6 +142,7 @@ export function serializeNote(note: Note): string {
   };
   if (note.verified_at_commit) front.verified_at_commit = note.verified_at_commit;
   front.anchors = note.anchors;
+  if (note.triggers?.length) front.triggers = note.triggers;
   front.confidence = note.confidence;
   if (note.promoted_to) front.promoted_to = note.promoted_to;
   if (note.supersedes?.length) front.supersedes = note.supersedes;

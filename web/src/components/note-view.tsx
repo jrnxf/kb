@@ -87,6 +87,14 @@ export function NoteView({ note, onEdit, onTrash, onRestore, onDelete }: Props) 
           ))}
         </p>
       )}
+      {note.triggers.length > 0 && (
+        <p className="mb-3.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+          <span>loads at</span>
+          {note.triggers.map((trigger) => (
+            <code key={trigger}>{trigger}</code>
+          ))}
+        </p>
+      )}
       {/* The server renders the markdown with raw HTML escaped, so this is safe to insert. */}
       <div className="prose-kb" dangerouslySetInnerHTML={{ __html: note.html }} />
     </article>

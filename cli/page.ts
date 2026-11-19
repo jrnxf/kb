@@ -68,6 +68,7 @@ export function pageData(store: Store, token: string): PageData {
     verified_at_commit: note.verified_at_commit,
     promoted_to: note.promoted_to,
     anchors: note.anchors,
+    triggers: note.triggers ?? [],
     body: note.body,
     html: renderBody(note.body),
   }));

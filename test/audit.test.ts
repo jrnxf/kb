@@ -20,7 +20,7 @@ const repo = (head = "abc1234"): RepoInfo => ({ scope: SCOPE, root: null, head }
 function setup(): Store {
   const store = tempStore();
   sh(store.home, "git", "init", "-q", "-b", "main");
-  for (const id of ["v", "r", "keepme", "m", "m2", "t", "d", "ask"]) putNote(store, { id, scope: SCOPE, body: `body of ${id}` });
+  for (const id of ["v", "r", "keepme", "m", "m2", "t", "d", "ask"]) putNote(store, { id, scope: SCOPE, body: `body of ${id}`, triggers: [`cmd: zorp ${id}`] });
   putNote(store, { id: "g", body: "a global note" });
   putNote(store, { id: "other", scope: "example.com/team/other" });
   sh(store.home, "git", "add", "-A");
@@ -127,8 +127,10 @@ describe("Apply", () => {
     // Nobody looked at keepme: a keep from a group or an unopened card records nothing.
     expect(store.find("keepme")).toMatchObject({ last_verified: "2026-01-01T00:00:00Z" });
     expect(store.find("keepme")!.verified_at_commit).toBeUndefined();
-    expect(store.find("r")!.body).toBe("the new body");
-    expect(store.find("m")).toMatchObject({ body: "merged body", supersedes: ["m2"] });
+    // A rewrite, a merge and a keep with a check write the note again. Each keeps its triggers.
+    expect(store.find("r")).toMatchObject({ body: "the new body", triggers: ["cmd: zorp r"] });
+    expect(store.find("m")).toMatchObject({ body: "merged body", supersedes: ["m2"], triggers: ["cmd: zorp m"] });
+    expect(store.find("v")!.triggers).toEqual(["cmd: zorp v"]);
     expect(store.notes().map((n) => n.id)).not.toContain("m2");
     expect(store.notes().map((n) => n.id)).not.toContain("t");
     expect(store.find("ask")!.body).toBe("body of ask");

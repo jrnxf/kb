@@ -2,12 +2,13 @@
 
 import { existsSync } from "node:fs";
 import { type WriteOp, logEvent, rollUp } from "./log.ts";
-import { KbError, serializeNote, validateNote } from "./note.ts";
+import { KbError, type Note, serializeNote, validateNote } from "./note.ts";
 import { type RepoInfo, commitAt } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { clearStaleCache } from "./stale.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import { kickSync } from "./sync.ts";
+import { requireTriggers } from "./trigger.ts";
 
 /** A time as kb writes it: ISO 8601 in UTC, to the second. */
 export const isoTime = (time: number) => new Date(time).toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -67,10 +68,13 @@ export function asOfTime(value: string, now = Date.now()): string {
 export function updateNote(store: Store, input: Record<string, unknown> & { id: string }, repo: Pick<RepoInfo, "scope" | "head"> & { root?: string | null }, asOf?: string): { id: string; path: string } {
   const existing = store.notes().find((n) => n.id === input.id);
   if (!existing) throw new KbError(`no active note with id "${input.id}"`);
-  rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors }, `the new text of ${existing.id}`);
+  rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors, triggers: input.triggers }, `the new text of ${existing.id}`);
   const { path: _path, trashed: _trashed, ...stored } = existing;
+  // A write that names no triggers keeps them: `stored` has them.
   const merged: Record<string, unknown> = { ...stored, ...input, scope: existing.scope, created: existing.created };
-  // Only a change of content says that somebody looked at the fact again.
+  if ("triggers" in input) merged.triggers = requireTriggers(input.triggers);
+  // Only a change of content says that somebody looked at the fact again. A trigger says when the
+  // note loads, not what is true, so new triggers alone verify nothing.
   if (["title", "body", "anchors"].some((key) => key in input)) {
     merged.last_verified = asOf ?? nowIso();
     const commit = asOf === undefined ? repo.head : commitAt(repo.root ?? null, asOf);
@@ -81,6 +85,24 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
   afterWrite(store, `kb: update ${note.id}`);
   logWrites(store, "update", [note.id]);
   return { id: note.id, path };
+}
+
+/** A body up to this length loads whole at a trigger, with room to spare. A longer one is worth a second look. */
+export const BODY_AIM = 700;
+
+/**
+ * What a writer should look at again in a note that was saved. Never a refusal: the note is
+ * stored. A gotcha or a how-to with no trigger and no anchor loads only at the session start, where
+ * most notes are one title among many.
+ */
+export function noteWarnings(note: Pick<Note, "kind" | "body" | "anchors" | "triggers">): string[] {
+  const warnings: string[] = [];
+  if ((note.kind === "gotcha" || note.kind === "how-to") && note.anchors.length === 0 && !note.triggers?.length) {
+    warnings.push(`a ${note.kind} with no trigger and no anchor loads only at the session start. Give it "triggers" (cmd:, stop: or err:) or "anchors", or say in your report why it has none.`);
+  }
+  const chars = note.body.trim().length;
+  if (chars > BODY_AIM) warnings.push(`the body has ${chars} characters. Aim for under ${BODY_AIM}: the fact, why it matters, how to apply it.`);
+  return warnings;
 }
 
 /**
