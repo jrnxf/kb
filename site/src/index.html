@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>kb - memory for coding agents</title>
-<meta name="description" content="kb keeps what your coding agent learns as plain markdown notes, and gives every session the same small slice.">
+<meta name="description" content="kb keeps what your coding agent learns as plain markdown notes. Every session starts with a small index, and a note loads when it applies.">
 <link rel="canonical" href="https://kb.jrnxf.co/">
 <meta property="og:title" content="kb - memory for coding agents">
-<meta property="og:description" content="kb keeps what your coding agent learns as plain markdown notes, and gives every session the same small slice.">
+<meta property="og:description" content="kb keeps what your coding agent learns as plain markdown notes. Every session starts with a small index, and a note loads when it applies.">
 <meta property="og:url" content="https://kb.jrnxf.co/">
 <meta name="theme-color" content="#0a0a0b">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -38,7 +38,7 @@ a { color: inherit; }
 .bar .sp { flex: 1; }
 .meter { display: flex; align-items: center; gap: 8px; }
 .meter i { width: 64px; height: 4px; border-radius: 2px; background: var(--line2); overflow: hidden; display: block; }
-.meter i::before { content: ""; display: block; height: 100%; width: 100%; background: var(--body); transform-origin: left; transform: scaleX(.883); }
+.meter i::before { content: ""; display: block; height: 100%; width: 100%; background: var(--body); transform-origin: left; transform: scaleX(.981); }
 .bar nav { display: flex; gap: 16px; }
 .bar nav a { text-decoration: none; transition: color 150ms ease; }
 @media (hover: hover) and (pointer: fine) { .bar nav a:hover { color: var(--ink); } }
@@ -78,7 +78,8 @@ code { font: .87em var(--f-mono); color: var(--ink); background: var(--sunk); bo
 .tool > .b.loop .orbit { top: calc(48px + var(--in)); bottom: calc(48px + var(--in)); }
 .tool .term { border: 0; border-radius: 0; background: transparent; }
 .tool .term-bar { display: none; }
-.tool .term-body { padding: 16px 18px 18px; }
+/* The whole session start shows: the index is the point of it. Each row keeps its space while it waits, so the card does not jump. */
+.tool .term-body { padding: 16px 18px 18px; height: auto; }
 
 .cmds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin: 4px 0 0; }
 .cmds div { background: var(--surface); padding: 14px 16px; display: grid; align-content: start; gap: 2px; }
@@ -114,7 +115,7 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
   .tool > .b { padding: 14px; } .tool > .h { padding: 10px 12px; }
   .tool > .b.loop { padding: 0; --in: 14px; height: calc(420px + 2 * var(--in)); } .tool > .b.loop .orbit { top: calc(52px + var(--in)); bottom: calc(52px + var(--in)); }
   .cmds { grid-template-columns: minmax(0, 1fr); }
-  :root { --term-h: 420px; } .term { font-size: 11.5px; }
+  .term { font-size: 11.5px; }
 }
 </style>
 </head>
@@ -123,14 +124,14 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
   <a class="brand" href="#top"><span class="live" aria-hidden="true"></span>kb</a>
   <span class="path">~/acme/shop</span>
   <span class="sp"></span>
-  <span class="meter num" title="Context loaded by kb at session start"><i aria-hidden="true"></i>7,232 / 8,192</span>
+  <span class="meter num" title="Context loaded by kb at session start"><i aria-hidden="true"></i>8,157 / 8,313</span>
   <nav><a class="h" href="#install">install</a><a href="https://github.com/jrnxf/kb">github</a></nav>
 </div></header>
 
 <main class="pad" id="top"><div class="col">
   <section class="hero">
     <h1>Your agent forgets at /clear. <span>kb does not.</span></h1>
-    <p class="lede">kb keeps what your coding agent learns as plain markdown notes, and hands every new session the ones that matter. This page is one session with it.</p>
+    <p class="lede">kb keeps what your coding agent learns as plain markdown notes, gives every new session a small index of them, and loads a note when it applies. This page is one session with it.</p>
     <div class="cta"><a class="w-btn primary" href="#install">Install the plugin</a><a class="w-btn" href="#log">Read the session</a><small>Claude Code · Bun · git</small></div>
   </section>
 
@@ -138,32 +139,52 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
     <li class="sep">tuesday · new session in ~/acme/shop</li>
 
     <li class="turn ai" data-first><span class="g" aria-hidden="true">●</span><div class="msg">
-      <div class="tool"><div class="h"><b>SessionStart</b><span class="args">kb context</span><span class="ok">✓ 7,232 ch</span></div><div class="b flush" data-w="term"></div></div>
+      <div class="tool"><div class="h"><b>SessionStart</b><span class="args">kb context</span><span class="ok">✓ 8,157 ch</span></div><div class="b flush" data-w="term"></div></div>
     </div></li>
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how did you know to run the migrations first?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
-      <p>A session last week found it out and saved a note. <b>Every later session starts with it.</b></p>
-      <p>When you state a rule, I write it to CLAUDE.md in that turn. What I learn goes to kb. <code>kb add</code> refuses a note that looks like it holds a secret. Before /clear, <code>/kb:checkpoint</code> saves the rest.</p>
+      <p>A session last week found it out and saved a note. <b>The note loaded when I ran the seed command.</b></p>
+      <div class="tool"><div class="h"><b>Bash</b><span class="args">bun db:seed</span><span class="ok">✓ 1 note</span></div><div class="b"><pre class="wrap"><span class="c">PreToolUse:Bash · kb</span>
+kb has a note for this command.
+
+<span class="i">### run-migrations-before-seeding-or-the-seed-script [gotcha]</span> Run migrations before seeding, or the seed script fails on a missing table
+<span class="c">trigger cmd: bun db:seed</span>
+The seed script inserts into tables that only the latest migration creates. On a fresh database, run `bun db:migrate` first. The error is "relation users does not exist". It looks like a connection problem, but it is not.</pre></div></div>
+      <p>A note carries its triggers, and a hook loads it at the moment it applies.</p>
+      <div class="cmds">
+        <div><b>cmd: bun db:seed</b><span>Loads the note before I run the command. The command still runs.</span></div>
+        <div><b>stop: git push --force</b><span>Refuses the first run once, and gives the note as the reason.</span></div>
+        <div><b>err: address already in use</b><span>Loads the note after a tool call fails with that text.</span></div>
+        <div><b>anchors: scripts/seed.ts</b><span>Loads the note when I read or change the file, or a command names it.</span></div>
+      </div>
+    </div></li>
+
+    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">who writes the notes?</div></li>
+    <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
+      <p>I do. When you state a rule, I write it to CLAUDE.md in that turn. <b>What I learn goes to kb.</b></p>
+      <p><code>kb add</code> names the close notes before it writes, so I update a note and add no twin. It refuses a note that looks like it holds a secret. Before /clear, <code>/kb:checkpoint</code> saves the rest. If a session ends with no checkpoint, <code>/kb:recover</code> saves its knowledge later, and <code>/kb:recover all</code> sweeps every directory.</p>
       <div class="tool"><div class="h"><b>loop</b><span class="args">how a note gets here</span></div><div class="b" data-w="loop"></div></div>
     </div></li>
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">do all the notes load every time?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
-      <p>No. The budget is fixed. The top notes load with their full body. The rest get one index line each: the id, the kind and the end of the title.</p>
-      <div class="tool"><div class="h"><b>note</b><span class="args">run-migrations-before-seeding-or-the-seed</span></div><div class="b" data-w="morph"></div></div>
-      <p>I rank them: open work, then gotchas, conventions, decisions and how-tos. These are the real sizes of the kb repo's own notes.</p>
-      <div class="tool" id="budget"><div class="h"><b>kb context</b><span class="args">--chars 8192 --lines 60</span><span class="ok">✓ 1 body · 60 lines</span></div><div class="b" data-w="packer"></div></div>
+      <p>No. A session start comes before the task is known, so no note loads its body there. The repo's open work gets a brief: the title and the next step. Each other note gets one index line: the id, the kind and the end of the title.</p>
+      <div class="tool"><div class="h"><b>note</b><span class="args">run-migrations-before-seeding-or-the-seed-script</span></div><div class="b" data-w="morph"></div></div>
+      <p>I rank them: the repo's notes first, then the global notes. The character budget is the only limit. These are the sizes of a real store.</p>
+      <div class="tool" id="budget"><div class="h"><b>kb budget</b><span class="args">8,000 characters for the notes</span><span class="ok">✓ 1 brief · 71 lines</span></div><div class="b" data-w="packer"></div></div>
     </div></li>
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">and when there are hundreds?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
-      <p>The store grows. <b>The session does not.</b> A note below the line is one <code>kb search</code> away.</p>
+      <p>The store grows. <b>The session does not.</b> A note below the line is one <code>kb search</code> away, and a word finds its other forms: "retry" finds "retries".</p>
       <div class="tool"><div class="h"><b>growth</b><span class="args">store vs session</span></div><div class="b" data-w="growth"></div></div>
       <p>Notes also go stale, and the store says so.</p>
       <div class="cmds">
-        <div><b>kb context</b><span>A loaded note whose file or symbol is gone is flagged at session start, before I act on it.</span></div>
-        <div><b>/kb:audit</b><span>Changed anchors and notes with no use and no check in 90 days go up for review. Rules move into CLAUDE.md.</span></div>
+        <div><b>kb context</b><span>A note whose file or symbol is gone is flagged at session start, before I act on it.</span></div>
+        <div><b>/kb:audit</b><span>Changed anchors and notes with no activity and no check in 90 days go up for review. Rules move into CLAUDE.md.</span></div>
+        <div><b>kb verdict</b><span>At the checkpoint I say if a note helped, was not needed or was wrong. The audit reads the verdicts.</span></div>
+        <div><b>kb log</b><span>A log on each machine records what every session got. No use count ranks a note.</span></div>
         <div><b>kb trash</b><span>Restore in one command. Gone after 30 days.</span></div>
         <div><b>kb sync</b><span>Give the store a remote. Every machine shares it.</span></div>
       </div>
@@ -171,10 +192,16 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">so a note below the line is lost?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
-      <p>No. When I read a file, kb names the notes on it. <b>A note reaches me where I work.</b></p>
+      <p>No. When I read a file, kb gives me the notes on it. <b>A note reaches me where I work.</b></p>
       <div class="tool"><div class="h"><b>Read</b><span class="args">api/webhooks.ts</span><span class="ok">✓ 2 notes</span></div><div class="b"><pre class="wrap"><span class="c">PostToolUse:Read · kb</span>
-kb has notes on api/webhooks.ts. Before you change this file, read the notes that apply with `kb show &lt;id&gt;`:<span class="li"><span class="i">- stripe-signature-check-needs-the-raw-body [gotcha]</span> Stripe signature check needs the raw body</span><span class="li"><span class="i">- refunds-reuse-the-charge-id-of-the-order [decision]</span> Refunds reuse the charge id of the order</span></pre></div></div>
-      <p>A note on a folder covers every file in it. Each note comes once per session, and again after a compaction.</p>
+kb has notes on api/webhooks.ts.
+
+<span class="i">### stripe-signature-check-needs-the-raw-body [gotcha]</span> Stripe signature check needs the raw body
+<span class="c">anchor on api/webhooks.ts</span>
+Check the signature before any JSON parse. A parsed body fails the check, and the error names no cause.
+
+Before you change this file, read the notes that apply with `kb show &lt;id&gt;`:<span class="li"><span class="i">- refunds-reuse-the-charge-id-of-the-order [decision]</span> Refunds reuse the charge id of the order</span></pre></div></div>
+      <p>A gotcha comes whole, and another kind comes as its title. A note on a folder covers every file in it. Each note comes once per session, and again after a compaction or a /clear.</p>
     </div></li>
 
     <li class="turn you" id="install"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how do I install it?</div></li>
@@ -192,7 +219,7 @@ kb has notes on api/webhooks.ts. Before you change this file, read the notes tha
 
     <li class="turn you prompt"><span class="g" aria-hidden="true">&gt;</span><div class="msg">/clear</div></li>
     <li class="turn ai again"><span class="g" aria-hidden="true">●</span><div class="msg">
-      <p>SessionStart · kb context · the same <span class="num">7,232</span> characters come back.</p>
+      <p>SessionStart · kb context · the same <span class="num">8,157</span> characters come back.</p>
     </div></li>
   </ol>
 
