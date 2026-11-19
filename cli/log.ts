@@ -63,10 +63,17 @@ export type LogEvent = Who &
      * false, `hits` is 0 and `closest` counts the notes with the most words, which the search printed.
      */
     | { ev: "search"; query: string; hits: number; complete?: boolean; closest?: number; why: Why }
-    | { ev: "write"; note: string; op: WriteOp }
+    /** `from`: the write came from a recovery, and this is the unsaved session it read. */
+    | { ev: "write"; note: string; op: WriteOp; from?: string }
     | { ev: "verdict"; note: string; verdict: Verdict }
     | { ev: "checkpoint" }
+    /** A session ended with no checkpoint. `reason` is the word of the harness: clear, other, and so on. */
     | { ev: "unsaved"; reason?: string }
+    /**
+     * Another session saved the knowledge of an unsaved one. `session` is the session that was
+     * recovered, `by` the session that did it, and `notes` the notes the recovery wrote.
+     */
+    | { ev: "recover"; by?: string; notes: string[]; reason?: string }
   );
 
 /** An event as the log holds it. A reader must expect kinds and fields that a later kb wrote. */
@@ -225,7 +232,9 @@ export interface LogSummary {
   starts: number;
   searches: { task: number; check: number };
   checkpoints: number;
+  /** Sessions that ended with no checkpoint, and those that another session saved later. */
   unsaved: number;
+  recovered: number;
   /** Every note the events name, by id. */
   notes: NoteLog[];
 }
@@ -268,7 +277,7 @@ export function summarize(events: Logged[]): LogSummary {
     if (!notes.has(id)) notes.set(id, emptyNoteLog(id));
     return notes.get(id)!;
   };
-  const summary: LogSummary = { from: events[0]?.t ?? null, to: events.at(-1)?.t ?? null, events: events.length, sessions: 0, starts: 0, searches: { task: 0, check: 0 }, checkpoints: 0, unsaved: 0, notes: [] };
+  const summary: LogSummary = { from: events[0]?.t ?? null, to: events.at(-1)?.t ?? null, events: events.length, sessions: 0, starts: 0, searches: { task: 0, check: 0 }, checkpoints: 0, unsaved: 0, recovered: 0, notes: [] };
   const sessions = new Set<string>();
   // The fields are read as unknown: a later kb, or a hand edit, may have written another shape.
   for (const event of events as Raw[]) {
@@ -303,6 +312,9 @@ export function summarize(events: Logged[]): LogSummary {
         break;
       case "unsaved":
         summary.unsaved++;
+        break;
+      case "recover":
+        summary.recovered++;
         break;
       case "write":
         // A note that only a write names still gets a row, so a new note is in the summary.

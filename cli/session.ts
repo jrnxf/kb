@@ -8,13 +8,31 @@ import { type Store, writeAtomic } from "./store.ts";
 
 const KEEP_MS = 7 * 86_400_000;
 
+/** How much a session holds: what was said, and the tool calls that failed. */
+export interface SessionSize {
+  prompts: number;
+  chars: number;
+  /** Not in a mark that an older kb measured. */
+  failed?: number;
+}
+
 export interface UnsavedSession {
   session: string;
   transcript: string;
   cwd: string;
   ended: string;
-  /** How much the session said, measured once by a later session start. */
-  size?: { prompts: number; chars: number };
+  /** Why the session ended, in the word of the harness: clear, other, and so on. */
+  reason?: string;
+  /**
+   * The repo id of `cwd` when the session ended, or null outside any repo. The mark keeps it,
+   * because the directory of a finished run is often deleted later. A mark of an older kb, and a
+   * session whose directory was gone when it ended, have none.
+   */
+  scope?: string | null;
+  /** The root of the checkout around `cwd` at that time, or null outside any repo. */
+  root?: string | null;
+  /** Measured once by a later session start. */
+  size?: SessionSize;
   /** The notes that a recovery of this session wrote: `kb add --recovered-from`. */
   notes?: string[];
 }
@@ -47,9 +65,15 @@ export function isSaved(store: Store, session: string): boolean {
   return existsSync(store.statePath(`saved-${safe(session)}`));
 }
 
+/**
+ * Record a session that ended with no checkpoint. A session can end twice: it ends, the user
+ * resumes it, and it ends again. The new mark keeps the notes that a recovery wrote in between,
+ * and loses the size, which is measured again.
+ */
 export function recordUnsaved(store: Store, entry: UnsavedSession): void {
   store.ensure();
-  writeAtomic(store.statePath(`unsaved-${safe(entry.session)}.json`), JSON.stringify(entry));
+  const notes = entry.notes ?? unsavedSession(store, entry.session)?.notes;
+  writeAtomic(store.statePath(`unsaved-${safe(entry.session)}.json`), JSON.stringify(notes ? { ...entry, notes } : entry));
 }
 
 /** The mark of one unsaved session, or null. */
@@ -93,7 +117,7 @@ function changeMark(store: Store, session: string, change: (mark: UnsavedSession
 }
 
 /** Keep the measured size of an unsaved session in its mark, so no later start reads the transcript again. */
-export function recordSize(store: Store, session: string, size: { prompts: number; chars: number }): boolean {
+export function recordSize(store: Store, session: string, size: SessionSize): boolean {
   return changeMark(store, session, (mark) => {
     mark.size = size;
   });
@@ -107,7 +131,7 @@ export function recordRecovered(store: Store, session: string, id: string): bool
 }
 
 /**
- * True once per day (local time) for a directory, on this machine. The claim is a file made with
+ * True once per day (local time) for a directory or a fixed name, on this machine. The claim is a file made with
  * "wx", so of two sessions that start together only one gets it. False when it cannot be recorded.
  */
 export function firstToday(store: Store, dir: string, now = new Date()): boolean {
@@ -164,19 +188,22 @@ export function forgetUnsaved(store: Store, session: string): boolean {
   return true;
 }
 
+/** A directory that is there now. */
+export function isDir(path: string | null | undefined): path is string {
+  try {
+    return typeof path === "string" && path !== "" && statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /**
- * The unsaved sessions of a directory. Each stays until /kb:recover saves it or the user forgets
- * it, or for 7 days. With `root`, the root of the repo around `cwd`, a session that ended anywhere
- * in that checkout counts: a session can end in a subdirectory and the next one start at the root.
- * A session whose transcript is gone is forgotten, as nothing can recover it. A transcript that is
- * there and cannot be read now keeps its session.
+ * The unsaved sessions of every directory on this machine, the oldest first. Each stays until
+ * /kb:recover saves it or the user forgets it, or for 7 days. A session whose transcript is gone
+ * is forgotten, as nothing can recover it. A transcript that is there and cannot be read now
+ * keeps its session.
  */
-export function unsavedSessions(store: Store, cwd: string, root: string | null = null): UnsavedSession[] {
-  const top = root && real(root);
-  // Compare real paths: the hook gets the directory from Claude Code, the CLI from the shell, and
-  // one of them can go through a link (/tmp on macOS).
-  const self = real(cwd);
-  const here = (ended: string) => real(ended) === self || (top !== null && (real(ended) === top || real(ended).startsWith(top + sep)));
+export function allUnsaved(store: Store): UnsavedSession[] {
   const dir = store.statePath("");
   let names: string[];
   try {
@@ -203,10 +230,31 @@ export function unsavedSessions(store: Store, cwd: string, root: string | null =
         rmSync(path, { force: true });
         rmSync(recoverPath(store, entry.session), { force: true });
       }
-      else if (here(entry.cwd)) found.push(entry);
+      else found.push(entry);
     } catch {
       // a broken mark is not worth a failure
     }
   }
   return found.sort((a, b) => a.ended.localeCompare(b.ended));
+}
+
+/**
+ * Says if a session ended in a directory or in the checkout around it. With `root`, the root of
+ * the repo around `cwd`, a session that ended anywhere in that checkout counts: a session can end
+ * in a subdirectory and the next one start at the root.
+ */
+export function endedHere(cwd: string, root: string | null = null): (entry: UnsavedSession) => boolean {
+  const top = root && real(root);
+  // Compare real paths: the hook gets the directory from Claude Code, the CLI from the shell, and
+  // one of them can go through a link (/tmp on macOS).
+  const self = real(cwd);
+  return (entry) => {
+    const ended = real(entry.cwd);
+    return ended === self || (top !== null && (ended === top || ended.startsWith(top + sep)));
+  };
+}
+
+/** The unsaved sessions of a directory or of the checkout around it, the oldest first. */
+export function unsavedSessions(store: Store, cwd: string, root: string | null = null): UnsavedSession[] {
+  return allUnsaved(store).filter(endedHere(cwd, root));
 }

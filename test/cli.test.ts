@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { lastActivity, logEvent } from "../cli/log.ts";
 import { parseNote } from "../cli/note.ts";
 import { search } from "../cli/search.ts";
+import { recordUnsaved } from "../cli/session.ts";
 import { Store } from "../cli/store.ts";
 import { ROOT, daysAgo, kb, legacyUsage, logAt, logged, otherMachine, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
@@ -488,7 +489,7 @@ describe("kb log", () => {
     logAt(store, "2026-06-01T10:07:00Z", { ev: "verdict", ...s1, note: "a", verdict: "helped" });
     logAt(store, "2026-06-01T10:08:00Z", { ev: "checkpoint", ...s1 });
     logAt(store, "2026-07-01T09:00:00Z", { ev: "start", session: "s2", scope: SCOPE, source: "clear", bodies: ["a", "b"], index: [], hidden: ["c"], chars });
-    logAt(store, "2026-07-01T09:30:00Z", { ev: "unsaved", session: "s2", reason: "clear" });
+    logAt(store, "2026-07-01T09:30:00Z", { ev: "unsaved", session: "s2", reason: "other" });
     return store;
   }
   const zero = { body: 0, index: 0, hidden: 0, opened: { task: 0, check: 0 }, fired: 0, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } };
@@ -506,6 +507,7 @@ describe("kb log", () => {
       searches: { task: 0, check: 1 },
       checkpoints: 1,
       unsaved: 1,
+      recovered: 0,
       notes: [
         { id: "a", scope: SCOPE, kind: "gotcha", state: "active", ...zero, body: 2, verdicts: { helped: 1, "not-needed": 0, wrong: 0 }, last_activity: "2026-06-01T10:07:00Z" },
         { id: "b", scope: SCOPE, kind: "decision", state: "active", ...zero, body: 1, index: 1, opened: { task: 1, check: 1 }, last_activity: "2026-06-01T10:02:00Z" },
@@ -518,7 +520,7 @@ describe("kb log", () => {
       ],
     });
     const text = kb(store, ["log"]).stdout;
-    expect(text).toContain("2 sessions, 2 starts, 1 checkpoint, 1 unsaved | searches: 0 for a task, 1 as a check");
+    expect(text).toContain("2 sessions, 2 starts, 1 checkpoint, 1 unsaved, 0 recovered | searches: 0 for a task, 1 as a check");
     expect(text).toMatch(/^id +body +index +hidden +opened +checked +fired +helped +not-needed +wrong$/m);
     expect(text).toMatch(/^b +1 +1 +0 +1 +1 +0 +0 +0 +0$/m);
     expect(text).not.toMatch(/^quiet/m);
@@ -554,7 +556,59 @@ describe("kb log", () => {
     // A session with no event, and a store with no log.
     expect(kb(store, ["log", "--session", "nobody", "--json"]).json).toMatchObject({ session: "nobody", scope: null, events: 0, notes: [], unjudged: [], timeline: [] });
     expect(kb(tempStore(), ["log", "--json"]).json).toMatchObject({ from: null, events: 0, notes: [] });
-    expect(kb(join(tempDir(), "missing"), ["log"]).stdout).toBe("log  no events | 0 sessions, 0 starts, 0 checkpoints, 0 unsaved | searches: 0 for a task, 0 as a check\n");
+    // A session that ended with no checkpoint says why it ended.
+    expect(kb(store, ["log", "--session", "s2"]).stdout).toMatch(/  unsaved +after other$/m);
+    expect(kb(join(tempDir(), "missing"), ["log"]).stdout).toBe("log  no events | 0 sessions, 0 starts, 0 checkpoints, 0 unsaved, 0 recovered | searches: 0 for a task, 0 as a check\n");
+  });
+});
+
+// The next audit counts what /kb:recover saved: the sessions, and the notes of each.
+describe("the log of a recovery", () => {
+  const ended = "2026-01-05T10:00:00Z";
+  const note = (title: string) => JSON.stringify({ title, kind: "gotcha", body: "x", scope: "global" });
+
+  test("a recovered note names the session it came from, and the mark step logs the recovery and not a checkpoint", () => {
+    const store = tempStore();
+    const dir = tempDir();
+    const transcript = join(dir, "old.jsonl");
+    writeFileSync(transcript, "");
+    recordUnsaved(store, { session: "old", transcript, cwd: dir, ended, reason: "other", scope: "github.com/acme/billing", root: dir });
+    putNote(store, { id: "an-older-note", last_verified: "2020-01-01T00:00:00Z" });
+    const env = { KB_SESSION: "now" };
+    const add = (stdin: string) => kb(store, ["add", "--json", "--as-of", ended, "--recovered-from", "old"], { stdin, cwd: dir, env });
+    expect(add(note("The queue drops a job after 3 tries")).json.status).toBe("created");
+    expect(add(JSON.stringify({ id: "an-older-note", body: "with the fact of the old session" })).json.status).toBe("updated");
+    // A note with no flag is a note of the session that runs.
+    kb(store, ["add", "--json"], { stdin: note("A note of this session"), cwd: dir, env });
+    expect(kb(store, ["checkpointed", "old", "--json"], { cwd: dir, env }).json).toEqual({ session: "old", recorded: true, recovered: true });
+
+    const events = logged(store);
+    expect(events.filter((e) => e.ev === "write")).toEqual([
+      { ev: "write", session: "now", scope: "global", note: "the-queue-drops-a-job-after-3-tries", op: "add", from: "old" },
+      { ev: "write", session: "now", scope: "global", note: "an-older-note", op: "update", from: "old" },
+      { ev: "write", session: "now", scope: "global", note: "a-note-of-this-session", op: "add" },
+    ]);
+    // The event belongs to the old session and has its scope, so the audit counts recoveries per project.
+    expect(events.at(-1)).toEqual({ ev: "recover", session: "old", scope: "github.com/acme/billing", by: "now", notes: ["the-queue-drops-a-job-after-3-tries", "an-older-note"], reason: "other" });
+    expect(events.some((e) => e.ev === "checkpoint")).toBe(false);
+    expect(kb(store, ["log", "--json"]).json).toMatchObject({ checkpoints: 0, recovered: 1 });
+    const text = kb(store, ["log", "--session", "old"]).stdout;
+    expect(text).toMatch(/  recover +2 notes, by session now$/m);
+    expect(kb(store, ["log", "--session", "now"]).stdout).toMatch(/  write +add the-queue-drops-a-job-after-3-tries \(recovered from old\)$/m);
+    expect(kb(store, ["log"]).stdout).toContain("0 checkpoints, 0 unsaved, 1 recovered");
+  });
+
+  // A session that ended, was resumed and then ran /kb:checkpoint saved itself.
+  test("a session that saves itself after a resume is checkpointed, and a session with no mark too", () => {
+    const store = tempStore();
+    const dir = tempDir();
+    const transcript = join(dir, "s.jsonl");
+    writeFileSync(transcript, "");
+    recordUnsaved(store, { session: "resumed", transcript, cwd: dir, ended });
+    expect(kb(store, ["checkpointed", "resumed", "--json"], { env: { KB_SESSION: "resumed" } }).json).toEqual({ session: "resumed", recorded: true });
+    expect(kb(store, ["checkpointed", "live", "--json"], { env: { KB_SESSION: "live" } }).json).toEqual({ session: "live", recorded: true });
+    expect(logged(store).map((e) => e.ev)).toEqual(["checkpoint", "checkpoint"]);
+    expect(kb(store, ["unsaved", "--all", "--json"]).json).toEqual([]);
   });
 });
 

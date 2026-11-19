@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { openAudits, proposeAudit, readAudit } from "./audit.ts";
 import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
-import { rememberRepo } from "./repos.ts";
+import { rememberRepo, repoRoot } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
 import { type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
@@ -15,7 +15,7 @@ import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
 import { DEFAULT_PORT, isKbServer, runningPort, serve } from "./serve.ts";
 import { resultGroups } from "./wire.ts";
-import { forgetUnsaved, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
+import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
@@ -66,6 +66,8 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          session got it, opened it and judged it. With --session, the
                                          events of one session in time order. The log keeps 12 months
   kb unsaved [--repo .]                  sessions here that ended with no checkpoint, and their transcripts
+  kb unsaved --all                       those of every directory, newest first, with the count per
+                                         project. Each has its scope, its directory, and if that is gone
   kb unsaved --forget <session-id>       stop reporting one of them, as it holds nothing to save
   kb scope [--repo .]                    print the scope id of a directory
   kb serve [--port n] [--no-open]        the store as a local page: read, edit and trash notes
@@ -180,7 +182,7 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
         text: `newer ${existing.id}: the note was checked at ${existing.last_verified}, after the time of --as-of. Nothing changed.`,
       };
     }
-    const updated = updateNote(store, input as Record<string, unknown> & { id: string }, repo, asOf);
+    const updated = updateNote(store, input as Record<string, unknown> & { id: string }, repo, asOf, typeof from === "string" ? from : undefined);
     recovered(updated.id);
     return { json: { status: "updated", ...updated }, text: `updated ${updated.id}` };
   }
@@ -216,7 +218,7 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
   const note: Note = validateNote(raw);
   const path = store.writeNote(note);
   afterWrite(store, `kb: add ${note.id}`);
-  logWrites(store, "add", [note.id]);
+  logWrites(store, "add", [note.id], typeof from === "string" ? from : undefined);
   recovered(note.id);
   return { json: { status: "created", id: note.id, path }, text: `created ${note.id}` };
 }
@@ -452,9 +454,16 @@ function cmdBudget(store: Store, args: Args): Output {
 function cmdCheckpointed(store: Store, args: Args): Output {
   const session = args.positional[0];
   if (!session) throw new KbError("usage: kb checkpointed <session-id>");
+  // A session that ended with no checkpoint, and that another session now saves, is recovered. A
+  // session that was resumed and saves itself is checkpointed, as any session is.
+  const mark = store.exists() ? unsavedSession(store, session) : null;
+  const by = sessionOf(args.flags.get("session"));
+  const recovered = mark !== null && by !== session;
   if (store.exists()) markSaved(store, session);
-  logEvent(store, { ev: "checkpoint", session });
-  return { json: { session, recorded: store.exists() }, text: `recorded ${session}` };
+  // The event has the scope of the old session, so the audit can count the recoveries of a project.
+  if (recovered) logEvent(store, { ev: "recover", session, by, notes: mark.notes ?? [], ...(mark.reason ? { reason: mark.reason } : {}), ...(mark.scope !== undefined ? { scope: mark.scope ?? "global" } : {}) });
+  else logEvent(store, { ev: "checkpoint", session });
+  return { json: { session, recorded: store.exists(), ...(recovered ? { recovered: true } : {}) }, text: `recorded ${session}` };
 }
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -477,9 +486,10 @@ function eventText(event: Logged): string {
       case "show": return `${e.note} (${e.why}${e.trashed ? ", in the trash" : ""})`;
       // A line of an older kb has no `complete`: its `hits` may count the closest notes.
       case "search": return `${JSON.stringify(e.query)}: ${e.complete === false ? `no note has every word, ${count(e.closest ?? 0, "closest note", "closest notes")}` : count(e.hits, "note", "notes")} (${e.why})`;
-      case "write": return `${e.op} ${e.note}`;
+      case "write": return `${e.op} ${e.note}${e.from ? ` (recovered from ${e.from})` : ""}`;
       case "verdict": return `${e.verdict} ${e.note}`;
       case "unsaved": return e.reason ? `after ${e.reason}` : "";
+      case "recover": return `${count(e.notes.length, "note", "notes")}${e.by ? `, by session ${e.by}` : ""}`;
       default: return typeof e.note === "string" ? e.note : "";
     }
   };
@@ -537,7 +547,7 @@ function cmdLog(store: Store, args: Args): Output {
   const wId = Math.max(2, ...logged.map((n) => n.id.length));
   const table = (id: string, values: (string | number)[]) => `${id.padEnd(wId)}  ${values.map((v, i) => String(v).padStart(columns[i]!.length)).join("  ")}`;
   const lines = [
-    `log  ${period} | ${count(totals.sessions, "session", "sessions")}, ${count(totals.starts, "start", "starts")}, ${count(totals.checkpoints, "checkpoint", "checkpoints")}, ${totals.unsaved} unsaved | searches: ${totals.searches.task} for a task, ${totals.searches.check} as a check`,
+    `log  ${period} | ${count(totals.sessions, "session", "sessions")}, ${count(totals.starts, "start", "starts")}, ${count(totals.checkpoints, "checkpoint", "checkpoints")}, ${totals.unsaved} unsaved, ${totals.recovered} recovered | searches: ${totals.searches.task} for a task, ${totals.searches.check} as a check`,
   ];
   if (logged.length > 0) lines.push(table("id", columns), ...notes.filter((n) => named.has(n.id)).map((n) => table(n.id, cells(n))));
   if (quiet.length > 0) lines.push(`${count(quiet.length, "active note has", "active notes have")} no event${since ? " in this time" : ""}.`);
@@ -550,11 +560,44 @@ function cmdUnsaved(store: Store, args: Args): Output {
     const forgotten = store.exists() && forgetUnsaved(store, forget);
     return { json: { session: forget, forgotten }, text: forgotten ? `forgot ${forget}` : `no unsaved session ${forget}` };
   }
-  if (!store.exists()) return { json: [], text: "no unsaved session here" };
+  const all = args.flags.has("all");
+  if (!store.exists()) return { json: [], text: all ? "no unsaved session" : "no unsaved session here" };
+  const known = new Set(knownScopes(store));
+  if (all) {
+    // The newest first: the user sees what just ended. The count per project comes before the list.
+    const sessions = allUnsaved(store).reverse().map((s) => ({ ...s, ...placeOf(store, s, known) }));
+    if (sessions.length === 0) return { json: [], text: "no unsaved session" };
+    const projects = new Map<string, number>();
+    for (const s of sessions) projects.set(s.scope ?? "not known", (projects.get(s.scope ?? "not known") ?? 0) + 1);
+    const lines = [
+      `${count(sessions.length, "unsaved session", "unsaved sessions")} in ${count(projects.size, "project", "projects")}`,
+      ...[...projects].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([scope, n]) => `${String(n).padStart(3)}  ${scope}`),
+      "",
+      ...sessions.map((s) => `${s.session} | ${s.scope ?? "scope not known"} | ended ${s.ended} | ${s.cwd}${s.exists ? "" : " (gone)"}${s.recoverable ? "" : " | not recoverable"}`),
+    ];
+    return { json: sessions, text: lines.join("\n") };
+  }
   const dir = String(args.flags.get("repo") ?? ".");
-  const sessions = unsavedSessions(store, resolve(dir), resolveRepo(dir, store).root);
+  const sessions = unsavedSessions(store, resolve(dir), resolveRepo(dir, store).root).map((s) => ({ ...s, ...placeOf(store, s, known) }));
   const text = sessions.map((s) => `${s.session} | ended ${s.ended} | ${s.transcript}`).join("\n") || "no unsaved session here";
   return { json: sessions, text };
+}
+
+/**
+ * Where the notes of an unsaved session go, for the session that recovers it.
+ * `scope`: the repo id, "global" for a session outside any repo, or null when nobody knows it.
+ * `exists`: the directory the session ran in is still there.
+ * `dir`: a checkout to pass as --repo: that directory, the root around it, or the checkout of the
+ * same repo that kb saw last. Null when none is on disk.
+ * `recoverable`: false when no note can be written: the scope is not known, or the repo has no
+ * note yet and no checkout, so `kb add` cannot start its notes.
+ */
+function placeOf(store: Store, session: UnsavedSession, known: Set<string>): { scope: string | null; exists: boolean; dir: string | null; recoverable: boolean } {
+  const own = [session.cwd, session.root].find(isDir) ?? null;
+  // A mark of an older kb has no scope. The directory still says it, while it is there.
+  const scope = session.scope !== undefined ? (session.scope ?? "global") : own ? (resolveRepo(own, store, { record: false }).scope ?? "global") : null;
+  const dir = own ?? (scope && scope !== "global" ? (repoRoot(store, scope) ?? null) : null);
+  return { scope, exists: isDir(session.cwd), dir, recoverable: scope !== null && (scope === "global" || dir !== null || known.has(scope)) };
 }
 
 function openInBrowser(url: string): void {
