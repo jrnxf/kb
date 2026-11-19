@@ -1,6 +1,7 @@
 // Where each repo is checked out, so the page can start an audit for a repo with no session open.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { mainCheckout } from "./scope.ts";
 import { type Store, writeAtomic } from "./store.ts";
 
@@ -15,16 +16,31 @@ function read(store: Store): Record<string, string> {
 }
 
 /**
+ * True when `root` is a linked worktree of the checkout at `main`. A linked worktree has a file
+ * `.git` that names its git dir, `<main>/.git/worktrees/<name>`. Reading it starts no git process.
+ */
+function worktreeOf(root: string, main: string): boolean {
+  try {
+    const gitDir = /^gitdir: (.+)$/m.exec(readFileSync(join(root, ".git"), "utf8"))?.[1];
+    return gitDir !== undefined && realpathSync(resolve(root, gitDir, "..", "..")) === join(main, ".git");
+  } catch {
+    return false; // a main checkout, where `.git` is a folder, or a git dir that is gone
+  }
+}
+
+/**
  * Remember where each repo is checked out, so the page can start an audit for a repo that has no
  * session open, and a recovery can write the notes of a session whose folder is gone. Every
  * session start calls this. It writes only when the path changes.
  *
  * A start in a linked worktree remembers the main checkout of the repo, while that is on disk:
- * the worktree of a finished run is often deleted, and the main checkout stays.
+ * the worktree of a finished run is often deleted, and the main checkout stays. Once kb has
+ * the main checkout, a start in one of its worktrees costs one read of a file and no git call.
  */
 export function rememberRepo(store: Store, scope: string, root: string): void {
   const repos = read(store);
-  if (repos[scope] === root) return;
+  const known = repos[scope];
+  if (known === root || (known !== undefined && worktreeOf(root, known))) return;
   const main = mainCheckout(root);
   const place = main !== root && existsSync(main) ? main : root;
   if (repos[scope] === place) return;

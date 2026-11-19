@@ -162,7 +162,8 @@ const scopeOf = (mark: UnsavedSession) => (mark.scope !== undefined ? { scope: m
 
 /**
  * Record in its mark that a measure found the session worth a recovery, with the size when it was
- * measured, so no later start reads the transcript again. Says if the mark was written.
+ * measured, so no later start reads the transcript again. With no size, the transcript is too
+ * large to measure, and the line says so. Says if the mark was written.
  * The log gets one `unsaved` line per session: the first time only, and only when the mark took
  * the word, so a store that cannot be written does not log the session at every start.
  */
@@ -170,11 +171,19 @@ export function recordWorth(store: Store, session: string, size?: SessionSize): 
   let line: LogEvent | null = null;
   const written = changeMark(store, session, (mark) => {
     if (size) mark.size = size;
-    if (!mark.logged) line = { ev: "unsaved", session, ...scopeOf(mark), ...(mark.reason ? { reason: mark.reason } : {}), ...(size ? { prompts: size.prompts, failed: size.failed ?? 0 } : {}) };
+    if (!mark.logged) line = { ev: "unsaved", session, ...scopeOf(mark), ...(mark.reason ? { reason: mark.reason } : {}), ...(size ? { prompts: size.prompts, failed: size.failed ?? 0 } : { large: true as const }) };
     mark.logged = true;
   });
   if (written && line) logEvent(store, line);
   return written;
+}
+
+/**
+ * Add to the mark where the session ran: the repo id, the checkout and the main checkout. The end
+ * of a session writes the mark first and reads these from git after, in the time that is left.
+ */
+export function recordPlace(store: Store, session: string, place: Pick<UnsavedSession, "scope" | "root" | "main">): boolean {
+  return changeMark(store, session, (mark) => Object.assign(mark, place));
 }
 
 /** Record that a recovery of this session wrote a note, so a second recovery does not add it again. */

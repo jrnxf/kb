@@ -24,10 +24,11 @@ const OUTPUT_LIMIT = 9900;
  */
 let rules = `${SAVE_RULE}\n${MEMORY_RULE}`;
 /**
- * False for a headless run (`claude -p`), where nobody reads a first reply. Claude Code names the
- * way it was started in this variable, and print mode is "sdk-cli". No hook input says it.
+ * False for a headless run, where nobody reads a first reply. Claude Code names the way it was
+ * started in this variable: print mode (`claude -p`) is "sdk-cli", and a run of the Agent SDK is
+ * "sdk-ts" or "sdk-py". Every name that starts with "sdk" is such a run. No hook input says it.
  */
-const attended = () => process.env.CLAUDE_CODE_ENTRYPOINT !== "sdk-cli";
+const attended = () => !process.env.CLAUDE_CODE_ENTRYPOINT?.startsWith("sdk");
 /** What a session gets when there is no note to show: no store yet, or a broken one. */
 const rulesOnly = () => `# kb\n${rules}\n`;
 

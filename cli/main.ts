@@ -8,7 +8,7 @@ import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
-import { FORGET_WHYS, type ForgetWhy, type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
+import { FORGET_WHYS, type ForgetWhy, type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, saysWorth, sessionOf, setActor, summarize } from "./log.ts";
 import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { commitAt, resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
@@ -62,7 +62,9 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          sent back for a rewrite
   kb instructions [--repo .]             the instruction files for a rule the user states: the global
                                          one, and the repo's CLAUDE.md and AGENTS.md
-  kb checkpointed <session-id>           record that this session saved its knowledge
+  kb checkpointed <session-id>           record that this session saved its knowledge. A recovery adds
+                                         --ended <time>, the end it read: a session that ran again
+                                         since then is not marked
   kb log [--session id] [--since days]   what the log of this machine says of each note: how often a
                                          session got it, opened it and judged it. With --session, the
                                          events of one session in time order. The log keeps 12 months
@@ -119,7 +121,7 @@ interface Args {
   flags: Map<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["as-of", "forget", "recovered-from", "repo", "scope", "to", "port", "session", "since"]);
+const VALUE_FLAGS = new Set(["as-of", "ended", "forget", "recovered-from", "repo", "scope", "to", "port", "session", "since"]);
 
 function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -485,15 +487,22 @@ function cmdBudget(store: Store, args: Args): Output {
 
 function cmdCheckpointed(store: Store, args: Args): Output {
   const session = args.positional[0];
-  if (!session) throw new KbError("usage: kb checkpointed <session-id>");
+  if (!session) throw new KbError("usage: kb checkpointed <session-id> [--ended <time>]");
   // A session that ended with no checkpoint, and that another session now saves, is recovered. A
   // session that was resumed and saves itself is checkpointed, as any session is.
   const mark = store.exists() ? unsavedSession(store, session) : null;
   const by = sessionOf(args.flags.get("session"));
+  // A recovery names the end of the session that it read: the `ended` of `kb-transcript`.
+  const read = args.flags.get("ended");
   // The session was resumed while another session recovered it. What it learns from now on is
   // not in the notes of that recovery, so only the session itself can say that it is saved.
-  if (mark === null && by !== undefined && by !== session && store.exists() && isLive(store, session)) {
-    throw new KbError(`session ${session} runs again: the user resumed it. Nothing was recorded. It gets a new record when it ends.`);
+  if (mark === null && (read !== undefined || (by !== undefined && by !== session)) && store.exists() && isLive(store, session)) {
+    throw new KbError(`session ${session} runs again: the user resumed it. Nothing was recorded. It gets a new record when it ends. Recover it again then.`);
+  }
+  // It was resumed, and it ended again in that time. The record is now of a longer session than
+  // the one that the recovery read, so it stays for a second recovery.
+  if (mark !== null && read !== undefined && !sameTime(mark.ended, String(read))) {
+    throw new KbError(`session ${session} ran again and ended at ${mark.ended}, after this recovery read it. Nothing was recorded. Recover it again: /kb:recover reads what it said since.`);
   }
   const recovered = mark !== null && by !== session;
   if (store.exists()) markSaved(store, session);
@@ -502,6 +511,9 @@ function cmdCheckpointed(store: Store, args: Args): Output {
   else logEvent(store, { ev: "checkpoint", session });
   return { json: { session, recorded: store.exists(), ...(recovered ? { recovered: true } : {}) }, text: `recorded ${session}` };
 }
+
+/** Two times of a mark that are the same moment, however they are written. */
+const sameTime = (a: string, b: string) => a === b || Date.parse(a) === Date.parse(b);
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -533,8 +545,12 @@ function eventText(event: Logged): string {
       case "write": return `${e.op} ${e.note}${e.from ? ` (recovered from ${e.from})` : ""}`;
       case "verdict": return `${e.verdict} ${e.note}`;
       case "ended": return `after ${e.reason}, ${e.checkpoint ? "with a checkpoint" : "no checkpoint"}`;
-      // A line of an older kb has the reason only: it says that a session ended with no checkpoint.
-      case "unsaved": return [typeof e.prompts === "number" ? `worth a recovery: ${count(e.prompts, "prompt", "prompts")}, ${count(e.failed ?? 0, "failed tool call", "failed tool calls")}` : "worth a recovery", e.reason ? `ended after ${e.reason}` : ""].filter(Boolean).join(", ");
+      case "unsaved": {
+        // A line of an older kb has no measure: it says only that a session ended with no checkpoint.
+        if (!saysWorth(e)) return `${e.reason ? `after ${e.reason}, ` : ""}no checkpoint`;
+        const measure = typeof e.prompts === "number" ? `${count(e.prompts, "prompt", "prompts")}, ${count(e.failed ?? 0, "failed tool call", "failed tool calls")}` : "a transcript too large to measure";
+        return `worth a recovery: ${measure}${e.reason ? `, ended after ${e.reason}` : ""}`;
+      }
       case "recover": return `${count(e.notes.length, "note", "notes")}${e.by ? `, by session ${e.by}` : ""}`;
       case "forgotten": return `${FORGOTTEN[e.why as ForgetWhy] ?? e.why}${e.worth ? ", was worth a recovery" : ""}${e.by ? `, by session ${e.by}` : ""}`;
       default: return typeof e.note === "string" ? e.note : "";

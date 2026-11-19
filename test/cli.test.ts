@@ -697,8 +697,11 @@ describe("kb log", () => {
     logAt(store, at(10), { ev: "unsaved", session: "kept", scope: SCOPE, reason: "other", prompts: 1, failed: 4 });
     logAt(store, at(10), { ev: "unsaved", session: "kept", scope: SCOPE, reason: "other", prompts: 1, failed: 4 });
     logAt(store, at(11), { ev: "ended", session: "kept", scope: SCOPE, reason: "prompt_input_exit", checkpoint: false });
-    // A transcript too large to measure at a start has no counts.
-    logAt(store, at(12), { ev: "unsaved", session: "dropped", scope: SCOPE, reason: "other" });
+    // A transcript too large to measure at a start has no counts, and says so.
+    logAt(store, at(12), { ev: "unsaved", session: "dropped", scope: SCOPE, reason: "other", large: true });
+    // An older kb wrote this line at each /clear with no checkpoint, and measured nothing. It is
+    // a session end with no checkpoint, and no session that is worth a recovery.
+    logAt(store, at(12), { ev: "unsaved", session: "before", reason: "clear" });
     logAt(store, at(13), { ev: "forgotten", session: "empty", scope: SCOPE, why: "short" });
     logAt(store, at(14), { ev: "forgotten", session: "lost", scope: SCOPE, why: "gone" });
     logAt(store, at(15), { ev: "forgotten", session: "dropped", scope: SCOPE, why: "user", worth: true, by: "now" });
@@ -707,13 +710,15 @@ describe("kb log", () => {
     // A why that a later kb writes is not counted under a name of this one.
     logAt(store, at(18), { ev: "forgotten", session: "later", why: "merged" } as never);
 
-    expect(kb(store, ["log", "--json"]).json).toMatchObject({ checkpoints: 1, ended: { all: 6, checkpointed: 1 }, unsaved: 2, recovered: 1, forgotten: { short: 1, user: 1, aged: 1, gone: 1, worth: 2 } });
-    expect(kb(store, ["log"]).stdout).toContain("\nends 6 ended, 1 with a checkpoint | 2 worth a recovery, 1 recovered, 4 forgotten (1 too short, 1 by the user, 1 aged out, 1 no transcript), 2 of them worth a recovery\n");
+    expect(kb(store, ["log", "--json"]).json).toMatchObject({ checkpoints: 1, ended: { all: 7, checkpointed: 1 }, unsaved: 2, recovered: 1, forgotten: { short: 1, user: 1, aged: 1, gone: 1, worth: 2 } });
+    expect(kb(store, ["log"]).stdout).toContain("\nends 7 ended, 1 with a checkpoint | 2 worth a recovery, 1 recovered, 4 forgotten (1 too short, 1 by the user, 1 aged out, 1 no transcript), 2 of them worth a recovery\n");
     const lines = (session: string) => kb(store, ["log", "--session", session]).stdout;
     expect(lines("saved")).toMatch(/  ended +after clear, with a checkpoint$/m);
     expect(lines("kept")).toMatch(/  unsaved +worth a recovery: 1 prompt, 4 failed tool calls, ended after other$/m);
     expect(lines("kept")).toMatch(/  recover +1 note, by session now$/m);
-    expect(lines("dropped")).toMatch(/  unsaved +worth a recovery, ended after other$/m);
+    expect(lines("dropped")).toMatch(/  unsaved +worth a recovery: a transcript too large to measure, ended after other$/m);
+    expect(lines("before")).toMatch(/  unsaved +after clear, no checkpoint$/m);
+    expect(lines("before")).not.toContain("worth a recovery");
     expect(lines("dropped")).toMatch(/  forgotten +the user said so, was worth a recovery, by session now$/m);
     expect(lines("empty")).toMatch(/  forgotten +too short to recover$/m);
     expect(lines("lost")).toMatch(/  forgotten +its transcript is gone$/m);

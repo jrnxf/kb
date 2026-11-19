@@ -1,14 +1,16 @@
 // SessionEnd hook, for every reason a session ends: /clear, an exit, a logout, a switch to another
 // session, and the end of a headless run. Nothing can run before the end, so this records a session
 // that ended with no checkpoint. A later SessionStart then says that /kb:recover saves it.
-// SessionEnd has a 1.5 second limit and its output is discarded, so this does one small write,
-// and one line in the event log: `ended`, for every end, with or without a checkpoint.
+// SessionEnd has a 1.5 second limit and its output is discarded. The record is one small write,
+// and it comes before any git call: on a large repo or a slow disk the hook is killed in git, and
+// the session still has its record. Then come the repo of the record, and one line in the event
+// log: `ended`, for every end, with or without a checkpoint.
 
 import { existsSync } from "node:fs";
 import { RUN_ENV } from "../cli/audit-run.ts";
 import { hookWho, logEvent } from "../cli/log.ts";
 import { mainCheckout, resolveRepo } from "../cli/scope.ts";
-import { isSaved, recordUnsaved } from "../cli/session.ts";
+import { isSaved, recordPlace, recordUnsaved } from "../cli/session.ts";
 import { Store } from "../cli/store.ts";
 
 try {
@@ -25,15 +27,16 @@ try {
     // A later kb may get a reason that this one does not know. Every end is recorded.
     const reason = typeof input.reason === "string" && input.reason ? input.reason.slice(0, 40) : "unknown";
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : null;
+    const saved = isSaved(store, input.session_id);
+    const unsaved = !saved && cwd !== null && typeof input.transcript_path === "string";
+    // The record first, with what the input says. A recovery reads the repo from the folder
+    // itself when the record has none, so a hook that is killed after this line loses nothing.
+    if (unsaved) recordUnsaved(store, { session: input.session_id, transcript: input.transcript_path, cwd, ended: new Date().toISOString(), reason });
     // The scope is read now: the folder of a finished run, such as a worktree, is often deleted
     // later. A folder that is gone already has no scope to read, and the mark says nothing of it.
     const repo = cwd && existsSync(cwd) ? resolveRepo(cwd, store, { record: false }) : null;
-    const saved = isSaved(store, input.session_id);
-    if (!saved && cwd && typeof input.transcript_path === "string") {
-      // The main checkout of the repo stays when a worktree goes, so the mark keeps both folders.
-      const place = repo ? { scope: repo.scope, root: repo.root, main: repo.root ? mainCheckout(repo.root) : null } : {};
-      recordUnsaved(store, { session: input.session_id, transcript: input.transcript_path, cwd, ended: new Date().toISOString(), reason, ...place });
-    }
+    // The main checkout of the repo stays when a worktree goes, so the mark keeps both folders.
+    if (unsaved && repo) recordPlace(store, input.session_id, { scope: repo.scope, root: repo.root, main: repo.root ? mainCheckout(repo.root) : null });
     // Nobody measured the session yet, so the log says only that it ended. A later start, or
     // /kb:recover, measures it and logs `unsaved` when it is worth a recovery.
     logEvent(store, { ev: "ended", ...hookWho(input), ...(repo ? { scope: repo.scope ?? "global" } : {}), reason, checkpoint: saved });

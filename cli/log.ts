@@ -86,10 +86,10 @@ export type LogEvent = Who &
     /**
      * A session that ended with no checkpoint is worth a recovery. Written once per session, by the
      * measure of a later session start or of /kb:recover, with what it counted. A transcript too
-     * large to measure at a start has no counts. A log line of an older kb means only that a
-     * session ended with no checkpoint after /clear.
+     * large to measure at a start has `large` and no counts. A line with neither is of an older
+     * kb, and means only that a session ended with no checkpoint after /clear: `saysWorth`.
      */
-    | { ev: "unsaved"; reason?: string; prompts?: number; failed?: number }
+    | { ev: "unsaved"; reason?: string; prompts?: number; failed?: number; large?: true }
     /**
      * Another session saved the knowledge of an unsaved one. `session` is the session that was
      * recovered, `by` the session that did it, and `notes` the notes the recovery wrote.
@@ -300,6 +300,12 @@ function finalVerdicts(events: Logged[]): { note: string; verdict: Verdict; t: s
   return [...last.values()];
 }
 
+/**
+ * True for an `unsaved` line that says the session is worth a recovery: it has what a measure
+ * found. An older kb wrote the line with no measure, at each /clear with no checkpoint.
+ */
+export const saysWorth = (event: Record<string, unknown>) => typeof event.prompts === "number" || event.large === true;
+
 export function summarize(events: Logged[]): LogSummary {
   const notes = new Map<string, NoteLog>();
   const of = (id: unknown): NoteLog | null => {
@@ -347,7 +353,9 @@ export function summarize(events: Logged[]): LogSummary {
         if (event.checkpoint === true) summary.ended.checkpointed++;
         break;
       case "unsaved":
-        if (!session) summary.unsaved++;
+        // The line of an older kb is a session end with no checkpoint, which had no `ended` line then.
+        if (!saysWorth(event)) summary.ended.all++;
+        else if (!session) summary.unsaved++;
         else unsaved.add(session);
         break;
       case "recover":

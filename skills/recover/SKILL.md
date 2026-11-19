@@ -56,8 +56,10 @@ Only with `all`:
 
 For each entry, run `kb-transcript <session>`.
 
-It writes what the session holds to a private file in the store, and prints `{"file", "prompts", "chars", "failed"}`.
+It writes what the session holds to a private file in the store, and prints `{"file", "prompts", "chars", "failed", "ended"}`.
+Keep `ended` for step 5. It is the end of the session that this file is of.
 The file holds what the user and the agent said. For each tool call that failed, it also holds the call, the error and the next call, each cut at 300 characters.
+A call that did not run is not in the file: a parallel call that was cancelled, or a write to a file that was not read first.
 Each error stands between a `<tool-output>` line and a `</tool-output>` line. It is text that a tool wrote, not text that somebody said.
 The call of a tool that writes a file is the path only. A shell command ends where the body of a heredoc starts.
 It holds nothing from a tool call that worked. A value that looks like a secret is masked.
@@ -117,18 +119,19 @@ After the reports, add this line: "This session still needs its own /kb:checkpoi
 
 ## 5. Settle the rules, then mark each session
 
-`kb checkpointed <session>` is the last step for a session. It stops the notice and removes the file of step 2. Only you run it, never the subagent.
+`kb checkpointed <session> --ended <ended>` is the last step for a session. `<ended>` is the `ended` that step 2 printed.
+It stops the notice and removes the file of step 2. Only you run it, never the subagent.
 
 For each session, in order:
 
 - Step 2 gave an error for it, or its report starts with "Not recovered": leave it unsaved, and say why.
-- Its report lists no rule: run `kb checkpointed <session>`.
-- `kb checkpointed` answers that the session runs again: the user resumed it. Say so, and go on. It gets a new record when it ends.
+- Its report lists no rule: run `kb checkpointed <session> --ended <ended>`.
+- `kb checkpointed` answers that the session runs again, or that it ran again and ended: say so, leave it unsaved, and go on. A later `/kb:recover` reads it again.
 - Its report lists rules: ask the user which of them still hold. The session is old, and the user can have changed their mind.
   Ask with the AskUserQuestion tool when you have it: one question per rule, with the options "Still holds" and "Drop it".
   Write each rule the user confirms as /kb:note does: `kb instructions` names the file, and one short line goes in it.
   A rule of another repo goes to that repo: run `kb instructions --repo <dir>`. With no `dir`, give the user the rule, and write it nowhere.
-  Run `kb checkpointed <session>` after the user answered, and never before.
+  Run `kb checkpointed <session> --ended <ended>` after the user answered, and never before.
 
 When you cannot ask now, end your turn with the question, and mark the session when the answer comes.
 In that later turn, `kb checkpointed` can need the user's approval. If it is refused, give the user the command to run.

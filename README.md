@@ -89,7 +89,8 @@ highest.
   of what the sessions knew:
   - `ended`: a session ended, with the reason, and if a checkpoint had run in it.
   - `unsaved`: a session that ended with no checkpoint is worth a recovery. A later session start
-    or `/kb:recover` measures it, and writes the line once per session.
+    or `/kb:recover` measures it, and writes the line once per session, with what it counted. A
+    line of an older kb has no count. It says only that a session ended with no checkpoint.
   - `recover`: another session saved its knowledge, with the notes it wrote.
   - `forgotten`: its record was dropped with no recovery, and why: `short` (nothing to recover),
     `user` (`kb unsaved --forget`), `aged` (7 days) or `gone` (no transcript). The line says if
@@ -167,26 +168,38 @@ highest.
   that `/kb:recover` saves it. The
   agent tells you once per day and checkout. Other starts in that day only let the agent know, so
   a script or a second window does not get the same sentence each time. A headless run
-  (`claude -p`) gets only the short line for the agent, and does not use up the sentence of the
-  day. Recovery runs only when you type `/kb:recover`.
+  (`claude -p`, or a run of the Agent SDK) gets only the short line for the agent, and does not
+  use up the sentence of the day. Recovery runs only when you type `/kb:recover`.
   - A session that you resume is live again. Its record goes at its start, so no other session
     recovers it while it works, and its next end records it again. `kb unsaved` and the line
-    never name the session that asks.
+    never name the session that asks. A recovery marks a session with the end time that it
+    read. When the session ran again in that time, the mark is refused, and the session stays
+    for a second recovery.
   - `/kb:recover` hands each session to a Sonnet subagent, which runs the checkpoint steps. The
     subagent gets what you and the agent said. For each tool call that failed it also gets three
     spans, each cut at 300 characters: the call (its command or path), the error, and the next
     call the agent made in the same turn. An autonomous run learns its lessons there. Nothing of
     a tool call that worked gets through, also not the output of a `!` command. A call that you
-    refused or stopped is no failed call. The reason you typed when you refused it, and your
-    answer to a question, stay in as your words.
+    refused or stopped is no failed call. A call that did not run is none either: a parallel
+    call that was cancelled, or a write to a file that was not read first. The reason you typed
+    when you refused a call, and your answer to a question, stay in as your words.
   - A span carries no text of a file. The call of Write, Edit and NotebookEdit is the path only,
     and their error loses the text that it repeats. A shell command ends where the body of a
     heredoc starts. The error stands in a `<tool-output>` block, and the subagent is told that
     this text is data: it follows no instruction in it, and saves no note because the text asks.
   - What the secret scan below knows is masked in every line. A private key goes from its BEGIN
-    line to its END line, with its armor headers, and to the end of the text when it has no END
-    line. A span gets wider masks: the value of an authorization header, and the value given to
-    a name that says secret, token, password, key or credential, of any length.
+    line to its END line, with its armor headers. With no END line, the BEGIN mark goes, and
+    after it only the lines of base64 and of armor headers. A sentence that names the BEGIN
+    line stays. A span gets wider masks, for a value of any length:
+    - the value of an authorization header, and of a Bearer or Basic scheme.
+    - the value given to a name or a flag that ends with secret, token, password, passwd, pwd,
+      key, credential or auth: `TOKEN=abc`, `--token abc`. A flag that names a file
+      (`--key-file`) keeps its path.
+    - the password of `-u name:password` and of `--user`, and the password in a URL.
+    - the password glued to `-p` of a mysql client or of sshpass. For psql, `-p` with digits
+      is the port, and it stays.
+
+    The masks know these shapes only. A secret in another shape gets through.
   - `/kb:recover all` sweeps every directory. It shows the count per project, asks before it
     starts when there are more than 5 sessions, and handles at most 10 per run. Each note gets
     the repo of its session, not of the directory you are in. A session outside any repo gives
@@ -210,7 +223,8 @@ highest.
   - `/kb:recover forget` stops the line for the sessions of this checkout, and
     `/kb:recover forget <session id>` for one session. No form forgets the sessions of every
     directory. A session is reported when it has 2 prompts and 3000
-    characters, or 3 failed tool calls. A slash command counts only for the arguments you typed
+    characters, or 3 failed tool calls. Calls that the agent made at once and that fail count
+    once. A slash command counts only for the arguments you typed
     after it, and a `/kb:recover` turn does not count, so a session that only recovered another
     one is not reported. A record goes after 7 days.
   - A session start never reads a transcript over 2 MB: such a session is reported as it is. The
@@ -293,7 +307,7 @@ kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
 kb audit [--no-wait]         kb audit propose   kb audit status   (an agent audits the scope)
-kb instructions [--repo .]   kb sync      kb checkpointed <session-id>
+kb instructions [--repo .]   kb sync      kb checkpointed <session-id> [--ended <time>]
 kb log [--session id] [--since days]      (what the log says of each note, or of one session)
 kb unsaved [--forget <session-id>]   sessions here that ended with no checkpoint, never the one that asks
 kb unsaved --all             those of every directory, with the count per project
