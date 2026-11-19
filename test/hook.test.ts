@@ -110,12 +110,79 @@ describe("SessionStart hook", () => {
     expect(cut.hidden.length).toBeGreaterThan(0);
     expect(cut.index.length + cut.hidden.length).toBe(33);
     expect(cut.hidden.at(-1)).toBe("g-plain");
-    expect(over).toContain(`The kb store is over its index budget here: ${cut.hidden.length} notes are hidden`);
+    // The notice counts the hidden notes of the repo apart from the global ones.
+    expect(over).toContain(`The kb store is over its index budget here: 1 note of this repo and ${cut.hidden.length - 1} global notes are hidden from the index.`);
 
     // A start outside any repo has the scope "global". A store with no note still logs the start.
     const empty = tempStore();
     runHook({ home: empty.home, stdin: JSON.stringify({ session_id: "s9", cwd: plain(), source: "clear" }) });
     expect(logged(empty)).toEqual([{ ev: "start", session: "s9", scope: "global", source: "clear", holdback: false, briefs: [], bodies: [], index: [], triggerOnly: [], hidden: [], chars: { fixed: SAVING.length, briefs: 0, index: 0, bodies: 0, total: SAVING.length } }]);
+  });
+
+  test("the notice for hidden notes says whose notes they are, and which audit makes room", () => {
+    const scope = "github.com/acme/billing";
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    const pad = (i: number) => String(i).padStart(2, "0");
+    const seeded = (repoNotes: number, globalNotes: number) => {
+      const store = tempStore();
+      writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 1000 }, holdback: 0 }));
+      for (let i = 0; i < repoNotes; i++) putNote(store, { id: `r-${pad(i)}`, scope });
+      for (let i = 0; i < globalNotes; i++) putNote(store, { id: `g-${pad(i)}`, kind: "decision" });
+      return store;
+    };
+    const start = (store: ReturnType<typeof tempStore>, cwd: string) => {
+      const out = runHook({ home: store.home, stdin: input(cwd) }).stdout;
+      const hidden: string[] = (logged(store) as any[]).at(-1).hidden;
+      return { out, repo: hidden.filter((id) => id.startsWith("r-")).length, global: hidden.filter((id) => id.startsWith("g-")).length };
+    };
+    const TELL = "Tell the user in one line, in your first reply, that";
+
+    // The notes of the repo do not fit: its own audit makes room. The global notes behind them are counted apart.
+    const own = start(seeded(60, 3), repo);
+    expect(own.repo).toBeGreaterThan(0);
+    expect(own.global).toBe(3);
+    expect(own.out).toContain(`The kb store is over its index budget here: ${own.repo} notes of this repo and 3 global notes are hidden from the index. ${TELL} /kb:audit fixes this.\n`);
+
+    // The global notes fit outside a repo, and the notes of this repo take their room: still the audit of the repo.
+    const pushed = start(seeded(14, 20), repo);
+    expect(pushed).toMatchObject({ repo: 0 });
+    expect(pushed.global).toBeGreaterThan(0);
+    expect(pushed.out).toContain(`The kb store is over its index budget here: ${pushed.global} global notes are hidden from the index. ${TELL} /kb:audit fixes this.\n`);
+
+    // The global notes do not fit on their own. An audit of the repo covers repo notes only, so the notice names the global audit.
+    const globals = seeded(14, 60);
+    const blamed = start(globals, repo);
+    expect(blamed).toMatchObject({ repo: 0 });
+    expect(blamed.global).toBeGreaterThan(20);
+    expect(blamed.out).toContain(`The global kb notes do not fit the index: ${blamed.global} global notes are hidden here, and no note of this repo is. ${TELL} /kb:audit outside any repo, the global audit, fixes this. An audit of this repo does not.\n`);
+    expect(blamed.out).not.toContain("over its index budget");
+    // Outside any repo the same store asks for the audit there, which is the global one.
+    const outside = start(globals, plain());
+    expect(outside.out).toContain(`The kb store is over its index budget here: ${outside.global} global notes are hidden from the index. ${TELL} /kb:audit fixes this.\n`);
+    for (const each of [own, pushed, blamed, outside]) expect(each.out.match(/hidden/g)).toHaveLength(1);
+  });
+
+  // HOLDBACK: this test goes with the arm.
+  test("a held-back start gives no notice for the notes that only its old limits hide", () => {
+    const store = tempStore();
+    const scope = "github.com/acme/billing";
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    putNote(store, { id: "r-trap", scope });
+    for (let i = 0; i < 25; i++) putNote(store, { id: `g-${String(i).padStart(2, "0")}` });
+    const held = runHook({ home: store.home, stdin: JSON.stringify({ session_id: "held-3", cwd: repo, hook_event_name: "SessionStart", source: "startup" }) }).stdout;
+    // The old limit of 20 global notes leaves 5 out, and the log says so. No audit changes that limit.
+    expect((logged(store) as any[]).at(-1)).toMatchObject({ holdback: true, hidden: ["g-20", "g-21", "g-22", "g-23", "g-24"] });
+    expect(held).toContain("5 global notes of lower rank are left out here.");
+    expect(held).not.toContain("/kb:audit");
+    // Notes that the new policy hides too are a reason for the notice, with the count of the new policy.
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 700 } }));
+    const free = runHook({ home: store.home, stdin: JSON.stringify({ session_id: "held-0", cwd: repo, hook_event_name: "SessionStart", source: "startup" }) }).stdout;
+    const notice = free.split("\n").find((line) => line.includes("/kb:audit"))!;
+    expect(notice).toStartWith("The global kb notes do not fit the index: ");
+    expect((logged(store) as any[]).at(-1)).toMatchObject({ holdback: false });
+    const again = runHook({ home: store.home, stdin: JSON.stringify({ session_id: "held-3", cwd: repo, hook_event_name: "SessionStart", source: "startup" }) }).stdout;
+    expect((logged(store) as any[]).at(-1)).toMatchObject({ holdback: true });
+    expect(again.split("\n")).toContain(notice);
   });
 
   // HOLDBACK: this test goes with the arm.
@@ -181,7 +248,7 @@ describe("SessionStart hook", () => {
     }
     const out = runHook({ home: store.home, stdin: input(repo), env: { CLAUDE_CONFIG_DIR: tempDir("kb-claude-") } }).stdout;
     expect(out).toContain("20 earlier sessions here ended with /clear");
-    expect(out).toContain("The kb store is over its index budget here");
+    expect(out).toContain("The global kb notes do not fit the index");
     expect(out.length).toBeGreaterThan(8800);
     expect(out.length).toBeLessThan(10000);
   });
@@ -705,16 +772,16 @@ describe("session notices", () => {
 
   test("a store over its index budget gives one line, and a store within it gives none", () => {
     const store = tempStore();
-    const repo = tempRepo();
+    const repo = plain();
     for (let i = 0; i < 12; i++) putNote(store, { id: `n-${String(i).padStart(2, "0")}`, title: "A fact with a title that takes some room in the index" });
     const line = "The kb store is over its index budget here";
-    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain(line);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain("/kb:audit");
     // A small budget: the last lines do not fit, so those notes reach no session.
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 1000 } }));
     const hidden = kb(store, ["context", "--json"], { cwd: repo }).json.hidden.length;
     expect(hidden).toBeGreaterThan(1);
     expect(hidden).toBeLessThan(12);
-    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(`${line}: ${hidden} notes are hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(`${line}: ${hidden} global notes are hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
   });
 
   test("the state directory stays out of git, also in a store made by an older version", () => {

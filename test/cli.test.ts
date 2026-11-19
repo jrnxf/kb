@@ -312,7 +312,7 @@ describe("kb add with triggers", () => {
 
   test("a saved gotcha or how-to with no trigger and no anchor, and a long body, come with warnings, never a refusal", () => {
     const store = tempStore();
-    const none = "with no trigger and no anchor loads only at the session start";
+    const none = "with no trigger and no anchor is only an index line at the session start, and nothing loads its body";
     const bare = add(store, gotcha);
     expect(bare.json.status).toBe("created");
     expect(bare.json.warnings).toEqual([`a gotcha ${none}. Give it "triggers" (cmd:, stop: or err:) or "anchors", or say in your report why it has none.`]);
@@ -325,9 +325,19 @@ describe("kb add with triggers", () => {
     const inRepo = kb(store, ["add", "--json"], { cwd: tempRepo({ remote: "git@github.com:acme/billing.git" }), stdin: JSON.stringify({ title: "Ship the export", kind: "open-work", body: "Next: write the pager." }) });
     expect(inRepo.json).toMatchObject({ status: "created" });
     expect(inRepo.json.warnings).toBeUndefined();
-    const work = add(store, { ...gotcha, title: "Move the laptops", kind: "open-work", scope: "global" });
+    const globalWork = 'open work belongs to a repo. With the scope global it is one index line in every repo session, and none shows its next step. Trash this note and save it in the repo of the work, with "scope": "repo".';
+    const work = add(store, { ...gotcha, title: "Move the laptops", kind: "open-work", scope: "global" }, tempRepo({ remote: "git@github.com:acme/billing.git" }));
     expect(work.json.status).toBe("created");
-    expect(work.json.warnings).toEqual(['open work belongs to a repo. With the scope global it is one index line in every repo session, and none shows its next step. Trash this note and save it in the repo of the work, with "scope": "repo".']);
+    expect(work.json.warnings).toEqual([globalWork]);
+    // An update from inside a repo warns too. Outside any repo, global is the one scope there is, so nothing is wrong.
+    expect(add(store, { id: work.json.id, body: "Next: the older laptop." }, tempRepo()).json.warnings).toEqual([globalWork]);
+    expect(add(store, { id: work.json.id, body: "Next: the newer laptop." }).json).toEqual({ status: "updated", id: work.json.id, path: work.json.path });
+    for (const scope of ["global", undefined]) {
+      const outside = add(store, { ...gotcha, title: `Set up the printer ${scope}`, kind: "open-work", scope });
+      expect(outside.json.status).toBe("created");
+      expect(outside.json.warnings).toBeUndefined();
+      expect(store.find(outside.json.id)!.scope).toBe("global");
+    }
     // A body of 700 characters is fine: a trigger loads it whole. One more is worth a second look.
     expect(add(store, { ...gotcha, title: "At the aim", kind: "decision", body: "x".repeat(700) }).json.warnings).toBeUndefined();
     const long = add(store, { ...gotcha, title: "Over the aim", body: "x".repeat(701) });

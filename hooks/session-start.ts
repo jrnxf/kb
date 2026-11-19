@@ -5,7 +5,7 @@
 // which notes this session got, and in what form.
 
 import { forgetSeen } from "../cli/by-path.ts";
-import { SAVE_RULE, buildContext } from "../cli/context.ts";
+import { SAVE_RULE, buildContext, contextFor } from "../cli/context.ts";
 import { hookWho, logEvent } from "../cli/log.ts";
 import { resolveRepo } from "../cli/scope.ts";
 import { isSaved } from "../cli/session.ts";
@@ -44,7 +44,6 @@ try {
   // HOLDBACK: the session id picks the arm, so a resume, a compaction and a /clear stay in one.
   const context = buildContext(store, cwd, typeof input.session_id === "string" ? input.session_id : undefined);
   const { text } = context;
-  const hidden = context.hidden.length;
   const notices: string[] = [];
 
   if (store.exists()) {
@@ -65,7 +64,18 @@ try {
     // Hook output reaches the agent only, so each line asks it to pass the message on.
     if (stale && stale.notes > STALE_NOTICE_ABOVE) notices.push(`${stale.notes} kb notes for this scope may be stale. Tell the user in one line, in your first reply, that /kb:audit checks them.`);
     // The index is how a note reaches a session. Index lines that do not fit mean notes are invisible.
-    if (hidden > 0) notices.push(`The kb store is over its index budget here: ${hidden} ${hidden === 1 ? "note is" : "notes are"} hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
+    // HOLDBACK: the arm hides notes by its old limits, which no audit changes. So the notice counts
+    // what the new policy hides, as `kb budget` does.
+    const { hiddenBy, globalAudit } = context.holdback ? contextFor(store, repo.scope, repo.root) : context;
+    const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+    // Repo notes rank first, so the notice says whose notes are hidden: an audit covers one scope only.
+    const hidden = [hiddenBy.repo > 0 ? count(hiddenBy.repo, "note") + " of this repo" : "", hiddenBy.global > 0 ? count(hiddenBy.global, "global note") : ""].filter(Boolean);
+    const verb = hiddenBy.repo + hiddenBy.global === 1 ? "is" : "are";
+    if (globalAudit) {
+      notices.push(`The global kb notes do not fit the index: ${hidden[0]} ${verb} hidden here, and no note of this repo is. Tell the user in one line, in your first reply, that /kb:audit outside any repo, the global audit, fixes this. An audit of this repo does not.`);
+    } else if (hidden.length > 0) {
+      notices.push(`The kb store is over its index budget here: ${hidden.join(" and ")} ${verb} hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
+    }
     if (text && !stale?.fresh) detached(store, ["stale", "--repo", cwd, "--quiet"]);
   }
 
@@ -98,7 +108,7 @@ try {
     bodies: context.bodies,
     index: context.index,
     triggerOnly: context.triggerOnly,
-    // In no session: the index line did not fit the character budget.
+    // In no session: the index line did not fit the character budget. HOLDBACK: or the note is over an old limit of the arm.
     hidden: context.hidden,
     chars: { fixed: output.length - briefs - index - bodies, briefs, index, bodies, total: output.length },
   });

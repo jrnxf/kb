@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { BRIEF_BODY_CHARS, BRIEF_NEXT_CHARS, FORMAT_LINE, MAX_BRIEFS, SAVE_RULE, briefBlock, budgetOf, buildContext, contextBudget, indexLine } from "../cli/context.ts";
-import { inHoldback } from "../cli/holdback.ts";
+import { BRIEF_BODY_CHARS, BRIEF_NEXT_CHARS, FORMAT_LINE, MAX_BRIEFS, SAVE_RULE, briefBlock, budgetOf, buildBudget, buildContext, contextBudget, contextFor, indexLine } from "../cli/context.ts";
+import { OLD_GLOBAL_NOTES, OLD_INDEX_LINES, inHoldback } from "../cli/holdback.ts";
 import { rememberRepo } from "../cli/repos.ts";
 import { slugify } from "../cli/note.ts";
 import { HARD_CONTEXT_CAP, type StoredNote } from "../cli/store.ts";
-import { kb, legacyUsage, logAt, plain, putNote, tempRepo, tempStore } from "./helpers.ts";
+import { ROOT, kb, legacyUsage, logAt, plain, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const REMOTE = "git@github.com:acme/billing.git";
 const SCOPE = "github.com/acme/billing";
@@ -198,16 +198,68 @@ describe("open work briefs", () => {
 
   test("a brief is the id, the kind and the title, then the Next line, then a pointer to the rest", () => {
     expect(briefBlock(note("State: half done.\nNext: write the pager, then run the suite.\nDone when it pages."))).toBe(`${HEAD}Next: write the pager, then run the suite.\n${REST}`);
-    // Any case, and after a list or an emphasis mark. The first such line counts.
-    expect(briefBlock(note("State.\nnext, after the review: merge it.\nNext: never shown."))).toBe(`${HEAD}next, after the review: merge it.\n${REST}`);
-    expect(briefBlock(note("State.\n- **Next:** merge it."))).toBe(`${HEAD}- **Next:** merge it.\n${REST}`);
-    // "Next" must be a word, and at the start of its line.
-    expect(briefBlock(note("Nextcloud is down.\nThe next step is not clear."))).toBe(`${HEAD}Nextcloud is down.\nThe next step is not clear.\nVerified 2026-03-02.`);
+    // The first such line counts, and a brief that holds the whole body has no pointer.
+    expect(briefBlock(note("Next: merge it.\nNext: never shown."))).toBe(`${HEAD}Next: merge it.\n${REST}`);
+    expect(briefBlock(note("Next: merge it."))).toBe(`${HEAD}Next: merge it.\nVerified 2026-03-02.`);
   });
 
-  test("a Next line with no step on it takes the lines below it, up to the first empty line", () => {
-    expect(briefBlock(note("State.\nNext:\n1. Point the reports at the new table.\n2. Drop the old one.\n\nDone when no query names it."))).toBe(`${HEAD}Next:\n1. Point the reports at the new table.\n2. Drop the old one.\n${REST}`);
-    expect(briefBlock(note("## Next steps\n- merge it"))).toBe(`${HEAD}## Next steps\n- merge it\nVerified 2026-03-02.`);
+  // The step that a brief shows for a body, or null when the body has no next step and the brief gives its start.
+  test.each<[string, string | null]>([
+    // The label is "Next", "Next step" or "Next steps", in any case, and a colon follows it.
+    ["Next: do b", "Next: do b"],
+    ["State.\nnext step: do b", "next step: do b"],
+    ["NEXT STEPS: do b, then c", "NEXT STEPS: do b, then c"],
+    ["Next : do b", "Next : do b"],
+    // A list mark, a number, a checkbox, a quote and bold or italic marks may come first.
+    ["- Next: do b", "- Next: do b"],
+    ["* Next: do b", "* Next: do b"],
+    ["1. Next: do b", "1. Next: do b"],
+    ["2) Next: do b", "2) Next: do b"],
+    ["- [ ] Next: do b", "- [ ] Next: do b"],
+    ["- [x] Next: do b", "- [x] Next: do b"],
+    ["1. [ ] **Next:** do b", "1. [ ] **Next:** do b"],
+    ["- **Next:** merge it.", "- **Next:** merge it."],
+    ["**Next**: merge it.", "**Next**: merge it."],
+    ["_Next steps:_ merge it.", "_Next steps:_ merge it."],
+    ["> Next: do b", "> Next: do b"],
+    // A heading mark goes, so no heading is inside the open-work section.
+    ["## Next: do b", "Next: do b"],
+    // A sentence that starts with the word is no next step. A real one further down is.
+    ["Next.js upgrade is half done.\nNext: do b", "Next: do b"],
+    ["Next week the vendor ships.\n- [ ] Next: do b", "- [ ] Next: do b"],
+    ["next, after the review: merge it.\n1. Next: do b", "1. Next: do b"],
+    ["Next steps for the vendor: call them.\nNext step: do b", "Next step: do b"],
+    ["Next.js upgrade is half done.", null],
+    ["Next week the vendor ships.", null],
+    ["Nextcloud: the sync is down.\nThe next step is not clear.", null],
+    ["Next step is to merge: do it.", null],
+    ["Next steps", null],
+    // A label with no step on its line takes the list or the paragraph below it, after any empty lines.
+    ["State.\nNext:\n1. Point the reports at the new table.\n2. Drop the old one.\n\nDone when no query names it.", "Next:\n1. Point the reports at the new table.\n2. Drop the old one."],
+    ["## Next steps\n\n- merge it\n- tag it\n\n## Done when\nThe tag is out.", "Next steps\n- merge it\n- tag it"],
+    ["### Next\n\n\nWrite the pager,\nthen run the suite.\n## Files\nsrc/a.ts", "Next\nWrite the pager,\nthen run the suite."],
+    ["**Next steps:**\n\n- [ ] merge it", "**Next steps:**\n- [ ] merge it"],
+    ["## Next step:\nmerge it", "Next step:\nmerge it"],
+    // A heading with more words is no label. A label with nothing below it is no next step.
+    ["## Next release\n\n- merge it", null],
+    ["State.\n## Next steps\n\n## Done when\nIt pages.", null],
+    ["State.\nNext:", null],
+    ["## Next steps\n\n## Files\nsrc/a.ts\nNext: do b", "Next: do b"],
+  ])("the next step of %j is %j", (body, step) => {
+    const lines = briefBlock(note(body)).split("\n");
+    expect(lines[0]).toBe(HEAD.trimEnd());
+    expect(lines.at(-1)).toStartWith("Verified 2026-03-02.");
+    const shown = lines.slice(1, -1).join("\n");
+    if (step !== null) expect(shown).toBe(step);
+    // With no next step the brief gives the start of the body, with no heading marks.
+    else expect(shown).toBe(body.replace(/^#+ /gm, ""));
+    expect(shown).not.toMatch(/^\s*#/m);
+  });
+
+  test("a brief shows no heading, and a line in a code block keeps its #", () => {
+    expect(briefBlock(note("## State\nHalf done.\n```sh\n# reset first\nmake db-reset\n```\n### Files\nsrc/a.ts"))).toBe(`${HEAD}State\nHalf done.\n\`\`\`sh\n# reset first\nmake db-reset\n\`\`\`\nFiles\nsrc/a.ts\nVerified 2026-03-02.`);
+    // A label and the list below it are the whole body: no pointer, also with an empty line between them.
+    expect(briefBlock(note("## Next steps\n\n- merge it"))).toBe(`${HEAD}Next steps\n- merge it\nVerified 2026-03-02.`);
   });
 
   test("a body with no Next line gives its first 240 characters, and a brief that holds the whole body has no pointer", () => {
@@ -270,6 +322,20 @@ describe("open work briefs", () => {
     expect(outside).toMatchObject({ briefs: ["g-work"], index: [] });
     expect(outside.text).toContain("### g-work [open-work] Title of g-work\nNext: move the laptops.\n");
     expect(outside.text).not.toContain("r-work");
+  });
+
+  test("open work is never trigger-only: a global open-work note with a trigger keeps its line in a repo", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: REMOTE });
+    putNote(store, { id: "g-work", kind: "open-work", triggers: ["cmd: setup laptops"], body: "Next: move the laptops." });
+    putNote(store, { id: "g-trap", triggers: ["cmd: setup laptops"] });
+    const inRepo = buildContext(store, repo);
+    expect(inRepo).toMatchObject({ briefs: [], index: ["g-work"], triggerOnly: ["g-trap"], hidden: [] });
+    expect(inRepo.text).toContain("\n- g-work [open-work] Title of g-work\n");
+    expect(inRepo.text).toContain("\n1 more global note loads only at its trigger");
+    expect(buildBudget(store, repo).notes.map((n) => [n.id, n.shown])).toEqual([["g-work", "index"], ["g-trap", "trigger"]]);
+    // Outside any repo it is open work of that scope, so it gets a brief there.
+    expect(buildContext(store, plain())).toMatchObject({ briefs: ["g-work"], index: [], triggerOnly: ["g-trap"] });
   });
 });
 
@@ -338,6 +404,64 @@ describe("the index", () => {
     for (const id of result.hidden) expect(result.text).not.toContain(id);
     // One more line would not fit.
     expect(result.chars + indexLine(store.find(result.hidden[0]!)!).length + 1).toBeGreaterThan(contextBudget(2000));
+  });
+
+  test("the cut takes the largest count of lines that fits, at every budget", () => {
+    const store = tempStore();
+    putNote(store, { id: "work", kind: "open-work", scope: SCOPE, body: "Next: write the pager." });
+    // Lines of many lengths, in two sections, and a count of hidden notes that loses a digit on the way.
+    for (let i = 0; i < 6; i++) putNote(store, { id: `r-${i}`, scope: SCOPE, title: `Repo fact ${"x".repeat(i * 7)}`, last_verified: daysBefore(i) });
+    for (let i = 0; i < 14; i++) putNote(store, { id: `g-${String(i).padStart(2, "0")}`, title: `Global fact ${"y".repeat((i * 13) % 40)}`, last_verified: daysBefore(i) });
+    const total = 20;
+    const at = (contextChars: number) => {
+      setConfig(store.home, { budgets: { contextChars } });
+      return contextFor(store, SCOPE);
+    };
+    const full = at(8000);
+    expect(full.index).toHaveLength(total);
+    let before = at(500);
+    expect(before.index.length).toBeLessThan(5);
+    const steps: number[] = [];
+    for (let chars = 501; before.index.length < total; chars++) {
+      const now = at(chars);
+      const budget = contextBudget(chars);
+      expect(now.chars).toBeLessThanOrEqual(budget);
+      expect(now.index).toEqual(full.index.slice(0, now.index.length));
+      expect(now.hidden).toEqual(full.index.slice(now.index.length));
+      expect(now.index.length).toBeGreaterThanOrEqual(before.index.length);
+      // A line comes in at the first budget that takes it, and no later: the text then fills the budget to the character.
+      if (now.index.length > before.index.length) {
+        expect(now.chars).toBe(budget);
+        steps.push(now.index.length - before.index.length);
+      }
+      before = now;
+    }
+    expect(before.text).toBe(full.text);
+    // The whole index has no line that counts the hidden notes. So the last line or two come in together, when that line goes.
+    expect(steps.slice(0, -1).every((step) => step === 1)).toBe(true);
+    expect(steps.at(-1)).toBeGreaterThan(1);
+    expect(steps.reduce((sum, step) => sum + step, 0)).toBeLessThanOrEqual(total);
+  });
+
+  test("a store of 4,000 notes builds its context fast: the cut does not build the text once for each line that drops", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: REMOTE });
+    for (let i = 0; i < 4000; i++) putNote(store, { id: `note-${String(i).padStart(4, "0")}`, title: `A fact with a title of some length, number ${i}`, scope: i % 4 === 0 ? SCOPE : "global", kind: i % 3 === 0 ? "decision" : "gotcha" });
+    // The best of three runs, so a pause of the machine does not fail the test. It takes about 80 ms, most of it to read the notes.
+    const best = (run: () => unknown) => Math.min(...[1, 2, 3].map(() => {
+      const started = performance.now();
+      run();
+      return performance.now() - started;
+    }));
+    for (const where of [repo, plain()]) {
+      const result = buildContext(store, where);
+      expect(result.index.length).toBeGreaterThan(50);
+      expect(result.index.length + result.hidden.length).toBe(where === repo ? 4000 : 3000);
+      expect(result.chars).toBeLessThanOrEqual(contextBudget(8000));
+      expect(best(() => buildContext(store, where))).toBeLessThan(300);
+      // The budget reads the store and the log once, as the context does.
+      expect(best(() => buildBudget(store, where))).toBeLessThan(300);
+    }
   });
 
   test("a configured budget above the SessionStart cap is clamped", () => {
@@ -472,6 +596,54 @@ describe("the hold-back arm", () => {
     expect(buildContext(store, repo, HELD)).toMatchObject({ holdback: false, briefs: ["work"], bodies: [] });
     setConfig(store.home, { holdback: 1 });
     expect(buildContext(store, repo, FREE)).toMatchObject({ holdback: true, briefs: [] });
+  });
+
+  test("a held-back start gives the notes that the commit before the briefs gave: the same bodies, index lines and length", () => {
+    // What `kb context` of commit 267e9f9 gives for the store of scripts/seed.ts: the last commit with the old policy.
+    const main: Record<string, { chars: number; bodies: string[]; index: string[]; hidden: string[] }> = JSON.parse(readFileSync(join(ROOT, "test", "holdback-main-267e9f9.json"), "utf8"));
+    const seeded = tempDir("kb-seed-");
+    sh(ROOT, process.execPath, join(ROOT, "scripts", "seed.ts"), join(seeded, "s"));
+    const home = join(seeded, "s", "store");
+    expect(Object.keys(main)).toEqual(["plain", "repos/atlas-api", "repos/ferry"]);
+    for (const [dir, old] of Object.entries(main)) {
+      const held = kb(home, ["context", "--json", "--session", HELD, "--repo", join(seeded, "s", dir)]).json;
+      expect(held.holdback).toBe(true);
+      expect(held.bodies).toEqual(old.bodies);
+      expect(held.index).toEqual(old.index);
+      // In no session: over the old limit of the index, then over the old limit of the global notes.
+      expect(held.hidden).toEqual(old.hidden);
+      expect(held.chars).toBe(old.chars);
+      expect(held).toMatchObject({ briefs: [], triggerOnly: [] });
+    }
+    // The seeded store has more bodies than the index of the new policy leaves room for, and 26 global notes over the old limit.
+    expect(main["repos/atlas-api"]!.bodies).toHaveLength(18);
+    expect(main["repos/atlas-api"]!.hidden).toHaveLength(26);
+  });
+
+  test("the arm keeps the old limits: 60 index lines, and in a repo 20 global notes in rank order", () => {
+    expect([OLD_INDEX_LINES, OLD_GLOBAL_NOTES]).toEqual([60, 20]);
+    const store = tempStore();
+    const repo = tempRepo({ remote: REMOTE });
+    const body = "x".repeat(2500);
+    const repoIds = Array.from({ length: 70 }, (_, i) => `r-${String(i).padStart(2, "0")}`);
+    const globalIds = Array.from({ length: 30 }, (_, i) => `g-${String(i).padStart(2, "0")}`);
+    repoIds.forEach((id, i) => putNote(store, { id, scope: SCOPE, body, last_verified: daysBefore(i) }));
+    // A trigger keeps a global note out of the index of the new policy. The old policy did not look at it.
+    globalIds.forEach((id, i) => putNote(store, { id, body, last_verified: daysBefore(i), triggers: i === 0 ? ["cmd: zorp --wipe"] : undefined }));
+    const held = buildContext(store, repo, HELD);
+    // Two bodies of 2,500 characters fit after the index. The index is the next 60 notes.
+    expect(held.bodies).toEqual(repoIds.slice(0, 2));
+    expect(held.index).toEqual(repoIds.slice(2, 62));
+    // In no session: 28 notes over the limit of the index, then the 10 global notes over their limit.
+    expect(held.hidden).toEqual([...repoIds.slice(62), ...globalIds]);
+    expect(held.text).toContain("\n28 more index lines are over the index budget.\n");
+    expect(held.text.trimEnd()).toEndWith("60 notes are in the index only, because the bodies did not fit. 10 global notes of lower rank are left out here. `kb show <id>` prints one note. `kb search <words>` searches every note.");
+    // Outside any repo every global note has a place: the old limit of global notes held in a repo only.
+    const outside = buildContext(store, plain(), HELD);
+    expect(outside.bodies).toEqual(globalIds.slice(0, 2));
+    expect(outside.index).toEqual(globalIds.slice(2));
+    expect(outside.hidden).toEqual([]);
+    expect(outside.text.trimEnd()).toEndWith("\n28 notes are in the index only, because the bodies did not fit. `kb show <id>` prints one note. `kb search <words>` searches every note.");
   });
 
   test("the bodies fill the room the index leaves: whole notes from the top of the ranking, and none is cut", () => {

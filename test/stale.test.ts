@@ -310,7 +310,7 @@ describe("kb budget", () => {
     expect(text).toContain("every note reaches a session");
   });
 
-  test("when notes reach no session it names as many as are hidden: the lowest ranked decisions and how-tos, never open work or a rule", () => {
+  test("when notes reach no session it names the lowest ranked decisions and how-tos, as many as make room, never open work or a rule", () => {
     const { repo, store } = fixture();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 700 } }));
     putNote(store, { id: "work", scope: SCOPE, kind: "open-work", body: "Next: write the pager." });
@@ -333,7 +333,7 @@ describe("kb budget", () => {
     expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is over its character budget\.\nTrash or merge first: howto-/);
   });
 
-  test("gotchas and conventions fill the rest of the hidden count as notes to ask about, never as notes to trim", () => {
+  test("gotchas and conventions fill the rest of the room as notes to ask about, never as notes to trim", () => {
     const { repo, store } = fixture();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 500 } }));
     putNote(store, { id: "howto", scope: SCOPE, kind: "how-to", title: title("howto") });
@@ -352,4 +352,107 @@ describe("kb budget", () => {
     expect(text).toContain("Then ask the user, because these are rules: rule-4 (convention, low rank, 5 of 7)");
   });
 
+  const pad = (i: number) => String(i).padStart(3, "0");
+  /** A time this many days before a fixed day, so that a later note ranks lower. */
+  const day = (i: number) => new Date(Date.parse("2026-01-01T12:00:00Z") - i * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const hiddenIds = (b: any): string[] => b.notes.filter((n: any) => n.shown === "hidden").map((n: any) => n.id);
+
+  test("when the global notes do not fit on their own, a repo names none of its notes: the global audit makes room", () => {
+    const { repo, store } = fixture();
+    for (let i = 0; i < 16; i++) putNote(store, { id: `r-${pad(i)}`, scope: SCOPE, kind: i < 8 ? "decision" : "how-to", title: title(`r-${pad(i)}`) });
+    for (let i = 0; i < 200; i++) putNote(store, { id: `g-${pad(i)}`, kind: i % 2 ? "decision" : "gotcha", title: title(`g-${pad(i)}`), last_verified: day(i) });
+    const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
+    // Repo notes rank first, so every hidden note is a global one. Its audit is the global audit.
+    expect(b).toMatchObject({ over: true, globalAudit: true, trim: [], ask: [], makeRoomFor: [], index: { hiddenRepo: 0 } });
+    expect(b.index.hiddenGlobal).toBeGreaterThan(100);
+    expect(b.index.hidden).toBe(b.index.hiddenGlobal);
+    for (const id of hiddenIds(b)) expect(id).toStartWith("g-");
+    expect(kb(store, ["context", "--json"], { cwd: repo }).json).toMatchObject({ hiddenBy: { repo: 0, global: b.index.hiddenGlobal }, globalAudit: true });
+    const n = b.index.hiddenGlobal;
+    const text = kb(store, ["budget"], { cwd: repo }).stdout;
+    expect(text).toEndWith(
+      [
+        `hidden   ${n} global notes`,
+        `${n} global notes reach no session here, because the global notes do not fit the index. No note of this repo is hidden, and an audit of this repo covers its own notes only.`,
+        "Run /kb:audit outside any repo: the global audit makes room. `kb budget` there lists the candidates.",
+        "",
+      ].join("\n"),
+    );
+    expect(text).not.toContain("r-0");
+    // Outside any repo, the budget lists the global candidates: the lowest ranked decisions first.
+    const g = kb(store, ["budget", "--json"]).json;
+    expect(g).toMatchObject({ scope: null, over: true, globalAudit: false, index: { hiddenRepo: 0 } });
+    expect(g.index.hiddenGlobal).toBe(g.index.hidden);
+    expect(g.makeRoomFor).toEqual(hiddenIds(g));
+    expect(g.trim.length).toBeGreaterThan(0);
+    expect(g.trim[0].id).toBe("g-199");
+    for (const d of [...g.trim, ...g.ask]) expect(d.id).toStartWith("g-");
+    expect(kb(store, ["budget"]).stdout).toContain(`hidden   ${g.index.hidden} global notes\n${g.index.hidden} global notes reach no session, because the index is over its character budget.\nTrash or merge first: g-199 (`);
+  });
+
+  test("when the global notes fit on their own, the notes of the repo take their room, and the audit of the repo makes room", () => {
+    const { repo, store } = fixture();
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 2000 } }));
+    for (let i = 0; i < 16; i++) putNote(store, { id: `r-${pad(i)}`, scope: SCOPE, kind: i < 8 ? "gotcha" : i < 12 ? "decision" : "how-to", title: title(`r-${pad(i)}`), last_verified: day(i) });
+    for (let i = 0; i < 10; i++) putNote(store, { id: `g-${pad(i)}`, title: title(`g-${pad(i)}`), last_verified: day(i) });
+    expect(kb(store, ["budget", "--json"]).json).toMatchObject({ over: false, index: { hidden: 0 } });
+    const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
+    expect(b).toMatchObject({ over: true, globalAudit: false, index: { hiddenRepo: 0 } });
+    expect(b.index.hiddenGlobal).toBeGreaterThan(0);
+    expect(b.makeRoomFor).toEqual(hiddenIds(b));
+    for (const id of b.makeRoomFor) expect(id).toStartWith("g-");
+    // The candidates are notes of the repo, the lowest ranked how-to first.
+    expect(b.trim[0]).toEqual({ id: "r-015", reason: "low rank, 16 of 26" });
+    for (const d of [...b.trim, ...b.ask]) expect(d.id).toStartWith("r-");
+    const text = kb(store, ["budget"], { cwd: repo }).stdout;
+    expect(text).toContain(`${b.index.hiddenGlobal} global note${b.index.hiddenGlobal === 1 ? " reaches" : "s reach"} no session, because the index is over its character budget.\nThe global notes fit outside a repo. Here the notes of this repo take their room, so room comes from the notes of this repo.\nTrash or merge first: r-015 (`);
+    expect(text).not.toContain("outside any repo");
+  });
+
+  test("when notes of the repo are hidden, it counts them apart from the global notes, and names repo notes only", () => {
+    const { repo, store } = fixture();
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 1500 } }));
+    for (let i = 0; i < 30; i++) putNote(store, { id: `r-${pad(i)}`, scope: SCOPE, kind: i < 20 ? "gotcha" : "how-to", title: title(`r-${pad(i)}`), last_verified: day(i) });
+    for (let i = 0; i < 4; i++) putNote(store, { id: `g-${pad(i)}`, kind: "decision" });
+    const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
+    expect(b).toMatchObject({ over: true, globalAudit: false, index: { hiddenGlobal: 4 } });
+    expect(b.index.hiddenRepo).toBeGreaterThan(10);
+    expect(b.index.hidden).toBe(b.index.hiddenRepo + 4);
+    // Room is for the hidden notes of the repo. The global notes behind them are not the business of this audit.
+    expect(b.makeRoomFor).toEqual(hiddenIds(b).filter((id) => id.startsWith("r-")));
+    for (const d of [...b.trim, ...b.ask]) expect(d.id).toStartWith("r-");
+    expect(b.trim.map((d: any) => d.id)).toEqual(Array.from({ length: 10 }, (_, i) => `r-${pad(29 - i)}`));
+    expect(b.ask.length).toBe(b.index.hiddenRepo - 10);
+    const text = kb(store, ["budget"], { cwd: repo }).stdout;
+    expect(text).toContain(`hidden   ${b.index.hiddenRepo} repo notes and 4 global notes\n${b.index.hiddenRepo} repo notes and 4 global notes reach no session, because the index is over its character budget.\nTrash or merge first: r-029 (`);
+    expect(text).not.toContain("outside any repo");
+  });
+
+  test("room is counted in characters: the short lines that leave do not make room for as many long ones", () => {
+    const store = tempStore();
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 1500 } }));
+    // Decisions that sessions open rank first, with short lines. The gotchas have long lines, and some do not fit.
+    for (let i = 0; i < 10; i++) {
+      putNote(store, { id: `d-${i}`, kind: "decision" });
+      logAt(store, `2026-02-${String(10 + i).padStart(2, "0")}T00:00:00Z`, { ev: "show", note: `d-${i}`, why: "task" });
+    }
+    for (let i = 0; i < 20; i++) putNote(store, { id: `g-${pad(i)}`, title: title(`g-${pad(i)}`), last_verified: day(i) });
+    const b = kb(store, ["budget", "--json"]).json;
+    const row = (id: string) => b.notes.find((n: any) => n.id === id);
+    const hidden = hiddenIds(b);
+    expect(hidden.length).toBeGreaterThan(3);
+    for (const id of hidden) expect(id).toStartWith("g-");
+    expect(b.room).toBe(b.context.budget - b.context.chars);
+    const need = hidden.reduce((sum, id) => sum + row(id).chars, 0) - b.room;
+    // One short line for each hidden note is not enough room. The list goes on until the characters are.
+    const short = row("d-0").chars;
+    expect(short * hidden.length).toBeLessThan(need);
+    expect(b.trim.map((d: any) => d.id)).toEqual(Array.from({ length: 10 }, (_, i) => `d-${i}`));
+    expect(b.ask.length).toBeGreaterThan(0);
+    expect(b.ask[0].id).toBe("g-019");
+    const freed = [...b.trim, ...b.ask].map((d: any) => row(d.id).chars);
+    const sum = (sizes: number[]) => sizes.reduce((a, c) => a + c, 0);
+    expect(sum(freed)).toBeGreaterThanOrEqual(need);
+    expect(sum(freed.slice(0, -1))).toBeLessThan(need);
+  });
 });

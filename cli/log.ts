@@ -38,7 +38,7 @@ export interface StartEvent {
   bodies: string[];
   /** Global notes that took no line, because each loads at its trigger. */
   triggerOnly?: string[];
-  /** Notes in no session: the index line did not fit the character budget. */
+  /** Notes in no session: the index line did not fit the character budget. HOLDBACK: in the arm, the notes over its old limits. */
   hidden: string[];
   /** HOLDBACK: true for a start that kept the old policy for bodies. A line of an older kb has no flag. */
   holdback?: boolean;

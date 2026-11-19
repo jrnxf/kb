@@ -98,7 +98,8 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
     "err: address already in use"  after a tool call that failed with this text in its error.
       At least ${ERR_MIN_CHARS} characters. Case does not count.
   A saved note can come with "warnings": a gotcha or a how-to with no trigger and no anchor, open
-  work with the scope "global", and a body over ${BODY_CHARS} characters. The note is stored in each case.
+  work that a repo session saves with the scope "global", and a body over ${BODY_CHARS} characters.
+  The note is stored in each case.
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
   New triggers alone do not.
   With --as-of (a full ISO time with a zone), the verification has that time and the newest commit
@@ -202,7 +203,7 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     }
     const updated = updateNote(store, input as Record<string, unknown> & { id: string }, repo, asOf);
     recovered(updated.id);
-    return added("updated", updated, store.notes().find((n) => n.id === updated.id) ?? existing);
+    return added("updated", updated, store.notes().find((n) => n.id === updated.id) ?? existing, repo.scope !== null);
   }
 
   const scope = resolveScopeInput(input.scope, repo.scope);
@@ -239,12 +240,12 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
   afterWrite(store, `kb: add ${note.id}`);
   logWrites(store, "add", [note.id]);
   recovered(note.id);
-  return added("created", { id: note.id, path }, note);
+  return added("created", { id: note.id, path }, note, repo.scope !== null);
 }
 
 /** The result of a note that `kb add` saved, with what the writer should look at again. */
-function added(status: "created" | "updated", saved: { id: string; path: string }, note: Note): Output {
-  const warnings = noteWarnings(note);
+function added(status: "created" | "updated", saved: { id: string; path: string }, note: Note, inRepo: boolean): Output {
+  const warnings = noteWarnings(note, inRepo);
   return {
     json: { status, ...saved, ...(warnings.length > 0 ? { warnings } : {}) },
     text: [`${status} ${saved.id}`, ...warnings.map((warning) => `warning: ${warning}`)].join("\n"),
@@ -462,6 +463,9 @@ function cmdVerify(store: Store, args: Args): Output {
 function cmdBudget(store: Store, args: Args): Output {
   const b = buildBudget(store, String(args.flags.get("repo") ?? "."));
   const count = (n: number, noun = "note") => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  // Repo notes rank first, so the hidden notes are counted by owner: an audit covers one scope only.
+  const hidden = [b.index.hiddenRepo > 0 ? count(b.index.hiddenRepo, "repo note") : "", b.index.hiddenGlobal > 0 ? count(b.index.hiddenGlobal, "global note") : ""].filter(Boolean).join(" and ");
+  const reach = b.index.hidden === 1 ? "reaches" : "reach";
   // No note loads its body at a session start. Each note is in one of the four rows below.
   const lines = [
     `scope    ${b.scope ?? "global only"}`,
@@ -469,10 +473,16 @@ function cmdBudget(store: Store, args: Args): Output {
     `briefs   ${b.briefs.count} of ${count(b.briefs.open, "open-work note")} here, at most ${b.briefs.limit}: the title, the next step and a pointer. ${b.briefs.chars} of ${b.briefs.budget} characters`,
     `index    ${count(b.index.lines, "line")}, one per other note, in rank order`,
     `trigger  ${count(b.index.triggerOnly, "global note")} with no line: ${b.index.triggerOnly === 1 ? "it loads" : "each loads"} at its cmd, stop or err trigger`,
-    `hidden   ${count(b.index.hidden)}`,
+    `hidden   ${hidden || "0 notes"}`,
   ];
-  if (b.over) {
-    lines.push(`${count(b.index.hidden)} ${b.index.hidden === 1 ? "reaches" : "reach"} no session, because the index is over its character budget.`);
+  if (b.globalAudit) {
+    // Repo notes rank first, so only global notes are hidden, and they do not fit outside a repo either.
+    lines.push(`${hidden} ${reach} no session here, because the global notes do not fit the index. No note of this repo is hidden, and an audit of this repo covers its own notes only.`);
+    lines.push("Run /kb:audit outside any repo: the global audit makes room. `kb budget` there lists the candidates.");
+  } else if (b.over) {
+    lines.push(`${hidden} ${reach} no session, because the index is over its character budget.`);
+    // The global notes fit on their own. Here the notes of the repo take their room, so its audit makes room.
+    if (b.scope && b.index.hiddenRepo === 0) lines.push("The global notes fit outside a repo. Here the notes of this repo take their room, so room comes from the notes of this repo.");
     if (b.trim.length > 0) lines.push(`Trash or merge first: ${b.trim.map((d) => `${d.id} (${d.reason})`).join(", ")}`);
     if (b.ask.length > 0) lines.push(`Then ask the user, because these are rules: ${b.ask.map((d) => `${d.id} (${d.kind}, ${d.reason})`).join(", ")}`);
     if (b.trim.length === 0 && b.ask.length === 0) lines.push("Nothing to take out: only open work is left.");
