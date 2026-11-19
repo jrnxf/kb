@@ -15,7 +15,7 @@
 <style>
 /*FONT_FACES*/
 /*SHARED_CSS*/
-/* The page is one agent session. Prompts type out and replies fade in as they scroll into view, once each. Green is the only accent. */
+/* The page is one agent session. Prompts type out and replies fade in as they scroll into view, once each. Green is the main accent. Blue marks a note that is named but not loaded. */
 :root { color-scheme: dark; --bg: #0a0a0b; --surface: #111113; --ink: #ededee; --soft: #c9c9ce; --mute: #85858c; --faint: #55555b; --line: #1f1f23; --line2: #2a2a2f; --sunk: #161619;
   --body: #6fd39c; --index: #93acff; --gone: #f39a5c; --r: 8px;
   --f-body: "Geist Variable", system-ui, sans-serif; --f-mono: "Geist Mono Variable", ui-monospace, Menlo, monospace; --f-display: var(--f-mono); --term-bg: #0c0c0e; --term-line: var(--line);
@@ -81,11 +81,11 @@ code { font: .87em var(--f-mono); color: var(--ink); background: var(--sunk); bo
 .tool .term-body { padding: 16px 18px 18px; }
 
 .cmds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin: 4px 0 0; }
-.cmds div { background: var(--surface); padding: 14px 16px; display: grid; gap: 2px; }
+.cmds div { background: var(--surface); padding: 14px 16px; display: grid; align-content: start; gap: 2px; }
 .cmds b { font: 500 13.5px var(--f-mono); color: var(--ink); }
 .cmds span { color: var(--mute); font-size: 14.5px; text-wrap: pretty; }
 pre { margin: 0; font: 13px/1.8 var(--f-mono); overflow-x: auto; color: var(--soft); }
-pre .c { color: var(--faint); }
+pre .c { color: var(--faint); } pre .i { color: var(--index); } pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; } pre .li { display: block; padding-left: 2ch; text-indent: -2ch; }
 
 /* the end: /clear, and the loop starts again */
 .turn.prompt .msg { background: transparent; border-color: var(--line2); }
@@ -144,7 +144,7 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how did you know to run the migrations first?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>A session last week found it out and saved a note. <b>Every later session starts with it.</b></p>
-      <p>When you state a rule, I save it in that turn. Before /clear, <code>/kb:checkpoint</code> saves the rest.</p>
+      <p>When you state a rule, I write it to CLAUDE.md in that turn. What I learn goes to kb. <code>kb add</code> refuses a note that looks like it holds a secret. Before /clear, <code>/kb:checkpoint</code> saves the rest.</p>
       <div class="tool"><div class="h"><b>loop</b><span class="args">how a note gets here</span></div><div class="b" data-w="loop"></div></div>
     </div></li>
 
@@ -162,10 +162,19 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
       <div class="tool"><div class="h"><b>growth</b><span class="args">store vs session</span></div><div class="b" data-w="growth"></div></div>
       <p>Notes also go stale, and the store says so.</p>
       <div class="cmds">
-        <div><b>/kb:audit</b><span>Changed anchors and old notes go up for review. Rules move into CLAUDE.md.</span></div>
+        <div><b>kb context</b><span>A loaded note whose file or symbol is gone is flagged at session start, before I act on it.</span></div>
+        <div><b>/kb:audit</b><span>Changed anchors and notes with no use and no check in 90 days go up for review. Rules move into CLAUDE.md.</span></div>
         <div><b>kb trash</b><span>Restore in one command. Gone after 30 days.</span></div>
         <div><b>kb sync</b><span>Give the store a remote. Every machine shares it.</span></div>
       </div>
+    </div></li>
+
+    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">so a note below the line is lost?</div></li>
+    <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
+      <p>No. When I read a file, kb names the notes on it. <b>A note reaches me where I work.</b></p>
+      <div class="tool"><div class="h"><b>Read</b><span class="args">api/webhooks.ts</span><span class="ok">✓ 2 notes</span></div><div class="b"><pre class="wrap"><span class="c">PostToolUse:Read · kb</span>
+kb has notes on api/webhooks.ts. Before you change this file, read the notes that apply with `kb show &lt;id&gt;`:<span class="li"><span class="i">- stripe-signature-check-needs-the-raw-body [gotcha]</span> Stripe signature check needs the raw body</span><span class="li"><span class="i">- refunds-reuse-the-charge-id-of-the-order [decision]</span> Refunds reuse the charge id of the order</span></pre></div></div>
+      <p>A note on a folder covers every file in it. Each note comes once per session, and again after a compaction.</p>
     </div></li>
 
     <li class="turn you" id="install"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how do I install it?</div></li>
