@@ -9,6 +9,7 @@
 .t-body { color: var(--body); background: color-mix(in oklab, var(--body) 16%, transparent); }
 .t-index { color: var(--index); background: color-mix(in oklab, var(--index) 16%, transparent); }
 .t-gone { color: var(--gone); background: color-mix(in oklab, var(--gone) 16%, transparent); }
+.t-wait { color: var(--mute); box-shadow: inset 0 0 0 1px var(--line); }
 .w { display: grid; gap: 16px; min-width: 0; }
 
 /* terminal */
@@ -73,30 +74,29 @@
 .p-field { position: relative; }
 .cell { position: absolute; left: 0; top: 0; border-radius: 3px; background: var(--k); transition: transform 700ms var(--ease-io), background-color 260ms ease, box-shadow 260ms ease; }
 .cell.body { background: var(--body); } .cell.index { background: var(--index); } .cell.gone { background: var(--gone); }
-.cell.ghost { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--gone); animation: nudge 520ms var(--ease-out) 2; }
+/* A note that waits for its trigger has no line, so its square is hollow. */
+.cell.wait { background: transparent; box-shadow: inset 0 0 0 1.5px var(--mute); }
 .cell.hot { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
-@keyframes nudge { 0%,100% { translate: 0 0; } 25% { translate: -3px 0; } 75% { translate: 3px 0; } }
 .p-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--mute); }
 .p-legend span { display: inline-flex; gap: 6px; align-items: center; } .p-legend i { width: 10px; height: 10px; border-radius: 2px; }
+.p-legend .l-wait { box-shadow: inset 0 0 0 1.5px var(--mute); } .p-legend .l-fix, .cbar .s-fix { background: repeating-linear-gradient(135deg, var(--mute) 0 2px, transparent 2px 4px); }
 .p-read { font: 12.5px/1.5 var(--f-mono); color: var(--mute); min-height: 19px; }
 .p-bars { display: grid; grid-template-columns: 96px minmax(0,1fr) 140px; gap: 10px 12px; align-items: center; font-size: 13.5px; color: var(--mute); font-variant-numeric: tabular-nums; }
 .p-bars .v { text-align: right; }
 .cbar-wrap { overflow: hidden; padding: 6px 2px; margin: -6px -2px; }
 .cbar { height: 14px; background: var(--sunk); border-radius: 4px; position: relative; }
 .cbar .seg { position: absolute; top: 0; bottom: 0; width: 100%; transform-origin: left; transition: transform 600ms var(--ease-io); border-radius: 4px; }
-.cbar .s-idx { background: var(--index); left: 0; } .cbar .s-body { background: var(--body); }
-.cbar .s-ghost { border: 1.5px dashed var(--gone); background: color-mix(in oklab, var(--gone) 14%, transparent); transition: opacity 300ms ease; }
+.cbar .s-idx { background: var(--index); } .cbar .s-body { background: var(--body); }
+/* The fixed text is striped, so it changes its width and not its scale. */
+.cbar .s-fix { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 4px 0 0 4px; transition: width 600ms var(--ease-io); }
 .cbar .edge { position: absolute; right: -1px; top: -5px; bottom: -5px; width: 2px; background: var(--ink); border-radius: 1px; }
-.ticks { display: flex; gap: 2px; height: 14px; }
-.ticks i { flex: 1; border-radius: 1.5px; background: var(--sunk); transition: background-color 200ms ease; }
-.ticks i.on { background: var(--index); }
 .p-tally { display: flex; flex-wrap: wrap; gap: 8px; min-height: 26px; } .p-tally .w-tag { font-size: 13px; padding: 3px 10px; }
-.p-tune { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 24px; border-top: 1px solid var(--line); padding-top: 16px; }
+.p-tune { display: grid; gap: 14px 24px; border-top: 1px solid var(--line); padding-top: 16px; }
 .p-tune label { display: grid; gap: 6px; font-size: 13.5px; color: var(--mute); }
 .p-tune label span { display: flex; justify-content: space-between; }
 .p-tune output { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .w input[type=range] { width: 100%; accent-color: var(--ink); }
-@media (max-width: 600px) { .p-bars { grid-template-columns: 1fr 120px; } .p-bars .lab { grid-column: 1 / -1; margin-bottom: -6px; } .p-dots { margin-left: 0; width: 100%; } .p-tune { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .p-bars { grid-template-columns: 1fr 120px; } .p-bars .lab { grid-column: 1 / -1; margin-bottom: -6px; } .p-dots { margin-left: 0; width: 100%; } }
 
 /* growth */
 .g-box { position: relative; height: 220px; border-radius: var(--r, 12px); background: var(--sunk); overflow: hidden; }
