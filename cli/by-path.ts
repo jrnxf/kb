@@ -1,19 +1,11 @@
-// Notes by path: when a session reads a file, the repo notes whose anchors name that file or a
-// folder above it. A note then reaches the agent when it works on that file, also when the note
-// has no place in the session's index.
+// Notes by path, and what each reader got. A repo note whose anchor names a file, or a folder above
+// it, loads when a session works on that file. This file finds the repo path of a file, and keeps
+// the record that gives each note to each reader once. fire.ts decides what loads.
 
-import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, posix, relative, sep } from "node:path";
-import { KINDS } from "./note.ts";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { resolveRepo } from "./scope.ts";
-import type { Store, StoredNote } from "./store.ts";
-
-/** At most this many notes are named for one Read, so a busy folder cannot flood the session. */
-export const NOTES_PER_FILE = 5;
-
-/** A title longer than this is cut. With NOTES_PER_FILE lines the notice stays far under the 10,000 character limit of a hook. */
-const TITLE_CHARS = 200;
-const PATH_CHARS = 300;
+import type { Store } from "./store.ts";
 
 /** A record of what a session got is kept this long after its last change. A session older than this is over. */
 const SEEN_DAYS = 7;
@@ -21,56 +13,74 @@ const SEEN_DAYS = 7;
 /** A session id or an agent id that is safe as a file name. A note id is a slug, so it is safe too. */
 const SAFE = /^[A-Za-z0-9_-]{1,128}$/;
 
-/** Who read the file: the session, and the subagent when a subagent read it. A subagent has its own context. */
+/** Who made the tool call: the session, and the subagent when a subagent made it. A subagent has its own context. */
 export interface Reader {
   session_id?: unknown;
   agent_id?: unknown;
 }
 
-/** An anchor's path in the form a repo-relative path has, or "" when it names no file: the root, or no path. */
-function anchorPath(anchor: string): string {
-  const hash = anchor.indexOf("#");
-  const path = posix.normalize(hash === -1 ? anchor : anchor.slice(0, hash)).replace(/\/+$/, "");
-  return path === "." ? "" : path;
+/** True when the anchor path names the file, or a folder that holds it. */
+export function covers(anchor: string, file: string): boolean {
+  return anchor !== "" && (file === anchor || file.startsWith(`${anchor}/`));
 }
 
-/** True when the anchor names the file, or a folder that holds it. The repo root names every file, so it counts as no anchor. */
-function covers(anchor: string, file: string): boolean {
-  const path = anchorPath(anchor);
-  return path !== "" && (file === path || file.startsWith(`${path}/`));
-}
-
-const real = (path: string) => {
+/**
+ * The path with every link resolved. A part that does not exist yet stays as written, under the
+ * resolved folder that holds it: a Write can name a file in a folder that it is about to make.
+ */
+const real = (path: string): string => {
   try {
     return realpathSync(path);
   } catch {
-    return path;
+    const up = dirname(path);
+    return up === path ? path : join(real(up), basename(path));
   }
 };
 
+/** True when the path is a folder that exists. */
+export function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** The nearest folder at or above the path that exists. git cannot run in a folder that is not there yet. */
+function existingFolder(path: string): string {
+  let dir = path;
+  while (!isFolder(dir) && dirname(dir) !== dir) dir = dirname(dir);
+  return dir;
+}
+
 /**
- * The notes of the file's repo whose anchors cover the file, in kind order. null when the file is
- * in no repo, or there is no store. It never writes: it runs on every Read.
+ * The path of a file in the checkout at `root`, as an anchor writes a path. null when the file is
+ * outside it. Only the folder is resolved. A file that is a link keeps the path the agent gave, so
+ * the notes on that place in the repo still apply.
  */
-export function notesForFile(store: Store, file: string): { scope: string; path: string; notes: StoredNote[] } | null {
-  if (!isAbsolute(file) || !store.exists()) return null;
-  // Only the folder is resolved. A file that is a link keeps the path the agent read, so the
-  // notes on that place in the repo still apply.
-  const folder = real(dirname(file));
-  const repo = resolveRepo(folder, store, { record: false });
+export function pathInRepo(root: string, file: string): string | null {
+  const path = relative(real(root), realFile(file)).split(sep).join("/");
+  return !path || path === ".." || path.startsWith("../") || isAbsolute(path) ? null : path;
+}
+
+/** The file with its folder resolved, so a path through a linked folder is the path in the repo. */
+export const realFile = (file: string) => join(real(dirname(file)), basename(file));
+
+/**
+ * The repo of a file and its path in that repo. null when the file is in no repo. It runs git, so
+ * a hook calls it only for a file that a note may be on. It never writes.
+ */
+export function fileInRepo(store: Store, file: string): { scope: string; path: string } | null {
+  if (!isAbsolute(file)) return null;
+  const repo = resolveRepo(existingFolder(real(dirname(file))), store, { record: false });
   if (!repo.scope || !repo.root) return null;
-  const path = relative(real(repo.root), join(folder, basename(file))).split(sep).join("/");
-  if (!path || path === ".." || path.startsWith("../") || isAbsolute(path)) return null;
-  const notes = store
-    .notes()
-    .filter((n) => n.scope === repo.scope && !n.promoted_to && n.anchors.some((a) => covers(a, path)))
-    .sort((a, b) => KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind) || a.id.localeCompare(b.id));
-  return { scope: repo.scope, path, notes };
+  const path = pathInRepo(repo.root, file);
+  return path === null ? null : { scope: repo.scope, path };
 }
 
 const seenRoot = (store: Store) => store.statePath("by-path");
 
-/** The folder that records what this reader got, one empty file per note id. null: no usable id, so nothing is recorded. */
+/** The folder that records what this reader got, one small file per record. null: no usable id, so nothing is recorded. */
 function seenDir(store: Store, reader: Reader): string | null {
   const { session_id: session, agent_id: agent } = reader;
   if (typeof session !== "string" || !SAFE.test(session)) return null;
@@ -98,67 +108,56 @@ export function forgetSeen(store: Store, session: unknown): void {
   if (dir) rmSync(dir, { recursive: true, force: true });
 }
 
-/** One line: a newline in a title must not start a list line of its own. */
-function oneLine(text: string, max: number): string {
-  const line = text.replace(/\s+/g, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 3)}...` : line;
-}
+/** "first": this call is the first to name the note, and that is recorded. "unrecorded": nothing could be recorded, so the note may come again. */
+export type Claim = "first" | "seen" | "unrecorded";
 
-/** What a Read gives the agent: the text, and the notes it names, for the event log. */
-export interface PathNotice {
-  text: string;
-  scope: string;
-  /** The repo-relative path of the file. */
-  path: string;
-  /** The ids of the notes the text names. */
-  notes: string[];
+export interface Seen {
+  has(id: string): boolean;
+  /** When the record was made, in milliseconds, or null when there is none. */
+  at(id: string): number | null;
+  claim(id: string): Claim;
 }
 
 /**
- * What the agent reads after it reads a file: the notes on the file that this reader has not got
- * yet, at most NOTES_PER_FILE. null when there is nothing new. Each named note is recorded before
- * it is returned, with a create that fails when the file exists, so of two Reads at the same time
- * only one names a note.
+ * The record of what one reader got. `claim` makes a record with a create that fails when the file
+ * exists, so of two tool calls at the same time only one gives the note. A record holds the time
+ * `now` of the call that made it.
  */
-export function byPathNotice(store: Store, file: string, reader: Reader, now = Date.now()): PathNotice | null {
-  const found = notesForFile(store, file);
-  if (!found || found.notes.length === 0) return null;
+export function seenBy(store: Store, reader: Reader, now = Date.now()): Seen {
   const dir = seenDir(store, reader);
   let ready = false;
-  /** True when this Read is the first to name the note. */
-  const claim = (id: string): boolean => {
-    if (!dir) return true;
-    if (!ready) {
-      ready = true;
-      store.ensure(); // keeps .state/ out of git in a store made by an older version
-      mkdirSync(seenRoot(store), { recursive: true });
+  return {
+    has: (id) => dir !== null && existsSync(join(dir, id)),
+    at(id) {
+      if (!dir) return null;
       try {
-        mkdirSync(dir); // fails when the folder exists, so the prune runs once per session
-        prune(store, dir, now);
+        const file = join(dir, id);
+        // A record that another call is writing this moment is still empty. The time of the file says the same.
+        return Number(readFileSync(file, "utf8")) || statSync(file).mtimeMs;
       } catch {
-        // the session has a record already
+        return null;
       }
-    }
-    try {
-      writeFileSync(join(dir, id), "", { flag: "wx" });
-      return true;
-    } catch (error) {
-      // Another Read named it. Any other failure: name it, and it may come again.
-      return (error as NodeJS.ErrnoException).code !== "EEXIST";
-    }
+    },
+    claim(id) {
+      if (!dir) return "unrecorded";
+      if (!ready) {
+        ready = true;
+        store.ensure(); // keeps .state/ out of git in a store made by an older version
+        mkdirSync(seenRoot(store), { recursive: true });
+        try {
+          mkdirSync(dir); // fails when the folder exists, so the prune runs once per session
+          prune(store, dir, now);
+        } catch {
+          // the session has a record already
+        }
+      }
+      try {
+        writeFileSync(join(dir, id), String(now), { flag: "wx" });
+        return "first";
+      } catch (error) {
+        // Another call named it. Any other failure: name it, and it may come again.
+        return (error as NodeJS.ErrnoException).code === "EEXIST" ? "seen" : "unrecorded";
+      }
+    },
   };
-  const named: StoredNote[] = [];
-  let more = 0;
-  for (const note of found.notes) {
-    if (dir && existsSync(join(dir, note.id))) continue;
-    if (named.length === NOTES_PER_FILE) more++;
-    else if (claim(note.id)) named.push(note);
-  }
-  if (named.length === 0) return null;
-  const lines = [
-    `kb has notes on ${oneLine(found.path, PATH_CHARS)}. Before you change this file, read the notes that apply with \`kb show <id>\`:`,
-    ...named.map((n) => `- ${n.id} [${n.kind}] ${oneLine(n.title, TITLE_CHARS)}`),
-  ];
-  if (more > 0) lines.push(`${more} more. \`kb search\` finds them.`);
-  return { text: lines.join("\n"), scope: found.scope, path: found.path, notes: named.map((n) => n.id) };
 }

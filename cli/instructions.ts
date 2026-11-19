@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { KbError } from "./note.ts";
 import { repoRoot } from "./repos.ts";
-import type { Store } from "./store.ts";
+import { type Store, tilde } from "./store.ts";
 
 export interface InstructionsFile {
   /** The path as the config gives it, such as ~/.claude/CLAUDE.md. */
@@ -19,8 +19,6 @@ export interface InstructionsFile {
   /** True when the repo has no instruction file yet, so Apply creates it. */
   create?: boolean;
 }
-
-const tilde = (path: string) => (path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path);
 
 /** The path with the home folder written as ~, for the page and the CLI. */
 export const shortPath = (path: string) => (path.startsWith(`${homedir()}/`) ? `~${path.slice(homedir().length)}` : path);

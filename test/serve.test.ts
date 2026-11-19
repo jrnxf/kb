@@ -51,12 +51,15 @@ describe("kb serve", () => {
   test("an edit changes the note, counts as a verification and is committed", async () => {
     const store = tempStore();
     sh(store.home, "git", "init", "-q", "-b", "main");
-    putNote(store, { id: "a", title: "Old title", body: "old", anchors: ["src/a.ts"] });
+    putNote(store, { id: "a", title: "Old title", body: "old", anchors: ["src/a.ts"], triggers: ["cmd: zorp --wipe", "err: flux capacitor underflow"] });
     const { call } = start(store);
-    const saved = await call("PUT", "/api/notes/a", { title: "New title", kind: "decision", confidence: "high", body: "new body", scope: "other", id: "evil", created: "1999-01-01T00:00:00Z" });
+    // The page shows the triggers, and its edit form has no field for them.
+    expect((await call("GET", "/api/page")).json.notes[0].triggers).toEqual(["cmd: zorp --wipe", "err: flux capacitor underflow"]);
+    const saved = await call("PUT", "/api/notes/a", { title: "New title", kind: "decision", confidence: "high", body: "new body", scope: "other", id: "evil", created: "1999-01-01T00:00:00Z", triggers: ["cmd: other"] });
     expect(saved.status).toBe(200);
     const note = store.find("a")!;
-    expect(note).toMatchObject({ id: "a", title: "New title", kind: "decision", confidence: "high", body: "new body", scope: "global", created: "2026-01-01T00:00:00Z", anchors: ["src/a.ts"] });
+    // An edit in the page never drops or changes the triggers and the anchors: only the CLI writes them.
+    expect(note).toMatchObject({ id: "a", title: "New title", kind: "decision", confidence: "high", body: "new body", scope: "global", created: "2026-01-01T00:00:00Z", anchors: ["src/a.ts"], triggers: ["cmd: zorp --wipe", "err: flux capacitor underflow"] });
     expect(note.last_verified > "2026-01-01T00:00:00Z").toBe(true);
     expect(store.find("evil")).toBeUndefined();
     expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe("kb: update a");

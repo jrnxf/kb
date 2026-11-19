@@ -15,6 +15,8 @@ export interface PageNote {
   verified_at_commit?: string;
   promoted_to?: string;
   anchors: string[];
+  /** When the note loads outside the session start: `cmd: ...`, `stop: ...` and `err: ...`. */
+  triggers: string[];
   /** The markdown, for the edit form. */
   body: string;
   /** The body as HTML. Raw HTML in the markdown is escaped, so the page can insert it as is. */

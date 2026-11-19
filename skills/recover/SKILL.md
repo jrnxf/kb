@@ -40,6 +40,8 @@ For each entry, oldest first, start one subagent with the Agent tool: `subagent_
 > Run one `kb` command per call. Pass `--repo <cwd>` to every `kb add` and `kb search`.
 > Pass `--as-of <ended>` to every `kb add`. It records the note as verified when the session ended, not today.
 > Pass `--recovered-from <session>` to every `kb add` too. It records the note in the old session, so a second recovery does not add it again.
+> Give every gotcha and how-to a trigger or an anchor, as step 3 says, or one line in the report that says why it has none.
+> Take a `cmd:` or an `err:` text only from words that the conversation shows. Do not guess a command or an error text.
 > Set `"confidence": "low"`: nobody can check an old conversation against today's code, and its tool output is gone.
 > Use `"medium"` only when the conversation shows that the fact was verified.
 > Write no instruction file. For a rule the user stated, write nothing: list it in the report under **Rules**, with the rule as one line and the words "not written".

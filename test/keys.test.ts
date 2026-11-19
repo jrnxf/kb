@@ -222,3 +222,32 @@ describe("keys on a phone", () => {
     await until(async () => (await selected(page)) !== first, "the selection moves");
   });
 });
+
+describe("a page with data from an older kb serve", () => {
+  test("a note with no list of triggers still opens", async () => {
+    // A kb serve that started before the update serves the new page from disk, with the notes as the old code sends them.
+    const store = tempStore();
+    putNote(store, { id: "one", title: "Note one", body: "The body of one.", triggers: ["cmd: zorp --wipe"] });
+    const served = serve(store, { port: 0 });
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    page.setDefaultTimeout(3000);
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.route("**/api/page", async (route) => {
+      const response = await route.fetch();
+      const data = await response.json();
+      for (const note of data.notes) delete note.triggers;
+      await route.fulfill({ response, json: data });
+    });
+    try {
+      await page.goto(served.url);
+      await page.locator('[data-id="one"]').click();
+      await page.getByText("The body of one.").waitFor();
+      expect(await page.getByText("loads at").count()).toBe(0);
+      expect(errors).toEqual([]);
+    } finally {
+      served.stop();
+      await page.close();
+    }
+  });
+});

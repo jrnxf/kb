@@ -57,6 +57,9 @@ const DEFAULT_CONFIG: Config = {
 
 const GITIGNORE = ["INDEX.md", "index.html", "local.json", ".sync-*", "*.tmp-*", ".state/"];
 
+/** A path with a leading `~` for the home folder, as a config or a shell command writes it. */
+export const tilde = (path: string) => (path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path);
+
 /** The store's folder, always absolute: an agent that kb starts runs in another folder. */
 export function kbHome(): string {
   return resolve(process.env.KB_HOME || join(homedir(), ".kb"));
