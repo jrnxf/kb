@@ -38,7 +38,8 @@ highest.
   moment it applies:
   - `cmd: pkill -f` loads the note before a shell command that runs `pkill -f`. The command still runs.
   - `stop: git push --force` refuses the command once, with the note as the reason. The second run
-    passes. It is for a command where one run does damage.
+    passes. It is for a command where one run does damage. It refuses the first run in a session
+    also when the session has the note from a file or an error.
   - `err: address already in use` loads the note after a tool call that failed with that text in
     its error.
 

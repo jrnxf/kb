@@ -103,6 +103,13 @@ interface Shape {
 const STOP_LEAD = "kb stopped this command once, because a note says that one run can do damage. Read the note. If the command still applies, run it again: it passes the second time.";
 
 /**
+ * The name of the record that a note stopped a command for this reader. It is apart from the
+ * record of the note itself: a session that has the note from a Read, maybe as a title only, is
+ * still stopped once. A note id is a slug, so no id ends like this.
+ */
+const stopRecord = (id: string) => `${id}.stop`;
+
+/**
  * Give the reader the hits it has not got yet, at most `cap`, and record each. null when there is
  * nothing new. A `stop` note refuses the call only when its record was written: with no record the
  * same call would be refused each time.
@@ -118,7 +125,8 @@ function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: num
   let rest = 0;
   for (const hit of [...hits].sort(byOrder)) {
     const { id } = hit.note;
-    if (taken.has(id) || seen.has(id)) continue;
+    const stops = hit.kind === "stop" && !seen.has(stopRecord(id));
+    if (taken.has(id) || (!stops && seen.has(id))) continue;
     taken.add(id);
     if (fires.length === cap) {
       rest++;
@@ -126,11 +134,18 @@ function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: num
     }
     const note = load(store, hit.note);
     if (!note) continue;
-    const claim = seen.claim(id);
-    if (claim === "seen") continue;
-    // A stop that left no record loads as a plain command note.
-    const kind = hit.kind === "stop" && claim !== "first" ? "cmd" : hit.kind;
-    if (kind === "stop") stop = true;
+    let kind = hit.kind;
+    if (stops) {
+      const claim = seen.claim(stopRecord(id));
+      if (claim === "seen") continue;
+      // A stop that left no record loads as a plain command note.
+      if (claim === "first") stop = true;
+      else kind = "cmd";
+      seen.claim(id);
+    } else {
+      if (seen.claim(id) === "seen") continue;
+      if (kind === "stop") kind = "cmd";
+    }
     const head = `${note.id} [${note.kind}] ${oneLine(note.title, TITLE_CHARS)}`;
     // A gotcha is short and is lost when the agent does not open it, so it comes whole.
     const form = kind !== "path" || note.kind === "gotcha" ? "body" : "title";
@@ -170,10 +185,12 @@ export function beforeCommand(store: Store, command: string, cwd: string, reader
   const named: { note: TableNote; kind: "cmd" | "stop"; words: string[] }[] = [];
   const onPath: TableNote[] = [];
   for (const note of notes) {
-    const stop = note.stop.filter((words) => mayMatchCommand(words, command));
-    const cmd = note.cmd.filter((words) => mayMatchCommand(words, command));
-    const path = note.paths.some((path) => command.includes(path));
-    if ((stop.length === 0 && cmd.length === 0 && !path) || seen.has(note.id)) continue;
+    // A note that this reader has loads no more. Its stop still refuses the command, once.
+    const has = seen.has(note.id);
+    const stop = has && (note.stop.length === 0 || seen.has(stopRecord(note.id))) ? [] : note.stop.filter((words) => mayMatchCommand(words, command));
+    const cmd = has ? [] : note.cmd.filter((words) => mayMatchCommand(words, command));
+    const path = !has && note.paths.some((path) => command.includes(path));
+    if (stop.length === 0 && cmd.length === 0 && !path) continue;
     for (const words of stop) named.push({ note, kind: "stop", words });
     for (const words of cmd) named.push({ note, kind: "cmd", words });
     if (path) onPath.push(note);

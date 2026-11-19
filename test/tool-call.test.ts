@@ -215,11 +215,16 @@ describe("a stop trigger refuses the command once", () => {
     expect(logged(store).map((e) => e.kind)).toEqual(["cmd", "cmd"]);
   });
 
-  test("a note that the session has from another trigger does not stop the command", () => {
+  test("a session that has the note from another trigger is still stopped once, and gets the note no third time", () => {
     const { store, repo } = fixture();
-    putNote(store, { id: "frob-reset", triggers: ["stop: frobnicate reset", "err: database is gone"] });
-    expect(failed(store.home, repo, "Exit code 1\nfatal: database is gone").context).toContain("### frob-reset ");
+    putNote(store, { id: "frob-reset", scope: SCOPE, kind: "how-to", anchors: ["src/pay.ts"], triggers: ["stop: frobnicate reset", "err: database is gone"] });
+    // The edit gave only the title. One run of the command does damage, so the stop must not rely on it.
+    expect(edit(store.home, repo, join(repo, "src/pay.ts")).context).toContain("- frob-reset [how-to]");
+    expect(bash(store.home, repo, "frobnicate reset").deny).toContain("### frob-reset [how-to]");
     expect(bash(store.home, repo, "frobnicate reset")).toEqual({});
+    expect(failed(store.home, repo, "Exit code 1\nfatal: database is gone")).toEqual({});
+    expect(edit(store.home, repo, join(repo, "src/pay.ts"))).toEqual({});
+    expect(logged(store).map((e) => [e.kind, e.form, e.tool])).toEqual([["path", "title", "Edit"], ["stop", "body", "Bash"]]);
   });
 
   test("a stop comes first, and the other notes of the call come with it in the reason", () => {
