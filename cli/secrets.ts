@@ -3,6 +3,8 @@
 
 import { KbError } from "./note.ts";
 
+const URL_PASSWORD = "a password in a URL";
+
 /**
  * Token formats with a fixed shape. Each pattern needs the full length of a real token, so a note
  * that names a format ("GitHub tokens start with ghp_") still saves.
@@ -24,7 +26,7 @@ const PATTERNS: { kind: string; re: RegExp }[] = [
   // A password in a URL, as in scheme://user:password@host. A placeholder such as <password> or
   // ${PASSWORD} is not a secret, so the password must be plain characters. The user can be empty,
   // as in redis://:password@host. Bounded repeats keep a long line from a slow match.
-  { kind: "a password in a URL", re: /\b[a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,100}:[A-Za-z0-9._~%!*+-]{6,}@/i },
+  { kind: URL_PASSWORD, re: /\b[a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,100}:[A-Za-z0-9._~%!*+-]{6,}@/i },
 ];
 
 /**
@@ -51,6 +53,38 @@ export function findSecret(text: string): { kind: string; line: number } | null 
     for (const match of line.matchAll(ASSIGNED)) if (looksRandom(match[1]!)) return { kind: "a secret value", line: i + 1 };
   }
   return null;
+}
+
+/**
+ * A private key from its first line to its last. `findSecret` sees the first line only, and the
+ * lines of the key itself have no shape of their own. The key can come as lines, or as one line
+ * with `\n` written out, as in a JSON file.
+ */
+const KEY_BLOCK = /-----BEGIN ((?:[A-Z]+ )*PRIVATE KEY(?: BLOCK)?)-----(?:(?:\s|\\n)*[A-Za-z0-9+/=]{20,})*(?:(?:\s|\\n)*[A-Za-z0-9+/=]*(?:\s|\\n)*-----END \1-----)?/g;
+
+const masked = (kind: string) => `<masked: ${kind}>`;
+/** What stands in for a line that still holds a secret after the masks. */
+export const LINE_LEFT_OUT = "<a line that held a secret was left out>";
+
+function maskLine(line: string): string {
+  let out = line;
+  for (const { kind, re } of PATTERNS) {
+    // A URL keeps its scheme, user and host: only the password goes.
+    out = out.replace(new RegExp(re.source, `${re.flags}g`), (match) => (kind === URL_PASSWORD ? `${match.slice(0, match.lastIndexOf(":") + 1)}${masked("a password")}@` : masked(kind)));
+  }
+  // The name stays, so a reader still sees which value it was.
+  out = out.replace(ASSIGNED, (match, value: string) => (looksRandom(value) ? `${match.slice(0, match.length - value.length)}${masked("a secret value")}` : match));
+  // The masks and the scan read the same patterns. A line that still matches is not written at all.
+  return findSecret(out) ? LINE_LEFT_OUT : out;
+}
+
+/**
+ * A text with each secret that `findSecret` knows changed to a placeholder that names its kind.
+ * For text that kb shows to an agent and did not write itself, such as an old session. No line of
+ * the result holds a secret pattern: `findSecret` gives null for it.
+ */
+export function maskSecrets(text: string): string {
+  return text.replace(KEY_BLOCK, masked("a private key")).split("\n").map(maskLine).join("\n");
 }
 
 /**

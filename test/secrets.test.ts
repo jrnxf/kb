@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyAudit, proposeAudit } from "../cli/audit.ts";
 import type { RepoInfo } from "../cli/scope.ts";
-import { findSecret } from "../cli/secrets.ts";
+import { LINE_LEFT_OUT, findSecret, maskSecrets } from "../cli/secrets.ts";
 import { updateNote } from "../cli/write.ts";
 import { kb, putNote, sh, tempStore } from "./helpers.ts";
 
@@ -119,5 +119,51 @@ describe("a note with a secret is never written", () => {
     expect(() => applyAudit(store, "global", { picks: [{ id: "g", action: "promote", rule: secret }] })).toThrow("the rule of g looks like it holds a GitHub token");
     expect(readFileSync(file, "utf8")).toBe("# Rules\n");
     expect(store.find("g")!.promoted_to).toBeUndefined();
+  });
+});
+
+// /kb:recover shows an agent the text of an old session, which kb did not write. A mask takes the
+// place of each secret, so the rest of the line still says what happened.
+describe("maskSecrets", () => {
+  for (const [kind, fake] of Object.entries(FAKES)) {
+    test(`masks ${kind}, and the scan finds nothing in the result`, () => {
+      const text = `before\nthe command was: ${fake} --verbose\nafter`;
+      const masked = maskSecrets(text);
+      expect(findSecret(masked)).toBeNull();
+      expect(masked).toContain(kind === "a password in a URL" ? "<masked: a password>" : `<masked: ${kind}>`);
+      expect(masked).toStartWith("before\nthe command was: ");
+      expect(masked).toEndWith(" --verbose\nafter");
+    });
+  }
+
+  test("keeps the name of a value, and the scheme, the user and the host of a URL", () => {
+    expect(maskSecrets(FAKES["a secret value"]!)).toBe('API_KEY="<masked: a secret value>"');
+    expect(maskSecrets(FAKES["a password in a URL"]!)).toBe("DATABASE_URL=postgres://app:<masked: a password>@db.example.com/app");
+    expect(maskSecrets(`redis://:${rand(12)}@cache.example.com and ${FAKES["a Stripe key"]}`)).toBe("redis://:<masked: a password>@cache.example.com and <masked: a Stripe key>");
+  });
+
+  test("masks a private key from its first line to its last, as lines and as one line of a JSON file", () => {
+    const head = `-----BEGIN ${"RSA"} PRIVATE KEY-----`;
+    const tail = `-----END ${"RSA"} PRIVATE KEY-----`;
+    const body = [rand(64), rand(64), `${rand(10)}==`];
+    expect(maskSecrets(`cat key.pem\n${head}\n${body.join("\n")}\n${tail}\nexit 0`)).toBe("cat key.pem\n<masked: a private key>\nexit 0");
+    expect(maskSecrets(`"private_key": "${head}\\n${body.join("\\n")}\\n${tail}\\n", "id": 7`)).toBe('"private_key": "<masked: a private key>\\n", "id": 7');
+    // A key that the output cut short has no last line. The lines of the key still go.
+    expect(maskSecrets(`${head}\n${body[0]}\n${body[1]}`)).toBe("<masked: a private key>");
+    // A sentence that only names the first line keeps its words.
+    expect(maskSecrets(`The file starts with ${head} and then the key follows.`)).toBe("The file starts with <masked: a private key> and then the key follows.");
+  });
+
+  test("leaves text with no secret as it is, also a text that names a format", () => {
+    for (const text of ["GitHub tokens start with ghp_ and have 36 more characters.", "token: ${GITHUB_TOKEN}", "postgres://app:<password>@db.example.com/app", "password = process.env.DB_PASSWORD", "", "a\n\nb"]) expect(maskSecrets(text)).toBe(text);
+  });
+
+  test("a line that still holds a secret after the masks is not written", () => {
+    expect(LINE_LEFT_OUT).toBe("<a line that held a secret was left out>");
+    expect(findSecret(LINE_LEFT_OUT)).toBeNull();
+    // The result of a mask is never a secret itself, also when it is masked again.
+    const once = maskSecrets(Object.values(FAKES).join("\n"));
+    expect(maskSecrets(once)).toBe(once);
+    expect(once).not.toContain(LINE_LEFT_OUT);
   });
 });
