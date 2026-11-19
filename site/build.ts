@@ -60,5 +60,5 @@ if (faces.length !== 4) fail(`expected 4 @font-face rules (2 fonts x latin, lati
 for (const left of ["<!--FONT_PRELOADS-->", "/*FONT_FACES*/", "/*SHARED_CSS*/", "/*SHARED_JS*/", "/*SESSION*/", "/*RANK*/"]) if (html.includes(left)) fail(`placeholder ${left} is still in index.html`);
 if (/fonts\.googleapis|fonts\.gstatic/.test(html)) fail("index.html still loads Google Fonts");
 // The site is public: no LAN hosts, private IPs or local paths.
-if (/lan\.jrnxf\.co|\/Users\/|127\.0\.0\.1|192\.168\.|\b10\.\d+\.\d+\.\d+/.test(html)) fail("index.html has a local host, IP or path");
+if (/\.lan\.|\/Users\/|127\.0\.0\.1|192\.168\.|\b10\.\d+\.\d+\.\d+/.test(html)) fail("index.html has a local host, IP or path");
 console.log(`dist: index.html ${(html.length / 1024).toFixed(1)} KB, ${faces.length} font files, preloads: ${preloads.join(", ")}`);
