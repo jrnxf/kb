@@ -1,12 +1,13 @@
 // Reads a Claude Code transcript (.jsonl) and keeps what the user and the agent said. For each
-// tool call that FAILED it also keeps three short lines: the call, the error, and the next call
+// tool call that FAILED it also keeps three short spans: the call, the error, and the next call
 // the agent made. An autonomous run has one prompt, and it learns its lessons from errors.
 // Nothing of a tool call that worked gets through: a tool result is large, and it can hold a
-// secret. What `cli/secrets.ts` knows as a secret is masked in every line.
+// secret. What `cli/secrets.ts` knows as a secret is masked in every line, and a span gets the
+// wider masks for tool text. An error is text that a tool wrote, so it stands in a marked block.
 // `kb-transcript <session id>` (hooks/kb-transcript.ts) writes the result for /kb:recover.
 
 import { readFileSync } from "node:fs";
-import { maskSecrets } from "../cli/secrets.ts";
+import { maskSecrets, maskToolText } from "../cli/secrets.ts";
 
 /** How much a session holds. A later session start measures it once, and the mark keeps it. */
 export interface Size {
@@ -14,7 +15,7 @@ export interface Size {
   prompts: number;
   /** The characters the user and the agent said. Headings and the name of a slash command do not count. */
   chars: number;
-  /** The tool calls that failed. A call the user rejected is not one: its reason is the user's words. */
+  /** The tool calls that failed. A call the user refused or stopped is not one: no tool gave an error. */
   failed: number;
 }
 
@@ -52,8 +53,11 @@ const RECOVER = "/kb:recover";
 // What Claude Code writes when the user stops the agent. The user typed nothing.
 const INTERRUPTED = /^\[Request interrupted by user[^\]]*\]$/;
 
-// The fixed text around the reason a user types when they reject a tool call.
-const REJECTED = "The user doesn't want to proceed with this tool use.";
+// The fixed text that starts the result of a tool call the user refused. Claude Code has two wordings.
+const REFUSED = /^The user doesn't want to (?:proceed with this tool use|take this action right now)\./;
+// The result of a call that the user stopped while it ran: the stop itself, or output that ends with it.
+const STOPPED = /^\[Request interrupted by user[^\]]*\]|\[Request interrupted by user[^\]]*\]$/;
+// The fixed text around the reason a user types when they refuse a tool call.
 const SAID = "To tell you how to proceed, the user said:";
 const AFTER_REASON = "\n\nNote: The user's next message may contain";
 
@@ -63,6 +67,16 @@ export const SPAN_LIMIT = 300;
 const READ_LIMIT = 20_000;
 /** The fields of a tool input that say what the call did. Never the new text of a file. */
 const INPUT_KEYS = ["command", "file_path", "notebook_path", "pattern", "path", "url", "query"];
+/** The tools that write a file, and the field that names the file. Their call is the path, and nothing more. */
+const FILE_TOOLS: Record<string, string> = { Write: "file_path", Edit: "file_path", MultiEdit: "file_path", NotebookEdit: "notebook_path" };
+/** A shorter text of a file is not worth a search in the error. */
+const MIN_HIDDEN = 4;
+/** The lines around an error. The text between them is what a tool wrote, never what somebody said. */
+export const OUTPUT_OPEN = "<tool-output>";
+export const OUTPUT_CLOSE = "</tool-output>";
+const LEFT_OUT = "(text of the file left out)";
+
+const flat = (text: string) => text.replace(/\s+/g, " ").trim();
 
 /** One line of at most `SPAN_LIMIT` characters. The mask comes before the cut, so no half of a secret is left. */
 function short(text: string): string {
@@ -71,15 +85,53 @@ function short(text: string): string {
     head = head.slice(0, READ_LIMIT);
     head = head.slice(0, Math.max(0, head.search(/\s\S*$/)));
   }
-  const line = maskSecrets(head.replace(/\s+/g, " ").trim());
+  const line = maskToolText(flat(head));
   return line.length > SPAN_LIMIT ? `${line.slice(0, SPAN_LIMIT)}...` : line;
 }
 
-/** A tool call in one line: the tool, then its command, path or pattern. */
-function callOf(block: Block): string {
+// The first line of a heredoc: `<<`, the word that ends it, and the rest of that line.
+const HEREDOC = /(?<!<)<<-?[ \t]*(?:"[^"\n]+"|'[^'\n]+'|\\?[A-Za-z_][\w.-]*)[^\n]*/;
+
+/** A shell command up to the body of its first heredoc. The body is the text of a file, or of a message. */
+function commandOf(command: string): string {
+  const found = HEREDOC.exec(command);
+  if (!found) return command;
+  const end = found.index + found[0].length;
+  return command.slice(end).trim() ? `${command.slice(0, end)} (heredoc body left out)` : command;
+}
+
+/** A tool call as the reader keeps it until its result comes. */
+interface Call {
+  /** The call in one line: the tool, then its command, path or pattern. */
+  text: string;
+  /** The texts that a file tool was given for the file. Its error can repeat them. */
+  hide: string[];
+}
+
+function callOf(block: Block): Call {
+  const name = block.name ?? "tool";
   const input = block.input && typeof block.input === "object" ? (block.input as Record<string, unknown>) : {};
-  const key = INPUT_KEYS.find((name) => typeof input[name] === "string" && input[name]);
-  return short(`${block.name ?? "tool"}${key ? `: ${input[key] as string}` : ""}`);
+  const pathKey = FILE_TOOLS[name];
+  if (pathKey) {
+    const path = typeof input[pathKey] === "string" ? (input[pathKey] as string) : "";
+    return { text: short(path ? `${name}: ${path}` : name), hide: fileTexts(input, pathKey) };
+  }
+  const key = INPUT_KEYS.find((each) => typeof input[each] === "string" && input[each]);
+  const value = key ? (input[key] as string) : "";
+  return { text: short(`${name}${key ? `: ${key === "command" ? commandOf(value) : value}` : ""}`), hide: [] };
+}
+
+/** Every text in the input of a file tool but the path, the longest first: the old and new text of an edit, at any depth. */
+function fileTexts(input: unknown, pathKey: string): string[] {
+  const found: string[] = [];
+  const walk = (value: unknown, key?: string) => {
+    if (typeof value === "string") {
+      if (key !== pathKey && flat(value).length >= MIN_HIDDEN) found.push(flat(value));
+    } else if (Array.isArray(value)) for (const each of value) walk(each);
+    else if (value && typeof value === "object") for (const [name, each] of Object.entries(value)) walk(each, name);
+  };
+  walk(input);
+  return found.sort((a, b) => b.length - a.length);
 }
 
 const textOf = (content: unknown): string =>
@@ -89,19 +141,34 @@ const textOf = (content: unknown): string =>
       ? content.filter((block: Block) => block?.type === "text" && typeof block.text === "string").map((block: Block) => block.text!).join("\n\n")
       : "";
 
-/** A tool call that the user stopped. It did not fail: the tool never ran. */
-const rejected = (block: Block) => block.is_error === true && textOf(block.content).startsWith(REJECTED);
+/** The text of a tool result without the tags of the harness. */
+const resultText = (block: Block) => textOf(block.content).replace(NOISE, "").replace(/<\/?tool_use_error>/g, "").trim();
+
+/** A tool call that the user refused. Their reason, when they typed one, is in its result. */
+const refused = (block: Block) => block.is_error === true && REFUSED.test(resultText(block));
+
+/** A tool call that the user refused, or stopped while it ran. It did not fail: no tool gave an error. */
+const stoppedByUser = (block: Block) => refused(block) || (block.is_error === true && STOPPED.test(resultText(block)));
 
 /** A tool call that ran and gave an error. */
-const failedCall = (block: Block) => block?.type === "tool_result" && block.is_error === true && !rejected(block);
+const failedCall = (block: Block) => block?.type === "tool_result" && block.is_error === true && !stoppedByUser(block);
 
-/** The error of a failed call in one line, without the tags of the harness. */
-const errorOf = (block: Block) => short(textOf(block.content).replace(NOISE, "").replace(/<\/?tool_use_error>/g, "")) || "(no error text)";
+/**
+ * The error of a failed call as a block of one line. The error of a file tool can repeat the text
+ * it was given for the file, which goes. A tag that would end the block goes too, so what a tool
+ * wrote cannot stand outside of it.
+ */
+function errorOf(block: Block, call: Call | undefined): string {
+  let text = flat(resultText(block));
+  for (const hidden of call?.hide ?? []) text = text.replaceAll(hidden, LEFT_OUT);
+  text = text.replace(/<\/?tool-output>/gi, "");
+  return `${OUTPUT_OPEN}\n${short(text) || "(no error text)"}\n${OUTPUT_CLOSE}`;
+}
 
-/** The reason the user typed when they rejected a tool call, or "". */
+/** The reason the user typed when they refused a tool call, or "". */
 function rejectionReason(block: Block): string {
   const text = textOf(block.content);
-  if (!rejected(block)) return "";
+  if (!refused(block)) return "";
   const at = text.indexOf(SAID);
   if (at < 0) return "";
   const reason = text.slice(at + SAID.length);
@@ -159,8 +226,8 @@ function userSaid(line: Line, asked: Set<string>): Said[] {
 export function readConversation(path: string, measure = false): Conversation {
   const turns: { role: "user" | "agent"; text: string }[] = [];
   const asked = new Set<string>();
-  /** Each tool call by its id, so a result that failed can name its call. */
-  const calls = new Map<string, string>();
+  /** Each tool call that waits for its result, by its id, so a result that failed can name its call. */
+  const calls = new Map<string, Call>();
   let prompts = 0;
   let chars = 0;
   let failed = 0;
@@ -200,25 +267,36 @@ export function readConversation(path: string, measure = false): Conversation {
         if (block?.type !== "tool_use" || !block.id) continue;
         if (block.name === "AskUserQuestion") asked.add(block.id);
         if (measure) continue;
-        calls.set(block.id, callOf(block));
+        const call = callOf(block);
+        calls.set(block.id, call);
         if (!awaiting) continue;
         // What the agent did after the error is half of the lesson.
-        add("agent", `(the next tool call)\ncall: ${calls.get(block.id)}`, 0);
+        add("agent", `(the next tool call)\ncall: ${call.text}`, 0);
         awaiting = false;
         shown = block.id;
       }
       continue;
     }
     for (const block of Array.isArray(line.message?.content) ? (line.message!.content as Block[]) : []) {
+      if (block?.type !== "tool_result") continue;
+      const id = block.tool_use_id ?? "";
+      const call = calls.get(id);
+      // The call has its result now. The text of a file that it holds is not kept to the end of the read.
+      calls.delete(id);
       if (!failedCall(block) || recovering) continue;
       failed++;
       if (measure) continue;
-      const id = block.tool_use_id ?? "";
-      add("agent", id && id === shown ? `(it failed too)\nerror: ${errorOf(block)}` : `(a tool call failed)\ncall: ${calls.get(id) ?? "(not in the transcript)"}\nerror: ${errorOf(block)}`, 0);
+      const error = errorOf(block, call);
+      add("agent", id && id === shown ? `(it failed too)\n${error}` : `(a tool call failed)\ncall: ${call?.text ?? "(not in the transcript)"}\n${error}`, 0);
       awaiting = true;
       shown = "";
     }
     for (const said of userSaid(line, asked)) {
+      // A new prompt starts other work. Its first tool call is not what the agent did about an old error.
+      if (said.kind === "prompt" || said.kind === "command") {
+        awaiting = false;
+        shown = "";
+      }
       if (said.kind === "command") {
         recovering = said.name === RECOVER;
         if (said.args && !recovering) prompts++;
