@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { contextBudget } from "../cli/context.ts";
 import { findStale } from "../cli/stale.ts";
-import { kb, legacyUsage, logAt, otherMachine, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
+import { kb, legacyUsage, logAt, otherMachine, plain, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
 
 const SCOPE = "github.com/acme/billing";
 const NOW = new Date("2026-03-01T00:00:00Z");
@@ -150,7 +150,7 @@ describe("kb stale", () => {
 
     // A new verification clears it: kb verify, or an update of the body.
     expect(kb(store, ["verify", "here"], { cwd: repo }).code).toBe(0);
-    expect(kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ id: "there", body: "The corrected text." }) }).json.status).toBe("updated");
+    expect(kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ id: "there", body: "The text as it is true now." }) }).json.status).toBe("updated");
     expect(reasons(store, repo)).toEqual([]);
     // An update of another field is no verification.
     logAt(store, "2026-02-25T00:00:00Z", { ev: "verdict", session: "s4", note: "fine", verdict: "wrong" });
@@ -195,14 +195,61 @@ describe("kb stale", () => {
     }
   });
 
-  test("duplicate: two titles share most of their words, and the newer note is the candidate", () => {
-    const { repo, store } = fixture();
-    putNote(store, { id: "first", scope: SCOPE, title: "Amounts are stored as integer cents", created: "2026-01-01T00:00:00Z", last_verified: FRESH });
-    putNote(store, { id: "second", scope: SCOPE, title: "Store amounts as integer cents", created: "2026-02-01T00:00:00Z", last_verified: FRESH });
-    putNote(store, { id: "third", scope: SCOPE, title: "Ledger rows are append-only", last_verified: FRESH });
-    const found = findStale(store, repo, NOW).candidates;
-    expect(found).toHaveLength(1);
-    expect(found[0]).toMatchObject({ id: "second", reason: "duplicate", detail: "the title is close to first" });
+  // The audit had its own measure of the title words. It missed a twin that `kb add` holds, so the
+  // two disagreed on what a twin is.
+  describe("duplicate", () => {
+    const first = { title: "Stripe signature check needs the raw body", body: "express.json() runs before the webhook route and breaks the signature check.\nMount express.raw() on the webhook route before the JSON parser." };
+    const second = { title: "The Stripe webhook route must get the raw body", body: "The JSON parser breaks the signature check when it runs first. Use express.raw() for that route." };
+
+    test("a note that says a stored fact in other words is a candidate, by the measure of kb add, and the newer note is the one", () => {
+      const { repo, store } = fixture();
+      putNote(store, { id: "first", scope: SCOPE, ...first, created: "2026-01-01T00:00:00Z", last_verified: FRESH });
+      putNote(store, { id: "second", scope: SCOPE, ...second, created: "2026-02-01T00:00:00Z", last_verified: FRESH });
+      putNote(store, { id: "third", scope: SCOPE, title: "Ledger rows are append-only", body: "A correction is a new row.", last_verified: FRESH });
+      const found = findStale(store, repo, NOW).candidates;
+      expect(found).toHaveLength(1);
+      expect(found[0]).toMatchObject({ id: "second", reason: "duplicate" });
+      expect(found[0]!.detail).toStartWith("close to first: both have ");
+      expect(found[0]!.detail).toContain("stripe");
+      // The same pair, by the same line: kb add holds the second note for the first.
+      const store2 = tempStore();
+      putNote(store2, { id: "first", scope: SCOPE, ...first });
+      expect(kb(store2, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ ...second, kind: "gotcha" }) }).json).toMatchObject({ status: "neighbors", neighbors: [{ id: "first" }] });
+    });
+
+    test("titles that share words are no candidates when the notes say different things", () => {
+      const { repo, store } = fixture();
+      putNote(store, { id: "cents", scope: SCOPE, title: "Amounts are stored as integer cents", body: "A float lost one cent in a refund of 10 items.", last_verified: FRESH });
+      putNote(store, { id: "rates", scope: SCOPE, title: "Rates are stored as integer basis points", body: "The tax table has four digits. Parse it with the decimal library.", last_verified: FRESH });
+      expect(findStale(store, repo, NOW).candidates).toEqual([]);
+    });
+
+    test("a repo note close to a global note is the candidate in the repo, whichever is newer. The global audit does not name the pair", () => {
+      const { repo, store } = fixture();
+      putNote(store, { id: "in-repo", scope: SCOPE, ...second, created: "2026-01-01T00:00:00Z", last_verified: FRESH });
+      putNote(store, { id: "everywhere", ...first, created: "2026-02-01T00:00:00Z", last_verified: FRESH });
+      expect(findStale(store, repo, NOW).candidates.map((c) => `${c.id}:${c.reason}:${c.detail.split(":")[0]}`)).toEqual(["in-repo:duplicate:close to everywhere"]);
+      expect(findStale(store, plain(), NOW).candidates).toEqual([]);
+    });
+
+    test("a note in another repo, in the trash or in an instruction file makes no candidate", () => {
+      const { repo, store } = fixture();
+      putNote(store, { id: "here", scope: SCOPE, ...second, last_verified: FRESH });
+      putNote(store, { id: "other-repo", scope: "github.com/acme/web", ...first, last_verified: FRESH });
+      putNote(store, { id: "gone", scope: SCOPE, ...first, last_verified: FRESH }, true);
+      putNote(store, { id: "moved", scope: SCOPE, ...first, last_verified: FRESH, promoted_to: "CLAUDE.md" });
+      expect(findStale(store, repo, NOW).candidates).toEqual([]);
+    });
+
+    test("three notes that say one fact give one candidate per pair, and never the oldest note", () => {
+      const { repo, store } = fixture();
+      putNote(store, { id: "a", scope: SCOPE, ...first, created: "2026-01-01T00:00:00Z", last_verified: FRESH });
+      putNote(store, { id: "b", scope: SCOPE, ...second, created: "2026-01-02T00:00:00Z", last_verified: FRESH });
+      putNote(store, { id: "c", scope: SCOPE, title: "Give the Stripe webhook the raw body", body: second.body, created: "2026-01-03T00:00:00Z", last_verified: FRESH });
+      const found = findStale(store, repo, NOW).candidates;
+      expect(found.every((c) => c.reason === "duplicate")).toBe(true);
+      expect(found.map((c) => `${c.id}>${c.detail.split(":")[0]!.replace("close to ", "")}`).sort()).toEqual(["b>a", "c>a", "c>b"]);
+    });
   });
 
   test("it checks one scope: the repo's notes in a repo, the global notes outside any repo", () => {
@@ -233,7 +280,7 @@ describe("kb verify", () => {
     const result = kb(store, ["verify", "ledger", "g", "--json"], { cwd: repo });
     const newHead = sh(repo, "git", "rev-parse", "--short", "HEAD");
     expect(result.json).toEqual({ verified: ["ledger", "g"], commit: newHead });
-    expect(store.find("ledger")).toMatchObject({ verified_at_commit: newHead, body: expect.stringContaining("Body of ledger") });
+    expect(store.find("ledger")).toMatchObject({ verified_at_commit: newHead, body: expect.stringMatching(/^k\d+a /) });
     expect(store.find("ledger")!.last_verified > "2026-01-01T00:00:00Z").toBe(true);
     expect(store.find("g")!.verified_at_commit).toBeUndefined();
     expect(kb(store, ["stale", "--json"], { cwd: repo }).json.candidates).toEqual([]);

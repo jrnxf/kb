@@ -62,7 +62,8 @@ export function putNote(store: Store, fields: Partial<Note> & { id: string }, tr
     last_verified: "2026-01-01T00:00:00Z",
     anchors: [],
     confidence: "medium",
-    body: `Body of ${fields.id}, note number ${counter}.`,
+    // Words that no other note has: `kb stale` names two notes with the same words as twins.
+    body: `${["a", "b", "c", "d", "e", "f"].map((part) => `k${counter}${part}`).join(" ")}.`,
     ...fields,
   };
   store.writeNote(note, trashed);

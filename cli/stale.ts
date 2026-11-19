@@ -4,10 +4,9 @@
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { NOT_NEEDED_SESSIONS, judgments, lastActivity } from "./log.ts";
-import { normalizeTitle } from "./note.ts";
+import { findNeighbors } from "./neighbors.ts";
 import { resolveRepo } from "./scope.ts";
 import { git, type Store, type StoredNote, writeAtomic } from "./store.ts";
-import { STOP_WORDS } from "./words.ts";
 
 export const STALE_REASONS = ["anchor-changed", "anchor-missing", "commit-unknown", "judged-wrong", "expired", "decayed", "not-needed", "duplicate"] as const;
 export type StaleReason = (typeof STALE_REASONS)[number];
@@ -26,19 +25,6 @@ export interface StaleResult {
   /** Number of distinct notes with a candidate. */
   notes: number;
   candidates: StaleCandidate[];
-}
-
-const DUPLICATE_THRESHOLD = 0.6;
-
-function titleWords(title: string): Set<string> {
-  return new Set(normalizeTitle(title).split("-").filter((word) => word && !STOP_WORDS.has(word)));
-}
-
-function similarity(a: Set<string>, b: Set<string>): number {
-  let shared = 0;
-  for (const word of a) if (b.has(word)) shared++;
-  if (shared < 2) return 0;
-  return shared / (a.size + b.size - shared);
 }
 
 /** An anchor's path, and its symbol after "#" or "". */
@@ -163,13 +149,19 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
     if (notNeeded >= NOT_NEEDED_SESSIONS && !since(verdicts.helped)) add(note, "not-needed", `at least ${notNeeded} sessions judged it not needed since the last check, and none said it helped`);
   }
 
-  // Possible duplicates: titles that share most of their words. The newer note is the candidate.
-  const words = notes.map((note) => titleWords(note.title));
-  for (let i = 0; i < notes.length; i++) {
-    for (let j = i + 1; j < notes.length; j++) {
-      if (similarity(words[i]!, words[j]!) < DUPLICATE_THRESHOLD) continue;
-      const [older, newer] = notes[i]!.created <= notes[j]!.created ? [notes[i]!, notes[j]!] : [notes[j]!, notes[i]!];
-      add(newer, "duplicate", `the title is close to ${older.id}`);
+  // Possible duplicates, by the measure of `kb add`: a note that `kb add` would hold today, for a
+  // note of its scope or a global one. Of two notes of the scope, the newer is the candidate. A
+  // global note is no candidate in a repo, so there the repo note is.
+  const others = store.notes().filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === (repo.scope ?? "global")));
+  const paired = new Set<string>();
+  for (const note of notes) {
+    for (const close of findNeighbors(others.filter((n) => n.id !== note.id), note)) {
+      const pair = [note.id, close.id].sort().join("\n");
+      if (paired.has(pair)) continue;
+      paired.add(pair);
+      const other = others.find((n) => n.id === close.id)!;
+      const [older, newer] = other.scope !== note.scope || other.created <= note.created ? [other, note] : [note, other];
+      add(newer, "duplicate", `close to ${older.id}: both have ${close.shared.join(", ")}`);
     }
   }
 
