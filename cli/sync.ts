@@ -2,6 +2,7 @@
 
 import { mkdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { rollUp } from "./log.ts";
 import { clearStaleCache } from "./stale.ts";
 import type { Store } from "./store.ts";
 
@@ -44,8 +45,11 @@ function touch(path: string): void {
   }
 }
 
-/** Commit, rebase on the remote copy, push. On a conflict, keep local state and record one line. */
-export function syncNow(store: Store): SyncResult {
+/**
+ * Commit, rebase on the remote copy, push. On a conflict, keep local state and record one line.
+ * The commit takes the roll-up of this machine's log, which is due once per day.
+ */
+export function syncNow(store: Store, now: Date = new Date()): SyncResult {
   if (!store.hasRemote()) return { status: "no-remote", detail: "the store has no git remote" };
   // A fresh clone of an empty remote has no layout yet. Sync is a write, so create it.
   store.ensure();
@@ -59,6 +63,7 @@ export function syncNow(store: Store): SyncResult {
   }
 
   try {
+    rollUp(store, now);
     store.commit("kb: sync");
     const fail = (status: "conflict" | "error", detail: string): SyncResult => {
       writeFileSync(store.syncErrorPath(), `${detail}\n`);

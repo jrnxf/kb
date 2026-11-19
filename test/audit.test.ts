@@ -500,7 +500,7 @@ describe("the page link", () => {
 });
 
 describe("the deck", () => {
-  const card = (fields: Partial<AuditCard>): AuditCard => ({ id: "x", action: "keep", why: "w", note: { id: "x", title: "T", kind: "gotcha", scope: SCOPE, body: "b", uses: 0, place: "index" }, ...fields });
+  const card = (fields: Partial<AuditCard>): AuditCard => ({ id: "x", action: "keep", why: "w", note: { id: "x", title: "T", kind: "gotcha", scope: SCOPE, body: "b", place: "index" }, ...fields });
 
   test("puts loose cards first, then each group after its divider", () => {
     const cards = [card({ id: "a", group: "G" }), card({ id: "b" }), card({ id: "c", group: "G" })];

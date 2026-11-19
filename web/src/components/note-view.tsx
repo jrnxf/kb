@@ -22,7 +22,6 @@ export function NoteView({ note, onEdit, onTrash, onRestore, onDelete }: Props) 
   const meta = [
     `verified ${day(note.last_verified)}${note.verified_at_commit ? ` at ${note.verified_at_commit}` : ""}`,
     `confidence ${note.confidence}`,
-    `${note.uses} ${note.uses === 1 ? "use" : "uses"}${note.last_used ? `, last ${day(note.last_used)}` : ""}`,
     note.trashed && (note.trashed_at ? `trashed ${day(note.trashed_at)}` : "in the trash"),
     note.clears_at && `deleted ${clearsIn(note.clears_at)}`,
     note.promoted_to && `promoted to ${note.promoted_to}`,

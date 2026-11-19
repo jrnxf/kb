@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, plain, putNote, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { ROOT, logged, plain, putNote, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const READ_HOOK = join(ROOT, "hooks", "post-read.sh");
 const START_HOOK = join(ROOT, "hooks", "session-start.sh");
@@ -97,6 +97,26 @@ describe("the Read hook names the notes on a file", () => {
     expect(context(store.home, file, "s1", "agent-a1")).toBe("");
     expect(context(store.home, file, "s1")).toContain("- on-file ");
     expect(context(store.home, file, "s1", "agent-b2")).toContain("- on-file ");
+  });
+
+  test("each note a Read names is one fire in the log, with the session, the subagent and the path", () => {
+    const { store, repo } = fixture();
+    putNote(store, { id: "on-file", scope: SCOPE, anchors: ["src/pay.ts"] });
+    putNote(store, { id: "on-folder", scope: SCOPE, anchors: ["src"] });
+    putNote(store, { id: "on-docs", scope: SCOPE, anchors: ["docs"] });
+    const file = join(repo, "src/pay.ts");
+    context(store.home, file);
+    // A Read that names no note logs nothing.
+    context(store.home, file);
+    context(store.home, join(repo, "README.md"));
+    context(store.home, file, "s1", "agent-a1");
+    const fire = (note: string, who: object) => ({ ev: "fire", ...who, scope: SCOPE, kind: "path", form: "title", note, tool: "Read", match: "src/pay.ts" });
+    expect(logged(store)).toEqual([
+      fire("on-file", { session: "s1" }),
+      fire("on-folder", { session: "s1" }),
+      fire("on-file", { session: "s1", agent: "agent-a1" }),
+      fire("on-folder", { session: "s1", agent: "agent-a1" }),
+    ]);
   });
 
   test("of many Reads at the same time, one names the note", async () => {

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { SAVE_RULE } from "../cli/context.ts";
 import { forgetUnsaved, markSaved, recordSize, recordUnsaved, unsavedSession } from "../cli/session.ts";
 import { MEMORY_ON_NOTICE, MEMORY_RULE } from "../hooks/auto-memory.ts";
 import { BUDGET_MS, PARSE_LIMIT, unsavedNotice } from "../hooks/unsaved-notice.ts";
-import { ROOT, kb, plain, putNote, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { ROOT, kb, logged, plain, putNote, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const HOOK = join(ROOT, "hooks", "session-start.sh");
 
@@ -80,6 +80,48 @@ describe("SessionStart hook", () => {
     expect(elsewhere.stdout).toContain("global-note");
   });
 
+  test("logs one start per run: the source, the scope, the notes by form and the characters by part", () => {
+    const store = tempStore();
+    const scope = "github.com/acme/billing";
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    // One body fits, the index has one line and one global note may load. So a repo note and a
+    // global note are over the index budget, and one global note is over the global cap.
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 1, contextChars: 1100, globalIndexLines: 1 } }));
+    for (const id of ["r-1", "r-2", "r-3"]) putNote(store, { id, scope, body: "x".repeat(400) });
+    putNote(store, { id: "g-new", body: "x".repeat(400), last_verified: "2026-02-01T00:00:00Z" });
+    putNote(store, { id: "g-old", body: "x".repeat(400) });
+    const out = runHook({ home: store.home, stdin: input(repo, "resume") }).stdout;
+    const events = logged(store) as any[];
+    expect(events).toHaveLength(1);
+    const { chars, ...start } = events[0];
+    expect(start).toEqual({ ev: "start", session: "abc", scope, source: "resume", bodies: ["r-1"], index: ["r-2"], hidden: ["r-3", "g-new", "g-old"] });
+    // The parts are measured where the text is built. They add up to what the session got.
+    const at = (text: string) => out.indexOf(text);
+    expect(chars.total).toBe(out.length);
+    expect(chars.index).toBe(at("\n\n## Notes") - at("\n\n## Index"));
+    expect(chars.bodies).toBe(at("1 note is in the index only") - at("\n\n## Notes") - 1);
+    expect(chars.fixed).toBe(chars.total - chars.index - chars.bodies);
+    expect(out).toContain("The kb store is over its index budget here: 2 notes are hidden");
+
+    // A start outside any repo has the scope "global". A store with no note still logs the start.
+    const empty = tempStore();
+    runHook({ home: empty.home, stdin: JSON.stringify({ session_id: "s9", cwd: plain(), source: "clear" }) });
+    expect(logged(empty)).toEqual([{ ev: "start", session: "s9", scope: "global", source: "clear", bodies: [], index: [], hidden: [], chars: { fixed: SAVING.length, index: 0, bodies: 0, total: SAVING.length } }]);
+  });
+
+  test("a log that cannot be written changes nothing in the output", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    putNote(store, { id: "repo-note", scope: "github.com/acme/billing" });
+    const first = runHook({ home: store.home, stdin: input(repo) });
+    expect(logged(store)).toHaveLength(1);
+    rmSync(join(store.home, ".state", "log"), { recursive: true });
+    writeFileSync(join(store.home, ".state", "log"), "a file where the folder should be");
+    const second = runHook({ home: store.home, stdin: input(repo) });
+    expect(second).toMatchObject({ code: 0, stdout: first.stdout, stderr: "" });
+    expect(first.stdout).toContain("### repo-note [gotcha]");
+  });
+
   test("stays under the 10,000 character limit at the largest budget, with every notice", () => {
     const store = tempStore();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 1, contextChars: 20000 } }));
@@ -124,11 +166,15 @@ describe("plugin files", () => {
     expect(entry.hooks[0].command).toBe('"${CLAUDE_PLUGIN_ROOT}"/hooks/session-start.sh');
   });
 
-  test("the CLI source reads no CLAUDE_ variable", async () => {
+  test("the CLI source reads no CLAUDE_ variable, but for the session id that the event log takes", async () => {
     const glob = new Bun.Glob("cli/**/*.ts");
     for await (const file of glob.scan(ROOT)) {
-      expect(readFileSync(join(ROOT, file), "utf8"), file).not.toMatch(/CLAUDE_/);
+      const source = readFileSync(join(ROOT, file), "utf8");
+      // One name, in one file: an agent runs `kb show` with no flag, and the log must name its session.
+      const allowed = file.endsWith("log.ts") ? source.replaceAll("CLAUDE_CODE_SESSION_ID", "") : source;
+      expect(allowed, file).not.toMatch(/CLAUDE_/);
     }
+    expect(readFileSync(join(ROOT, "cli", "log.ts"), "utf8").split("CLAUDE_CODE_SESSION_ID")).toHaveLength(2);
   });
 
   // /kb:recover hands the checkpoint skill to a subagent by step number and section name.
@@ -220,6 +266,7 @@ describe("session notices", () => {
     putNote(store, { id: "g" });
     const r = end(store.home, endInput(repo, "lost"));
     expect({ code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() }).toEqual({ code: 0, out: "", err: "" });
+    expect(logged(store)).toEqual([{ ev: "unsaved", session: "lost", reason: "clear" }]);
 
     expect(runHook({ home: store.home, stdin: startInput(other, "clear") }).stdout).not.toContain(NOTICE);
     expect(unsaved(store, other)).toEqual([]);
@@ -511,6 +558,8 @@ describe("session notices", () => {
     end(store.home, endInput(repo, "saved-one"));
     end(store.home, endInput(repo, "just-quit", "prompt_input_exit"));
     end(store.home, { ...endInput(repo, "subagent"), agent_id: "agent-a1" });
+    // The log has the checkpoint, and no session that ended unsaved: a quit and a subagent are none.
+    expect(logged(store)).toEqual([{ ev: "checkpoint", session: "saved-one", scope: "global" }]);
     expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain("ended with /clear");
 
     const missing = join(tempDir(), "missing");
@@ -621,7 +670,8 @@ describe("session notices", () => {
     Bun.spawnSync(["git", "-C", store.home, "init", "-q", "-b", "main"]);
     putNote(store, { id: "g" });
     kb(store, ["checkpointed", "s1"]);
-    kb(store, ["use", "g"]);
+    kb(store, ["show", "g"]);
+    kb(store, ["verify", "g"]);
     const tracked = Bun.spawnSync(["git", "-C", store.home, "ls-files"], { stdout: "pipe" }).stdout.toString();
     expect(tracked).toContain(".gitignore");
     expect(tracked).not.toContain(".state");

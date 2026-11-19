@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { contextBudget } from "../cli/context.ts";
 import { findStale } from "../cli/stale.ts";
-import { kb, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
+import { kb, legacyUsage, logAt, otherMachine, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
 
 const SCOPE = "github.com/acme/billing";
 const NOW = new Date("2026-03-01T00:00:00Z");
@@ -91,21 +91,95 @@ describe("kb stale", () => {
     expect(reasons(store, repo)).toEqual(["never:commit-unknown", "rebased:commit-unknown"]);
   });
 
-  test("expired: no use and no check for expireDays. decayed: used, but not verified for decayDays", () => {
+  test("expired: no activity and no check for expireDays. decayed: active, but not verified for decayDays", () => {
     const { repo, store } = fixture();
     putNote(store, { id: "unused", scope: SCOPE, last_verified: "2025-11-01T00:00:00Z" });
     putNote(store, { id: "used", scope: SCOPE, last_verified: "2025-08-01T00:00:00Z" });
     putNote(store, { id: "checked", scope: SCOPE, last_verified: "2026-01-01T00:00:00Z" });
     putNote(store, { id: "old-global", last_verified: "2025-08-01T00:00:00Z" });
-    store.bumpUsage(["used"], "2026-02-01T00:00:00Z");
+    logAt(store, "2026-02-01T00:00:00Z", { ev: "show", note: "used", why: "task" });
+    // A read that is a check, and a verdict that the note had no bearing, keep no note alive.
+    logAt(store, "2026-02-01T00:00:00Z", { ev: "show", note: "unused", why: "check" });
+    logAt(store, "2026-02-01T00:00:00Z", { ev: "verdict", note: "unused", verdict: "not-needed" });
     // A note gets one of the two: expired says more.
     expect(findStale(store, repo, NOW).candidates.map((c) => `${c.id}: ${c.detail}`)).toEqual(["unused: no use and no check for 120 days", "used: last verified 212 days ago"]);
     expect(reasons(store, repo)).toEqual(["unused:expired", "used:decayed"]);
-    // A use within expireDays keeps a note from expiring, and the config sets both windows.
-    store.bumpUsage(["unused"], "2026-02-01T00:00:00Z");
+    // Activity within expireDays keeps a note from expiring: here a Read of a file the note is anchored to.
+    logAt(store, "2026-02-01T00:00:00Z", { ev: "fire", kind: "path", form: "title", note: "unused", tool: "Read", match: "src/ledger.ts" });
     expect(reasons(store, repo)).toEqual(["used:decayed"]);
+    // So does the last use that an older kb recorded, on any machine.
+    legacyUsage(store, "old", { "old-global": { uses: 2, last_used: "2026-02-01T00:00:00Z" } });
+    expect(findStale(store, join(repo, ".."), NOW).candidates.map((c) => `${c.id}:${c.reason}`)).toEqual(["old-global:decayed"]);
+    // The config sets both windows.
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ decayDays: 365, expireDays: 30 }));
     expect(reasons(store, repo)).toEqual(["checked:expired"]);
+  });
+
+  test("a note that is active on another machine does not expire here", () => {
+    const { repo, store } = fixture();
+    putNote(store, { id: "used-there", scope: SCOPE, last_verified: "2025-11-01T00:00:00Z" });
+    putNote(store, { id: "used-nowhere", scope: SCOPE, last_verified: "2025-11-01T00:00:00Z" });
+    expect(reasons(store, repo)).toEqual(["used-nowhere:expired", "used-there:expired"]);
+    // This machine has no event for the note. The roll-up of the other machine says it was opened last week.
+    otherMachine(store, "machine-b", { "used-there": { last: "2026-02-22T00:00:00Z" } });
+    expect(reasons(store, repo)).toEqual(["used-nowhere:expired"]);
+  });
+
+  test("judged-wrong: a session said the note was wrong after its last check, on any machine", () => {
+    const { repo, store } = fixture();
+    putNote(store, { id: "here", scope: SCOPE, last_verified: FRESH });
+    putNote(store, { id: "there", scope: SCOPE, last_verified: FRESH });
+    putNote(store, { id: "before", scope: SCOPE, last_verified: FRESH });
+    putNote(store, { id: "corrected", scope: SCOPE, last_verified: FRESH });
+    putNote(store, { id: "fine", scope: SCOPE, last_verified: FRESH });
+    logAt(store, "2026-02-25T00:00:00Z", { ev: "verdict", session: "s1", note: "here", verdict: "wrong" });
+    // Another session that the note helped does not take the verdict back.
+    logAt(store, "2026-02-26T00:00:00Z", { ev: "verdict", session: "s2", note: "here", verdict: "helped" });
+    // A verdict from before the last check is about an older text.
+    logAt(store, "2026-02-10T00:00:00Z", { ev: "verdict", session: "s1", note: "before", verdict: "wrong" });
+    // A session that corrects its own verdict judged the note once.
+    logAt(store, "2026-02-25T00:00:00Z", { ev: "verdict", session: "s3", note: "corrected", verdict: "wrong" });
+    logAt(store, "2026-02-25T00:01:00Z", { ev: "verdict", session: "s3", note: "corrected", verdict: "helped" });
+    logAt(store, "2026-02-25T00:00:00Z", { ev: "verdict", session: "s1", note: "fine", verdict: "helped" });
+    otherMachine(store, "machine-b", { there: { wrong: "2026-02-27T00:00:00Z" }, before: { wrong: "2026-02-19T00:00:00Z" } });
+    const found = findStale(store, repo, NOW).candidates;
+    expect(found.map((c) => `${c.id}:${c.reason}`)).toEqual(["here:judged-wrong", "there:judged-wrong"]);
+    expect(found[0]!.detail).toBe("a session judged it wrong 4 days ago, after the last check");
+    expect(found[1]!.detail).toBe("a session judged it wrong 2 days ago, after the last check");
+    expect(kb(store, ["stale"], { cwd: repo }).stdout).toMatch(/^there \| judged-wrong \| a session judged it wrong \d+ days ago, after the last check$/m);
+
+    // A new verification clears it: kb verify, or an update of the body.
+    expect(kb(store, ["verify", "here"], { cwd: repo }).code).toBe(0);
+    expect(kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ id: "there", body: "The corrected text." }) }).json.status).toBe("updated");
+    expect(reasons(store, repo)).toEqual([]);
+    // An update of another field is no verification.
+    logAt(store, "2026-02-25T00:00:00Z", { ev: "verdict", session: "s4", note: "fine", verdict: "wrong" });
+    expect(kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ id: "fine", confidence: "low" }) }).json.status).toBe("updated");
+    expect(reasons(store, repo)).toEqual(["fine:judged-wrong"]);
+  });
+
+  test("not-needed: three sessions said so after the last check, on all machines together, and none said it helped", () => {
+    const { repo, store } = fixture();
+    const ids = ["three-here", "two-here", "split", "helped", "helped-there", "helped-before", "same-session", "before"];
+    for (const [i, id] of ids.entries()) putNote(store, { id, title: `Fact ${i}`, scope: SCOPE, last_verified: FRESH });
+    const notNeeded = (note: string, session: string, time = "2026-02-25T00:00:00Z") => logAt(store, time, { ev: "verdict", session, note, verdict: "not-needed" });
+    for (const session of ["s1", "s2", "s3"]) for (const note of ["three-here", "helped", "helped-there", "helped-before"]) notNeeded(note, session);
+    for (const session of ["s1", "s2"]) for (const note of ["two-here", "split"]) notNeeded(note, session);
+    // One session that says it three times is one session.
+    for (const time of ["2026-02-25T00:00:00Z", "2026-02-26T00:00:00Z", "2026-02-27T00:00:00Z"]) notNeeded("same-session", "s1", time);
+    // Verdicts from before the last check do not count.
+    for (const session of ["s1", "s2", "s3"]) notNeeded("before", session, "2026-02-10T00:00:00Z");
+    logAt(store, "2026-02-26T00:00:00Z", { ev: "verdict", session: "s4", note: "helped", verdict: "helped" });
+    logAt(store, "2026-02-10T00:00:00Z", { ev: "verdict", session: "s4", note: "helped-before", verdict: "helped" });
+    otherMachine(store, "machine-b", { split: { not_needed: ["2026-02-27T00:00:00Z", "2026-02-01T00:00:00Z"] }, "helped-there": { helped: "2026-02-28T00:00:00Z" } });
+    const found = findStale(store, repo, NOW).candidates;
+    expect(found.map((c) => `${c.id}:${c.reason}`)).toEqual(["helped-before:not-needed", "split:not-needed", "three-here:not-needed"]);
+    expect(found[1]!.detail).toBe("at least 3 sessions judged it not needed since the last check, and none said it helped");
+
+    // A new verification clears it.
+    expect(kb(store, ["verify", "split", "three-here"], { cwd: repo }).code).toBe(0);
+    expect(kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ id: "helped-before", anchors: ["src/ledger.ts"] }) }).json.status).toBe("updated");
+    expect(reasons(store, repo)).toEqual([]);
   });
 
   test("a note expires after expireDays whole days, and a wrong window falls back to the default", () => {
@@ -193,7 +267,7 @@ describe("kb budget", () => {
     putNote(store, { id: "a", scope: SCOPE });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
     expect(b).toMatchObject({ scope: SCOPE, over: false, trim: [], index: { lines: 0, budget: 60, hidden: 0 }, context: { bodies: 1, dropped: 0, budget: contextBudget(8000) } });
-    expect(b.notes[0]).toMatchObject({ id: "a", shown: "body", uses: 0 });
+    expect(b.notes[0]).toEqual({ id: "a", kind: "gotcha", scope: SCOPE, chars: expect.any(Number), shown: "body" });
   });
 
   test("bodies that drop to an index line are not a reason to make room", () => {
@@ -212,7 +286,7 @@ describe("kb budget", () => {
     expect(text).toContain("longest  ");
   });
 
-  test("when notes reach no session it names as many as are hidden: least used, lowest rank, never open work or a rule", () => {
+  test("when notes reach no session it names as many as are hidden: the lowest ranked decisions and how-tos, never open work or a rule", () => {
     const { repo, store } = fixture();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 2, contextChars: 1500 } }));
     const body = "word ".repeat(80);
@@ -220,7 +294,8 @@ describe("kb budget", () => {
     putNote(store, { id: "trap", scope: SCOPE, kind: "gotcha", body });
     putNote(store, { id: "used", scope: SCOPE, kind: "how-to", body });
     for (const id of ["howto-1", "howto-2", "howto-3"]) putNote(store, { id, scope: SCOPE, kind: "how-to", body });
-    kb(store, ["use", "used"]);
+    // Activity ranks a note first in its kind. A count of reads plays no part.
+    logAt(store, "2026-02-01T00:00:00Z", { ev: "show", note: "used", why: "task" });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
     expect(b.over).toBe(true);
     expect(b.index.hidden).toBeGreaterThan(0);
@@ -228,7 +303,8 @@ describe("kb budget", () => {
     const ids = b.trim.map((d: any) => d.id);
     expect(ids).toHaveLength(b.index.hidden);
     for (const id of ids) expect(id).toMatch(/^howto-/);
-    expect(b.trim[0].reason).toBe("never used");
+    expect(b.trim[0]).toEqual({ id: "howto-3", reason: "low rank, 6 of 6" });
+    expect(JSON.stringify(b)).not.toMatch(/"uses"|last_used|never used/);
     expect(b.ask).toEqual([]);
     expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is full\.\nTrash or merge first: howto-/);
   });
@@ -246,8 +322,8 @@ describe("kb budget", () => {
     expect(b.ask).toHaveLength(b.index.hidden - 1);
     for (const d of b.ask) expect(["gotcha", "convention"]).toContain(d.kind);
     const text = kb(store, ["budget"], { cwd: repo }).stdout;
-    expect(text).toContain("Trash or merge first: howto (never used)");
-    expect(text).toMatch(/Then ask the user, because these are rules: (rule-\d|trap) \((convention|gotcha), never used\)/);
+    expect(text).toContain("Trash or merge first: howto (low rank, 5 of 5)");
+    expect(text).toContain("Then ask the user, because these are rules: rule-3 (convention, low rank, 4 of 5)");
   });
 
 });

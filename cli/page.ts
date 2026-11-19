@@ -4,6 +4,7 @@ import { openAudits } from "./audit.ts";
 import { runState } from "./audit-run.ts";
 import { auditableScopes } from "./repos.ts";
 import { rank } from "./context.ts";
+import { lastActivity } from "./log.ts";
 import { KINDS, byTrashedAt } from "./note.ts";
 import type { Store, StoredNote } from "./store.ts";
 import type { PageData, PageNote } from "./wire.ts";
@@ -20,12 +21,24 @@ export function renderBody(markdown: string): string {
   }
 }
 
-/** Changes whenever a note, the trash or a usage counter changes. The page refreshes when it differs. */
-export function storeVersion(store: Store): string {
+/** The live notes as the page lists them: scope by scope, each scope in rank order. */
+function ranked(store: Store, active: StoredNote[]): StoredNote[] {
+  const lastActive = lastActivity(store);
+  const scopes = [...new Set(active.map((n) => n.scope))].sort((a, b) => (a === "global" ? -1 : b === "global" ? 1 : a.localeCompare(b)));
+  return scopes.flatMap((scope) => rank(active.filter((n) => n.scope === scope), lastActive));
+}
+
+/**
+ * Changes whenever a note, the trash or the order of the notes changes. The page refreshes when it
+ * differs. `active` is the live notes in the order of the page: a caller that has them passes them,
+ * so one request ranks the notes once.
+ */
+export function storeVersion(store: Store, active: StoredNote[] = ranked(store, store.notes())): string {
   const strip = ({ path: _path, ...note }: StoredNote) => note;
   // An audit agent that ends changes the page too: its repo gets an audit to open.
   const audits = auditableScopes(store).map((scope) => runState(store, scope)?.status);
-  return Bun.hash(JSON.stringify([store.notes().map(strip), store.notes({ trashed: true }).map(strip), [...store.usage()], openAudits(store), audits])).toString(36);
+  // The order depends on the last activity, which is not in a note: a read changes the order and no note.
+  return Bun.hash(JSON.stringify([active.map(strip), store.notes({ trashed: true }).map(strip), openAudits(store), audits])).toString(36);
 }
 
 /** The last audit agent of each repo the page can audit. */
@@ -37,33 +50,26 @@ function runs(store: Store) {
 }
 
 export function pageData(store: Store, token: string): PageData {
-  const usage = store.usage();
-  const active = store.notes();
+  const active = ranked(store, store.notes());
   const trashed = store.notes({ trashed: true });
   const days = store.config().trashDays;
-  const scopes = [...new Set([...active, ...trashed].map((n) => n.scope))].sort((a, b) => (a === "global" ? -1 : b === "global" ? 1 : a.localeCompare(b)));
   // Live notes scope by scope in rank order, then the trash, most recently trashed first.
-  const ordered = [...scopes.flatMap((scope) => rank(active.filter((n) => n.scope === scope), usage)), ...trashed.sort(byTrashedAt)];
-  const notes = ordered.map((note): PageNote => {
-    const used = usage.get(note.id);
-    return {
-      id: note.id,
-      title: note.title,
-      scope: note.scope,
-      kind: note.kind,
-      confidence: note.confidence,
-      trashed: note.trashed,
-      last_verified: note.last_verified,
-      trashed_at: note.trashed_at,
-      clears_at: note.trashed_at ? clearsAt(note.trashed_at, days) : undefined,
-      verified_at_commit: note.verified_at_commit,
-      promoted_to: note.promoted_to,
-      anchors: note.anchors,
-      body: note.body,
-      html: renderBody(note.body),
-      uses: used?.uses ?? 0,
-      last_used: used?.last_used,
-    };
-  });
-  return { version: storeVersion(store), token, kinds: [...KINDS], trashDays: days, notes, audits: openAudits(store), auditable: auditableScopes(store), runs: runs(store) };
+  const ordered = [...active, ...trashed.sort(byTrashedAt)];
+  const notes = ordered.map((note): PageNote => ({
+    id: note.id,
+    title: note.title,
+    scope: note.scope,
+    kind: note.kind,
+    confidence: note.confidence,
+    trashed: note.trashed,
+    last_verified: note.last_verified,
+    trashed_at: note.trashed_at,
+    clears_at: note.trashed_at ? clearsAt(note.trashed_at, days) : undefined,
+    verified_at_commit: note.verified_at_commit,
+    promoted_to: note.promoted_to,
+    anchors: note.anchors,
+    body: note.body,
+    html: renderBody(note.body),
+  }));
+  return { version: storeVersion(store, active), token, kinds: [...KINDS], trashDays: days, notes, audits: openAudits(store), auditable: auditableScopes(store), runs: runs(store) };
 }

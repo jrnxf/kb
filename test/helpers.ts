@@ -1,6 +1,7 @@
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type LogEvent, type NoteRollUp, logEvent, readLog } from "../cli/log.ts";
 import type { Note } from "../cli/note.ts";
 import { Store } from "../cli/store.ts";
 
@@ -9,6 +10,10 @@ process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_SYSTEM = "/dev/null";
 process.env.GIT_AUTHOR_NAME = process.env.GIT_COMMITTER_NAME = "kb test";
 process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = "kb@example.com";
+
+// The session of the developer or the agent that runs the tests must not reach the event log of a test.
+delete process.env.KB_SESSION;
+delete process.env.CLAUDE_CODE_SESSION_ID;
 
 export const ROOT = join(import.meta.dir, "..");
 export const MAIN = join(ROOT, "cli", "main.ts");
@@ -64,6 +69,24 @@ export function putNote(store: Store, fields: Partial<Note> & { id: string }, tr
   return note;
 }
 
+/** The events in the log of a store, without their times. */
+export const logged = (store: Store) => readLog(store).map(({ t: _t, ...event }) => event as Record<string, unknown>);
+
+/** Add an event to the log at a given time. */
+export const logAt = (store: Store, time: string, event: LogEvent) => logEvent(store, event, new Date(time));
+
+/** The counters of a kb from before the event log, as one machine wrote them. */
+export function legacyUsage(store: Store, machine: string, data: Record<string, { uses: number; last_used?: string }>): void {
+  mkdirSync(join(store.home, "usage"), { recursive: true });
+  writeFileSync(join(store.home, "usage", `${machine}.json`), JSON.stringify(data));
+}
+
+/** The roll-up of another machine, as a sync brings it: what that machine knows of each note. */
+export function otherMachine(store: Store, machine: string, notes: Record<string, NoteRollUp>): void {
+  mkdirSync(join(store.home, "activity"), { recursive: true });
+  writeFileSync(join(store.home, "activity", `${machine}.json`), JSON.stringify({ v: 1, notes }));
+}
+
 export interface CliResult {
   code: number;
   stdout: string;
@@ -78,11 +101,11 @@ export function plain(): string {
   return plainDir;
 }
 
-export function kb(store: Store | string, args: string[], options: { stdin?: string; cwd?: string } = {}): CliResult {
+export function kb(store: Store | string, args: string[], options: { stdin?: string; cwd?: string; env?: Record<string, string> } = {}): CliResult {
   const home = typeof store === "string" ? store : store.home;
   const r = Bun.spawnSync([process.execPath, MAIN, ...args], {
     cwd: options.cwd ?? plain(),
-    env: { ...process.env, KB_HOME: home },
+    env: { ...process.env, KB_HOME: home, ...options.env },
     stdin: options.stdin === undefined ? "ignore" : Buffer.from(options.stdin),
     stdout: "pipe",
     stderr: "pipe",

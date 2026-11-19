@@ -1,4 +1,4 @@
-// The store on disk: paths, config, notes, usage counters, generated files and git.
+// The store on disk: paths, config, notes, the usage counters of older versions, generated files and git.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -10,7 +10,7 @@ export interface Config {
   /** globalIndexLines: the places global notes may take in a repo session, bodies and index lines together. */
   budgets: { indexLines: number; contextChars: number; globalIndexLines: number };
   decayDays: number;
-  /** A note that no session used and nobody checked for this many days has expired. The audit proposes trash for it. */
+  /** A note with no activity and no check for this many days has expired. The audit proposes trash for it. */
   expireDays: number;
   /** A note in the trash for longer than this is deleted for good. */
   trashDays: number;
@@ -25,6 +25,7 @@ export interface Local {
   aliases: Record<string, string>;
 }
 
+/** What kb recorded per note before it had an event log. Nothing writes it now. */
 export interface Usage {
   uses: number;
   last_used?: string;
@@ -95,7 +96,7 @@ export class Store {
 
   /** Create the store layout. Only commands that write call this. */
   ensure(): void {
-    for (const dir of ["notes", "trash", "usage"]) mkdirSync(join(this.home, dir), { recursive: true });
+    for (const dir of ["notes", "trash"]) mkdirSync(join(this.home, dir), { recursive: true });
     const configPath = join(this.home, "kb.config.json");
     if (!existsSync(configPath)) writeAtomic(configPath, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`);
     const ignorePath = join(this.home, ".gitignore");
@@ -105,7 +106,7 @@ export class Store {
     if (missing.length > 0) writeAtomic(ignorePath, `${have}${have && !have.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
   }
 
-  /** Per-machine state that is never committed: session marks and the stale cache. */
+  /** Per-machine state that is never committed: session marks, the stale cache and the event log. */
   statePath(name: string): string {
     return join(this.home, ".state", name);
   }
@@ -138,6 +139,7 @@ export class Store {
     writeAtomic(join(this.home, "local.json"), `${JSON.stringify(local, null, 2)}\n`);
   }
 
+  /** The id of this machine, made on first use. It names the file that only this machine writes: its roll-up in activity/. */
   machine(): string {
     const local = this.local();
     if (local.machine) return local.machine;
@@ -208,9 +210,14 @@ export class Store {
     rmSync(note.path, { force: true });
   }
 
-  // ---- usage ----
+  // ---- usage, from older versions ----
 
-  /** Usage lives in one file per machine, so two machines never edit the same file. */
+  /**
+   * The counters that kb kept in usage/, one file per machine, before it had an event log. They
+   * are synced history, so the files stay. Two things still read them: the last activity of a note
+   * takes `last_used`, and `kb add` never gives a new note an id that has counters. What a machine
+   * shares of its log now is the roll-up in activity/, which log.ts reads and writes.
+   */
   usage(): Map<string, Usage> {
     const total = new Map<string, Usage>();
     let files: string[] = [];
@@ -229,23 +236,6 @@ export class Store {
       }
     }
     return total;
-  }
-
-  /** Forget the counters of this machine for these ids. Other machines keep theirs: `kb add` never reuses an id that has counters. */
-  dropUsage(ids: string[]): void {
-    const path = join(this.home, "usage", `${this.machine()}.json`);
-    const data = readJson<Record<string, Usage>>(path);
-    if (!data || !ids.some((id) => id in data)) return;
-    for (const id of ids) delete data[id];
-    writeAtomic(path, `${JSON.stringify(data, null, 2)}\n`);
-  }
-
-  bumpUsage(ids: string[], now: string): void {
-    const path = join(this.home, "usage", `${this.machine()}.json`);
-    const data = readJson<Record<string, Usage>>(path) ?? {};
-    for (const id of ids) data[id] = { uses: (data[id]?.uses ?? 0) + 1, last_used: now };
-    const sorted = Object.fromEntries(Object.entries(data).sort(([a], [b]) => a.localeCompare(b)));
-    writeAtomic(path, `${JSON.stringify(sorted, null, 2)}\n`);
   }
 
   // ---- generated files and git ----

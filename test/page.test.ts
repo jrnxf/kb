@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pageData } from "../cli/page.ts";
+import { pageData, storeVersion } from "../cli/page.ts";
 import { DIST } from "../cli/serve.ts";
 import type { PageNote } from "../cli/wire.ts";
 import { sourceHash } from "../web/source-hash.ts";
 import { EMPTY_VIEW, clearsIn, day, fromHash, neighbour, scopeHref, scopeName, show, toHash } from "../web/src/lib/view.ts";
-import { putNote, tempStore } from "./helpers.ts";
+import { logAt, otherMachine, putNote, tempStore } from "./helpers.ts";
 
 describe("the data behind the page", () => {
   test("shows raw HTML in a note as text, and renders the markdown", () => {
@@ -36,6 +36,47 @@ describe("the data behind the page", () => {
     expect(data.token).toBe("the-token");
     expect(data.kinds).toEqual(["open-work", "gotcha", "convention", "decision", "how-to"]);
   });
+
+  test("the version changes when activity changes the order of the notes, so the page loads the new order", () => {
+    const store = tempStore();
+    const scope = "github.com/acme/api";
+    putNote(store, { id: "a", scope });
+    putNote(store, { id: "b", scope });
+    const order = () => pageData(store, "t").notes.map((n) => n.id);
+    const first = storeVersion(store);
+    expect(order()).toEqual(["a", "b"]);
+    expect(pageData(store, "t").version).toBe(first);
+    // No note changed. A read of "b" on this machine puts it first.
+    logAt(store, "2026-03-01T00:00:00Z", { ev: "show", note: "b", why: "task" });
+    expect(order()).toEqual(["b", "a"]);
+    const second = storeVersion(store);
+    expect(second).not.toBe(first);
+    // A read that leaves the order as it is leaves the version too, so the page does not load again.
+    logAt(store, "2026-03-02T00:00:00Z", { ev: "show", note: "b", why: "task" });
+    expect(storeVersion(store)).toBe(second);
+    // Activity that a sync brings from another machine counts in the same way.
+    otherMachine(store, "machine-b", { a: { last: "2026-03-05T00:00:00Z" } });
+    expect(order()).toEqual(["a", "b"]);
+    expect(storeVersion(store)).not.toBe(second);
+  });
+
+  test("one request for the page reads the last activity once, and its version is the version of the store", () => {
+    const store = tempStore();
+    putNote(store, { id: "a", scope: "github.com/acme/api" });
+    putNote(store, { id: "g" });
+    logAt(store, "2026-03-01T00:00:00Z", { ev: "show", note: "a", why: "task" });
+    // Each read of the last activity reads the counters of an older kb once.
+    let reads = 0;
+    const usage = store.usage.bind(store);
+    store.usage = () => (reads++, usage());
+    const data = pageData(store, "t");
+    expect(reads).toBe(1);
+    expect(data.version).toBe(storeVersion(store));
+    expect(reads).toBe(2);
+    // The version is of the order it gets: another order is another version.
+    expect(data.notes.map((n) => n.id)).toEqual(["g", "a"]);
+    expect(storeVersion(store, store.notes().sort((x, y) => x.id.localeCompare(y.id)))).not.toBe(data.version);
+  });
 });
 
 test("the built page is up to date with its sources: run `bun run build` in web/ when this fails", () => {
@@ -53,7 +94,7 @@ test("git tracks every file the built page loads: `git add web/dist` when this f
 describe("what the page shows", () => {
   const note = (id: string, fields: Partial<PageNote> = {}): PageNote => ({
     id, title: `Title of ${id}`, scope: "global", kind: "gotcha", confidence: "high", trashed: false,
-    last_verified: "2026-01-01T00:00:00Z", anchors: [], body: "body", html: "", uses: 0, ...fields,
+    last_verified: "2026-01-01T00:00:00Z", anchors: [], body: "body", html: "", ...fields,
   });
   const notes = [
     note("a", { kind: "decision", body: "the cache key" }),
