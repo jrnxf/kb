@@ -90,13 +90,13 @@ The user decides in the `kb serve` page, one card per note. Write the proposal a
 ] }
 ```
 
-Then run this with the full path of the file:
+Then run this. Write the whole path of the file in the command itself:
 
 ```bash
-kb audit propose --file <path>
+kb audit propose --file /full/path/of/the/file.json
 ```
 
-Do not pipe the JSON, and do not put the path in a shell variable. A session with normal permissions refuses both.
+A session with normal permissions refuses a command that sets a shell variable for the path. It also refuses JSON in a pipe or a heredoc.
 
 - `action` is one of keep, rewrite, trash, merge and promote. A shorten is a rewrite.
 - A rewrite needs the new `title` or `body`, or both. A merge needs `merge`, the notes that go to the trash. The note `id` keeps every fact, so give it the merged text.
@@ -131,7 +131,7 @@ For each note sent back, read it and the code again, and rewrite it. Write this 
 ```
 
 ```bash
-kb add --json --file <path>
+kb add --json --file /full/path/of/the/file.json
 ```
 
 Never save a secret, token, password, key or credential in a note.

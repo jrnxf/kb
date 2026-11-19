@@ -52,7 +52,7 @@ For each entry, oldest first, start one subagent with the Agent tool: `subagent_
 > When `kb add` answers `newer`, somebody checked the note after the session ended, and nothing changed. Skip the note.
 > When the conversation holds a fact that such a note lacks, do not write it. List it in the report under **Check by hand**, with the title of the note and the fact in one line. Leave the group out when it is empty.
 > Write the JSON of each note to a file in your scratchpad directory, as step 3 says, and pass `--file <full path>` with the flags above.
-> A write there needs no permission. Never pipe the JSON to `kb add`.
+> A write there needs no permission. Write the whole path in each command, with no shell variable. Never pipe the JSON to `kb add`.
 > When `kb add` refuses a note because of a secret, write a placeholder for the secret. Never look for a way around the refusal.
 > Never run `kb checkpointed`.
 > End with the step 7 report, and nothing after it. Its first line is not the step 7 verdict.
