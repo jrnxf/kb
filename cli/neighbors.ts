@@ -30,33 +30,31 @@ export interface NoteText {
 
 /**
  * A note at or over this score is a neighbor. Tuned on the seeded store of scripts/seed.ts with
- * test/fixtures/neighbors.json: a known fact that a person wrote again in other words scores 0.50
- * or more, and a new fact 0.26 or less. An agent writes longer than that: the twin that a headless
- * checkpoint wrote scores 0.34. So the line is low. It also names a note that is related and not the
- * same, for about 1 seeded note in 4. That costs the writer one read. A miss costs a twin.
+ * test/fixtures/neighbors.json: a known fact that a person wrote again in other words scores 0.46
+ * or more, and a new fact 0.25 or less. An agent writes longer than that, in words further from the
+ * stored note: the twin that a headless checkpoint wrote scores 0.37, and its new facts 0.22 or
+ * less. The line also names a note that is related and not the same, for 4 of the 134 seeded notes
+ * that have no twin. That costs the writer one read. A miss costs a twin.
  */
-export const NEIGHBOR_THRESHOLD = 0.3;
+export const NEIGHBOR_THRESHOLD = 0.32;
 export const MAX_NEIGHBORS = 3;
 const MAX_SHARED = 5;
 
-// BM25 with its usual constants. A word of the title counts twice: the title states the fact.
+// BM25 with its usual constants.
 const K1 = 1.2;
 const B = 0.75;
-const TITLE_WEIGHT = 2;
 
 interface Doc {
-  /** Stem to weighted count. */
+  /** Stem to count, over the title and the body. */
   tf: Map<string, number>;
   length: number;
 }
 
 function toDoc(title: string, body: string): Doc {
   const tf = new Map<string, number>();
-  for (const s of stems(title)) tf.set(s, (tf.get(s) ?? 0) + TITLE_WEIGHT);
-  for (const s of stems(body)) tf.set(s, (tf.get(s) ?? 0) + 1);
-  let length = 0;
-  for (const count of tf.values()) length += count;
-  return { tf, length };
+  const all = stems(`${title}\n${body}`);
+  for (const s of all) tf.set(s, (tf.get(s) ?? 0) + 1);
+  return { tf, length: all.length };
 }
 
 /**
@@ -65,15 +63,17 @@ function toDoc(title: string, body: string): Doc {
  * result is the larger of the two directions, because twins differ in length: a new note is often
  * long, and the short stored note is inside it. Two notes need two words in common.
  *
- * The idf is ln(1 + N / df). The BM25 idf gives a word that every note has no weight, so in a store
- * of one or two notes the shared words of a twin count for nothing. This one stays level from 1
- * note to 150.
+ * The weight of a word is the square of ln(1 + N / df). The square is the weight of tf-idf: a rare
+ * word that two notes share says more than several common ones, such as "version" and "needs".
+ * The BM25 idf gives a word that every note has no weight, so in a store of one or two notes the
+ * shared words of a twin count for nothing. This one stays level from 1 note to 150. The title has
+ * no extra weight: a short title would then make a short note look like a part of every long one.
  */
 function scorer(corpus: Doc[]): { closeness: (a: Doc, b: Doc) => number; weight: (term: string) => number } {
   const df = new Map<string, number>();
   for (const doc of corpus) for (const term of doc.tf.keys()) df.set(term, (df.get(term) ?? 0) + 1);
   const average = corpus.reduce((sum, doc) => sum + doc.length, 0) / Math.max(1, corpus.length) || 1;
-  const weight = (term: string) => Math.log(1 + corpus.length / Math.max(df.get(term) ?? 0, 0.5));
+  const weight = (term: string) => Math.log(1 + corpus.length / Math.max(df.get(term) ?? 0, 0.5)) ** 2;
   const saturate = (count: number, length: number) => (count * (K1 + 1)) / (count + K1 * (1 - B + (B * length) / average));
   const bm25 = (query: Doc, doc: Doc) => {
     let score = 0;
@@ -92,15 +92,17 @@ function scorer(corpus: Doc[]): { closeness: (a: Doc, b: Doc) => number; weight:
   return { closeness, weight };
 }
 
-/** The shared words that weigh most, as the note writes them. */
+/** The shared words that weigh most, as the note writes them. Words of one weight keep the order of the note, so the title comes first. */
 function sharedWords(draft: Doc, doc: Doc, note: NoteText, weight: (term: string) => number): string[] {
   const written = new Map<string, string>();
   for (const word of words(`${note.title}\n${note.body}`)) if (!written.has(stem(word))) written.set(stem(word), word);
-  return [...draft.tf.keys()]
-    .filter((term) => doc.tf.has(term))
-    .sort((x, y) => weight(y) * Math.min(draft.tf.get(y)!, doc.tf.get(y)!) - weight(x) * Math.min(draft.tf.get(x)!, doc.tf.get(x)!) || x.localeCompare(y))
+  const heavy = (term: string) => weight(term) * Math.min(draft.tf.get(term)!, doc.tf.get(term)!);
+  return [...written.keys()]
+    .filter((term) => draft.tf.has(term) && doc.tf.has(term))
+    .map((term, place) => ({ term, place }))
+    .sort((x, y) => heavy(y.term) - heavy(x.term) || x.place - y.place)
     .slice(0, MAX_SHARED)
-    .map((term) => written.get(term) ?? term);
+    .map(({ term }) => written.get(term)!);
 }
 
 /**

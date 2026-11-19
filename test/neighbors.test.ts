@@ -47,7 +47,7 @@ describe("findNeighbors", () => {
     const found = findNeighbors(many, draft);
     expect(found.map((n) => n.id)).toEqual(["shared-db"]);
     expect(found[0]!.score).toBeGreaterThanOrEqual(NEIGHBOR_THRESHOLD);
-    expect(found[0]!.shared).toEqual(expect.arrayContaining(["staging", "migrate", "column"]));
+    expect(found[0]!.shared).toEqual(expect.arrayContaining(["staging", "migrate", "teams"]));
   });
 
   test("two notes that share one word, or a few common ones, are no neighbors", () => {
@@ -93,15 +93,23 @@ describe("the neighbor check on the seeded store", () => {
     expect(fixture.rewrites).toHaveLength(10);
     const found = fixture.rewrites.filter((r) => holds(r)[0]?.id === r.original);
     expect(found.length).toBe(10);
-    expect(Math.min(...fixture.rewrites.map((r) => holds(r)[0]!.score))).toBeGreaterThanOrEqual(0.5);
+    expect(Math.min(...fixture.rewrites.map((r) => holds(r)[0]!.score))).toBeGreaterThanOrEqual(0.45);
   });
 
-  // An agent writes a longer note than a person, in words further from the stored note. The first
-  // measure, the mean of both directions with a line at 0.35, let this twin through.
-  test("the twin that a headless checkpoint wrote finds its original, and the new fact of that session has no neighbor", () => {
-    const [twin, fresh] = fixture.session as [(typeof fixture.session)[number], (typeof fixture.session)[number]];
-    expect(holds(twin).map((n) => n.id)).toEqual([twin.original!]);
-    expect(holds(fresh)).toEqual([]);
+  // An agent writes a longer note than a person, in words further from the stored note. The mean
+  // of both directions let this twin through. A plain idf with a heavier title named a short
+  // convention as the neighbor of the new fact, for its common words "version", "needs" and "PR".
+  test("the twin that a headless checkpoint wrote finds its original, and the new fact of those sessions has no neighbor", () => {
+    expect(fixture.session.map((s) => s.original)).toEqual(["preview-links-expire-after-seven-days", null, null]);
+    for (const note of fixture.session) expect(holds(note).map((n) => n.id)).toEqual(note.original ? [note.original] : []);
+  });
+
+  test("few seeded notes with no twin have a neighbor among the others", () => {
+    const twins = new Set(["never-run-the-migration-tool-against-the-shared", "the-staging-database-is-shared-never-run"]);
+    const single = notes.filter((n) => !twins.has(n.id) && !/-keeps-(all-)?[a-z]+-state-in-/.test(n.id));
+    expect(single).toHaveLength(134);
+    const held = single.filter((note) => findNeighbors(notes.filter((n) => n.id !== note.id), note).some((n) => n.scope === note.scope || n.scope === "global"));
+    expect(held.length).toBeLessThanOrEqual(6);
   });
 
   test("none of 10 new facts gets a neighbor", () => {

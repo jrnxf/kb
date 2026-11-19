@@ -1,5 +1,5 @@
 {
-  "about": "Notes for the seeded store of scripts/seed.ts. `rewrites` say a fact of one seeded note again in other words: `original` is the id of that note. `unrelated` are new facts that no seeded note holds. `session` are two notes that an agent wrote in a headless /kb:checkpoint on this store: one is a twin of `original`, and one is a new fact. A repo is the folder name under repos/, or null for a global note.",
+  "about": "Notes for the seeded store of scripts/seed.ts. `rewrites` say a fact of one seeded note again in other words: `original` is the id of that note. `unrelated` are new facts that no seeded note holds. `session` are notes that an agent wrote in two headless /kb:checkpoint runs on this store: one is a twin of `original`, and two say one new fact, each in the words of its run. A repo is the folder name under repos/, or null for a global note.",
   "rewrites": [
     {
       "original": "never-run-the-migration-tool-against-the-shared",
@@ -126,6 +126,12 @@
       "repo": "ferry",
       "title": "A Node version change does not rebuild native modules until CACHE_VERSION is raised",
       "body": "The build cache key holds only the hash of the lockfile. Hosting support said this on 2026-11-19.\nA change of the Node version alone keeps the old native modules, so a build can be broken or stale.\nWhen the Node version changes, raise the CACHE_VERSION variable by hand, in the same PR or release step.\nSource: hosting support, not checked by a test."
+    },
+    {
+      "original": null,
+      "repo": "ferry",
+      "title": "A Node version bump needs a manual CACHE_VERSION raise",
+      "body": "The hosting build cache key holds only the hash of the lockfile. A change of the Node version alone does not rebuild native modules.\nThe build then reuses native modules built for the old Node version.\nWhen a PR changes the Node version, raise the CACHE_VERSION variable by hand in the same PR.\nSource: hosting support, not checked by a test."
     }
   ]
 }

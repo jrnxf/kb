@@ -227,7 +227,7 @@ describe("kb add: close notes", () => {
     expect(held.code).toBe(0);
     expect(held.json.status).toBe("neighbors");
     expect(held.json.neighbors).toEqual([
-      { id: "raw-body", scope: "global", kind: "gotcha", title: stored.title, first_line: "express.json() runs before the webhook route and breaks the signature check.", shared: ["raw", "body", "route", "stripe", "webhook"], score: expect.any(Number) },
+      { id: "raw-body", scope: "global", kind: "gotcha", title: stored.title, first_line: "express.json() runs before the webhook route and breaks the signature check.", shared: ["raw", "route", "stripe", "signature", "check"], score: expect.any(Number) },
     ]);
     expect(held.json.hint).toContain('"new": true');
     expect(store.notes()).toHaveLength(2);

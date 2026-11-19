@@ -212,12 +212,13 @@ adds no second one. It compares a new note with the notes of its scope and the g
 global note is also compared with the notes of every repo: a close repo note does not stop the
 write, and the result names it. The measure is plain text, with no server and no model: BM25 over
 the stems of the title and the body, as the share of one note that the other holds, in the larger
-of the two directions. A note at 0.30 or more is a neighbor. An update by id skips the check, and
-a note in the trash or in an instruction file is no neighbor. On the seeded store, 10 of 10 notes
-written again by hand in other words find their original, and 0 of 10 new facts get a neighbor.
-About 1 seeded note in 4 has a related note that is not the same fact over the line: the writer
-reads it and passes `"new": true`. A twin in words that share little with the stored note still
-gets through. The log records each answer: `kb log --session` shows the notes that `kb add` named.
+of the two directions. A rare word weighs most. A note at 0.32 or more is a neighbor. An update by
+id skips the check, and a note in the trash or in an instruction file is no neighbor. On the
+seeded store, 10 of 10 notes written again by hand in other words find their original, and 0 of
+10 new facts get a neighbor. Of the 134 seeded notes with no twin, 4 have a related note over the
+line: the writer reads it and passes `"new": true`. In a store of a few notes, a related note is
+named more often. A twin in words that share little with the stored note still gets through. The
+log records each answer: `kb log --session` shows the notes that `kb add` named.
 
 `--scope` takes `repo` (the repo of the current directory), `global` or a repo id. A scope that
 has no notes is an error in `kb add`, `kb search` and `kb list`, so a typing error cannot put a
