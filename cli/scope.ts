@@ -36,6 +36,25 @@ export function normalizeRemote(url: string): string | null {
 }
 
 /**
+ * The main checkout of the repo that has a checkout at `root`. All worktrees of a repo share one
+ * common git dir, and the main checkout is the folder around it. For the main checkout itself,
+ * and for a repo with no main checkout (a bare one), it is `root`.
+ */
+export function mainCheckout(root: string): string {
+  const common = git(root, "rev-parse", "--git-common-dir");
+  let main = root;
+  if (common.ok && common.out) {
+    const commonDir = resolve(root, common.out);
+    if (basename(commonDir) === ".git") main = dirname(commonDir);
+  }
+  try {
+    return realpathSync(main);
+  } catch {
+    return main; // keep the unresolved path
+  }
+}
+
+/**
  * Resolve the scope for a path.
  * With an origin remote: the normalised remote. Without one: the directory name of the main
  * checkout (worktrees share it), recorded in local.json so the id can be pinned after a rename.
@@ -55,17 +74,7 @@ export function resolveRepo(path: string, store: Store, options: { record?: bool
   if (fromRemote) return { scope: fromRemote, root, head };
 
   // No usable remote. All worktrees share one common git dir, so key on the main checkout.
-  const common = git(root, "rev-parse", "--git-common-dir");
-  let main = root;
-  if (common.ok && common.out) {
-    const commonDir = resolve(root, common.out);
-    if (basename(commonDir) === ".git") main = dirname(commonDir);
-  }
-  try {
-    main = realpathSync(main);
-  } catch {
-    // keep the unresolved path
-  }
+  const main = mainCheckout(root);
 
   const local = store.local();
   const known = local.aliases[main];

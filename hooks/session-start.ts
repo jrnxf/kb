@@ -1,6 +1,6 @@
 // Reads the SessionStart JSON on stdin and prints `kb context` for the session's directory (the
 // open work of the repo in short form, and the index), the rule for where rules and facts go, and
-// at most four one-line notices. With the other files in hooks/ and the skills, this is the only
+// a few one-line notices. With the other files in hooks/ and the skills, this is the only
 // code that knows about Claude Code. After the output it adds one `start` line to the event log:
 // which notes this session got, and in what form.
 
@@ -8,7 +8,7 @@ import { forgetSeen } from "../cli/by-path.ts";
 import { SAVE_RULE, buildContext, contextFor } from "../cli/context.ts";
 import { hookWho, logEvent } from "../cli/log.ts";
 import { resolveRepo } from "../cli/scope.ts";
-import { isSaved } from "../cli/session.ts";
+import { isSaved, reopenSession } from "../cli/session.ts";
 import { cachedStaleCount } from "../cli/stale.ts";
 import { Store } from "../cli/store.ts";
 import { detached, kickSync } from "../cli/sync.ts";
@@ -24,6 +24,12 @@ const OUTPUT_LIMIT = 9900;
  * because a rule too many costs less than a fact in the wrong store.
  */
 let rules = `${SAVE_RULE}\n${MEMORY_RULE}`;
+/**
+ * False for a headless run, where nobody reads a first reply. Claude Code names the way it was
+ * started in this variable: print mode (`claude -p`) is "sdk-cli", and a run of the Agent SDK is
+ * "sdk-ts" or "sdk-py". Every name that starts with "sdk" is such a run. No hook input says it.
+ */
+const attended = () => !process.env.CLAUDE_CODE_ENTRYPOINT?.startsWith("sdk");
 /** What a session gets when there is no note to show: no store yet, or a broken one. */
 const rulesOnly = () => `# kb\n${rules}\n`;
 
@@ -48,10 +54,14 @@ try {
 
   if (store.exists()) {
     const repo = resolveRepo(cwd, store);
-    // Sessions of this directory or checkout that ended with /clear and no checkpoint. A resume or
-    // a compaction is the same session, which already had the line. The step never throws and has
-    // its own time budget, so no transcript can cost the session its notes.
-    const lost = input.source === "startup" || input.source === "clear" ? unsavedNotice(store, cwd, repo.root) : null;
+    const session = typeof input.session_id === "string" && !input.agent_id ? input.session_id : undefined;
+    // A session that ended with no checkpoint and starts again is live: the user resumed it. Its
+    // record goes, so no other session recovers it while it works. Its next end records it again.
+    if (session) reopenSession(store, session);
+    // Sessions of this directory or checkout that ended with no checkpoint, and from 5 on those of
+    // other directories. A resume or a compaction is the same session, which already had the line.
+    // The step never throws and has its own time budget, so no transcript can cost the session its notes.
+    const lost = input.source === "startup" || input.source === "clear" ? unsavedNotice(store, cwd, repo.root, { session, attended: attended(), startup: input.source === "startup" }) : null;
     if (lost) notices.push(lost);
 
     if (input.source === "compact" && typeof input.session_id === "string" && !isSaved(store, input.session_id)) {

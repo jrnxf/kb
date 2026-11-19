@@ -27,10 +27,11 @@ export function afterWrite(store: Store, message: string): void {
 
 /**
  * Record a write of each note in the event log. The session comes from the command that runs.
- * `neighbors` are the close notes that `kb add` showed with the write.
+ * `neighbors` are the close notes that `kb add` showed with the write. `from` is the unsaved
+ * session that a recovery read.
  */
-export function logWrites(store: Store, op: WriteOp, ids: string[], neighbors: string[] = []): void {
-  logEvent(store, ids.map((note) => ({ ev: "write" as const, note, op, ...(neighbors.length > 0 ? { neighbors } : {}) })));
+export function logWrites(store: Store, op: WriteOp, ids: string[], neighbors: string[] = [], from?: string): void {
+  logEvent(store, ids.map((note) => ({ ev: "write" as const, note, op, ...(from ? { from } : {}), ...(neighbors.length > 0 ? { neighbors } : {}) })));
 }
 
 /** Ids that contain the given text. For a caller who remembers a part of an id. */
@@ -66,9 +67,10 @@ export function asOfTime(value: string, now = Date.now()): string {
  * a change of content inside the note's own repo also records that repo's HEAD.
  * With `asOf`, the content comes from an earlier time (a session recovered later): the note is
  * verified at that time and at the commit of that time, never now. The caller refuses an `asOf`
- * before the note's last check, so old content never goes under a newer check.
+ * before the note's last check, so old content never goes under a newer check. `from` is the
+ * unsaved session that a recovery read, for the log.
  */
-export function updateNote(store: Store, input: Record<string, unknown> & { id: string }, repo: Pick<RepoInfo, "scope" | "head"> & { root?: string | null }, asOf?: string): { id: string; path: string } {
+export function updateNote(store: Store, input: Record<string, unknown> & { id: string }, repo: Pick<RepoInfo, "scope" | "head"> & { root?: string | null }, asOf?: string, from?: string): { id: string; path: string } {
   const existing = store.notes().find((n) => n.id === input.id);
   if (!existing) throw new KbError(`no active note with id "${input.id}"`);
   rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors, triggers: input.triggers }, `the new text of ${existing.id}`);
@@ -86,7 +88,7 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
   const note = validateNote(merged);
   const path = store.writeNote(note);
   afterWrite(store, `kb: update ${note.id}`);
-  logWrites(store, "update", [note.id]);
+  logWrites(store, "update", [note.id], [], from);
   return { id: note.id, path };
 }
 

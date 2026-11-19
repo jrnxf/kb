@@ -1,5 +1,5 @@
 {
-  "description": "Inject saved kb notes at every session start, load a note at its trigger (a command, an error or a file), protect the notes through compaction, and record a /clear with no checkpoint.",
+  "description": "Inject saved kb notes at every session start, load a note at its trigger (a command, an error or a file), protect the notes through compaction, and record a session that ends with no checkpoint.",
   "hooks": {
     "SessionStart": [
       {
@@ -15,7 +15,6 @@
     ],
     "SessionEnd": [
       {
-        "matcher": "clear",
         "hooks": [
           {
             "type": "command",
