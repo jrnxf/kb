@@ -7,11 +7,12 @@ import { forgetSeen } from "../cli/by-path.ts";
 import { SAVE_RULE, buildContext } from "../cli/context.ts";
 import { hookWho, logEvent } from "../cli/log.ts";
 import { resolveRepo } from "../cli/scope.ts";
-import { isSaved, takeUnsaved } from "../cli/session.ts";
+import { isSaved } from "../cli/session.ts";
 import { cachedStaleCount } from "../cli/stale.ts";
 import { Store } from "../cli/store.ts";
 import { detached, kickSync } from "../cli/sync.ts";
 import { MEMORY_ON_NOTICE, MEMORY_RULE, autoMemoryOn } from "./auto-memory.ts";
+import { unsavedNotice } from "./unsaved-notice.ts";
 
 const STALE_NOTICE_ABOVE = 5;
 /** Claude Code shows SessionStart output above 10,000 characters as a file preview. */
@@ -45,10 +46,11 @@ try {
 
   if (store.exists()) {
     const repo = resolveRepo(cwd, store);
-    // Sessions of this directory or checkout that ended with /clear and no checkpoint. Reported once.
-    for (const lost of takeUnsaved(store, cwd, repo.root)) {
-      notices.push(`An earlier session in this directory ended with /clear before /kb:checkpoint ran. Its transcript is ${lost.transcript}. Read it only if the user asks to recover something from it.`);
-    }
+    // Sessions of this directory or checkout that ended with /clear and no checkpoint. A resume or
+    // a compaction is the same session, which already had the line. The step never throws and has
+    // its own time budget, so no transcript can cost the session its notes.
+    const lost = input.source === "startup" || input.source === "clear" ? unsavedNotice(store, cwd, repo.root) : null;
+    if (lost) notices.push(lost);
 
     if (input.source === "compact" && typeof input.session_id === "string" && !isSaved(store, input.session_id)) {
       notices.push("This session was compacted and /kb:checkpoint has not run in it. Knowledge from before the compaction now exists only in the summary. Tell the user once that /kb:checkpoint saves it.");

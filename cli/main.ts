@@ -2,7 +2,7 @@
 // kb: a personal knowledge store for coding agents. Harness-agnostic: flags and stdin only.
 
 import { existsSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { openAudits, proposeAudit, readAudit } from "./audit.ts";
 import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo } from "./repos.ts";
@@ -10,21 +10,24 @@ import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
 import { type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
 import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
-import { resolveRepo } from "./scope.ts";
+import { commitAt, resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
 import { DEFAULT_PORT, isKbServer, runningPort, serve } from "./serve.ts";
 import { resultGroups } from "./wire.ts";
-import { markSaved } from "./session.ts";
+import { forgetUnsaved, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
-import { afterWrite, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, logWrites, moveNotes, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
   kb context [--repo .]                  text for a session start: index, top notes, pointer
-  kb add [--repo .]                      create or update a note from JSON on stdin
+  kb add [--repo .] [--as-of <ISO time>] [--recovered-from <session-id>]
+                                         create or update a note from JSON on stdin. --as-of is for
+                                         a fact learned at an earlier time: the note is verified then.
+                                         --recovered-from records the note in that unsaved session
   kb show <id> [--check]                 print one note. A part of the id is enough when one note has
                                          it. --check when the read is a check, not a need for the note:
                                          an audit, or a look before an update
@@ -62,6 +65,8 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb log [--session id] [--since days]   what the log of this machine says of each note: how often a
                                          session got it, opened it and judged it. With --session, the
                                          events of one session in time order. The log keeps 12 months
+  kb unsaved [--repo .]                  sessions here that ended with no checkpoint, and their transcripts
+  kb unsaved --forget <session-id>       stop reporting one of them, as it holds nothing to save
   kb scope [--repo .]                    print the scope id of a directory
   kb serve [--port n] [--no-open]        the store as a local page: read, edit and trash notes
                                          kb alone in a terminal does the same. Behind a proxy, name it in
@@ -78,6 +83,11 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence
   kind: ${KINDS.join(" | ")}
   confidence: ${CONFIDENCES.join(" | ")} (default medium)
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
+  With --as-of (a full ISO time with a zone), the verification has that time and the newest commit
+  of the repo at that time. An update of a note that was verified after that time changes nothing:
+  the result is {"status": "newer", "id", "last_verified"}.
+  With --recovered-from, a created or updated note is recorded in that unsaved session, so a second
+  recovery of the session sees it.
   Without "id", a note with the same title in the same scope
   is not overwritten: the result is {"status": "exists", "id"}.`;
 
@@ -86,7 +96,7 @@ interface Args {
   flags: Map<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["repo", "scope", "to", "port", "session", "since"]);
+const VALUE_FLAGS = new Set(["as-of", "forget", "recovered-from", "repo", "scope", "to", "port", "session", "since"]);
 
 function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -142,7 +152,17 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
 
   store.ensure();
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
-  const now = nowIso();
+  // One clock read, so a time that is cut to now is the same now as `created`.
+  const clock = Date.now();
+  const now = isoTime(clock);
+  // A fact from an earlier time, such as a session recovered later, is verified then and not now.
+  const asOf = args.flags.has("as-of") ? asOfTime(String(args.flags.get("as-of")), clock) : undefined;
+  // The session a recovery reads. Checked before the write, so a wrong id never passes in silence.
+  const from = args.flags.get("recovered-from");
+  if (typeof from === "string" && !unsavedSession(store, from)) throw new KbError(`no unsaved session ${from}. \`kb unsaved\` lists them.`);
+  const recovered = (id: string) => {
+    if (typeof from === "string") recordRecovered(store, from, id);
+  };
   const active = store.notes();
   const trashed = store.notes({ trashed: true });
 
@@ -153,7 +173,15 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     if (input.scope !== undefined && resolveScopeInput(input.scope, repo.scope) !== existing.scope) {
       throw new KbError("a note cannot change scope. Trash it and add a new one.");
     }
-    const updated = updateNote(store, input as Record<string, unknown> & { id: string }, repo);
+    // The note was checked after that time. Old text must not go under the newer check, so nothing changes.
+    if (asOf !== undefined && Date.parse(existing.last_verified) > Date.parse(asOf)) {
+      return {
+        json: { status: "newer", id: existing.id, last_verified: existing.last_verified },
+        text: `newer ${existing.id}: the note was checked at ${existing.last_verified}, after the time of --as-of. Nothing changed.`,
+      };
+    }
+    const updated = updateNote(store, input as Record<string, unknown> & { id: string }, repo, asOf);
+    recovered(updated.id);
     return { json: { status: "updated", ...updated }, text: `updated ${updated.id}` };
   }
 
@@ -181,13 +209,15 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     id: uniqueId(slug, new Set([...[...active, ...trashed].map((n) => n.id), ...idsWithHistory(store)])),
     scope,
     created: now,
-    last_verified: now,
+    last_verified: asOf ?? now,
   };
-  if (scope !== "global" && repo.scope === scope && repo.head) raw.verified_at_commit = repo.head;
+  const commit = asOf === undefined ? repo.head : commitAt(repo.root, asOf);
+  if (scope !== "global" && repo.scope === scope && commit) raw.verified_at_commit = commit;
   const note: Note = validateNote(raw);
   const path = store.writeNote(note);
   afterWrite(store, `kb: add ${note.id}`);
   logWrites(store, "add", [note.id]);
+  recovered(note.id);
   return { json: { status: "created", id: note.id, path }, text: `created ${note.id}` };
 }
 
@@ -514,6 +544,19 @@ function cmdLog(store: Store, args: Args): Output {
   return { json: { ...head, notes }, text: lines.join("\n") };
 }
 
+function cmdUnsaved(store: Store, args: Args): Output {
+  const forget = args.flags.get("forget");
+  if (typeof forget === "string") {
+    const forgotten = store.exists() && forgetUnsaved(store, forget);
+    return { json: { session: forget, forgotten }, text: forgotten ? `forgot ${forget}` : `no unsaved session ${forget}` };
+  }
+  if (!store.exists()) return { json: [], text: "no unsaved session here" };
+  const dir = String(args.flags.get("repo") ?? ".");
+  const sessions = unsavedSessions(store, resolve(dir), resolveRepo(dir, store).root);
+  const text = sessions.map((s) => `${s.session} | ended ${s.ended} | ${s.transcript}`).join("\n") || "no unsaved session here";
+  return { json: sessions, text };
+}
+
 function openInBrowser(url: string): void {
   const opener = process.platform === "darwin" ? "open" : "xdg-open";
   try {
@@ -672,6 +715,7 @@ async function main(): Promise<number> {
       case "budget": out = cmdBudget(store, args); break;
       case "instructions": out = cmdInstructions(store, args); break;
       case "checkpointed": out = cmdCheckpointed(store, args); break;
+      case "unsaved": out = cmdUnsaved(store, args); break;
       case "serve": out = await cmdServe(store, args, json); break;
       case "audit": out = await cmdAudit(store, args, () => Bun.stdin.text()); break;
       case "sync": out = cmdSync(store); break;

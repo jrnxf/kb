@@ -71,10 +71,11 @@ export function git(cwd: string, ...args: string[]): { ok: boolean; out: string 
   }
 }
 
-export function writeAtomic(path: string, content: string): void {
+/** With `mode`, the file gets those permissions, for text that only the user may read. */
+export function writeAtomic(path: string, content: string, mode?: number): void {
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
-  writeFileSync(temp, content);
+  writeFileSync(temp, content, mode === undefined ? undefined : { mode });
   renameSync(temp, path);
 }
 
