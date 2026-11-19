@@ -600,6 +600,7 @@ describe("the hold-back arm", () => {
 
   test("a held-back start gives the notes that the commit before the briefs gave: the same bodies, index lines and length", () => {
     // What `kb context` of commit 267e9f9 gives for the store of scripts/seed.ts: the last commit with the old policy.
+    // A change of the seed needs a new recording, from a checkout of that commit on the new store.
     const main: Record<string, { chars: number; bodies: string[]; index: string[]; hidden: string[] }> = JSON.parse(readFileSync(join(ROOT, "test", "holdback-main-267e9f9.json"), "utf8"));
     const seeded = tempDir("kb-seed-");
     sh(ROOT, process.execPath, join(ROOT, "scripts", "seed.ts"), join(seeded, "s"));
