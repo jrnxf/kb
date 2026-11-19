@@ -3,7 +3,7 @@ name: checkpoint
 description: Save the durable knowledge of this session before /clear - rules to instruction files, facts to the kb store - and empty Claude Code's auto memory into them. Run only when the user types /kb:checkpoint.
 argument-hint: "[auto memory folder]"
 disable-model-invocation: true
-allowed-tools: Bash(kb *), Bash(rm */projects/*/memory/*.md), Bash(echo *), Read, Glob, Edit, Write
+allowed-tools: Bash(kb *), Bash(rm */projects/*/memory/*.md), Bash(kb-transcript --memory), Read, Glob, Edit, Write
 ---
 
 # kb checkpoint
@@ -49,10 +49,10 @@ Each note is one line, `id | scope | title`, with this repo first. A hit in anot
 kb replaces Claude Code's auto memory. Read one memory folder:
 
 - With an argument (`/kb:checkpoint <path>/projects/<name>/memory`), read that folder only: $ARGUMENTS
-- Without one, read the folder of this session's project: `<config>/projects/<name>/memory/`. `<config>` is `$CLAUDE_CONFIG_DIR`, or `~/.claude` when that is not set (run `echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"` for the absolute path). `<name>` is the absolute path of the session's directory, with each character that is not a letter or a digit changed to `-` (`/Users/u/my_app` gives `-Users-u-my-app`).
+- Without one, run `kb-transcript --memory` from the session's directory. It prints the folder of this session's project and its files as JSON: `{"folder", "files"}`. `files` has the absolute path of each `*.md` file but `MEMORY.md`. Do not find the folder with another command: in the default permission mode, Claude Code asks before a command with a variable, or a list of a folder outside the project.
 
-Read each `*.md` file in the folder except `MEMORY.md`. A folder that does not exist or has no files: skip this step.
-In both cases `<name>` is the folder above `memory`. The folder belongs to this session's project when `<name>` is the session's directory as above, or the same path under an older home folder (`-Users-olduser-dev-app` for `/Users/user/dev/app`). Else its project is gone or elsewhere.
+Read each `*.md` file in the folder except `MEMORY.md`, with the Read tool. A folder that does not exist or has no files: skip this step.
+In both cases `<name>` is the folder above `memory`. Claude Code names it after the absolute path of the project, with each character that is not a letter or a digit changed to `-` (`/Users/u/my_app` gives `-Users-u-my-app`). The folder belongs to this session's project when `<name>` is the session's directory, or the same path under an older home folder (`-Users-olduser-dev-app` for `/Users/user/dev/app`). Else its project is gone or elsewhere.
 
 For each fact in it, apply the skip rules of step 1 first: a dated status, a finished plan or a one-time state is not worth a note. Then:
 

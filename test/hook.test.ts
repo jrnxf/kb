@@ -420,6 +420,41 @@ describe("plugin files", () => {
   });
 });
 
+// /kb:checkpoint finds the auto memory folder with this command, as a shell command with a variable needs approval.
+describe("kb-transcript --memory", () => {
+  const MEMORY = join(ROOT, "bin", "kb-transcript");
+  const run = (cwd: string, config: string, env: Record<string, string | undefined> = {}) => {
+    const r = Bun.spawnSync([MEMORY, "--memory"], { cwd, env: { ...process.env, CLAUDE_PROJECT_DIR: undefined, CLAUDE_CONFIG_DIR: config, ...env }, stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode).toBe(0);
+    return JSON.parse(r.stdout.toString()) as { folder: string; files: string[] };
+  };
+
+  test("names the folder of the project and its files, but MEMORY.md", () => {
+    const config = tempDir("kb-claude-");
+    const project = join(tempDir("kb-proj-"), "my_app");
+    mkdirSync(project);
+    const folder = join(config, "projects", project.replace(/[^a-zA-Z0-9]/g, "-"), "memory");
+    mkdirSync(folder, { recursive: true });
+    for (const file of ["MEMORY.md", "b.md", "a.md", "notes.txt"]) writeFileSync(join(folder, file), "x");
+    expect(run(project, config)).toEqual({ folder, files: [join(folder, "a.md"), join(folder, "b.md")] });
+    // A subfolder of the session is not its project: Claude Code names the folder where the session started.
+    mkdirSync(join(project, "src"));
+    expect(run(join(project, "src"), config, { CLAUDE_PROJECT_DIR: project }).folder).toBe(folder);
+  });
+
+  test("gives no files when the folder does not exist, and finds a long name that Claude Code cut", () => {
+    const config = tempDir("kb-claude-");
+    const project = join(tempDir("kb-proj-"), "a".repeat(220));
+    mkdirSync(project);
+    const name = project.replace(/[^a-zA-Z0-9]/g, "-");
+    expect(run(project, config)).toEqual({ folder: join(config, "projects", name, "memory"), files: [] });
+    const folder = join(config, "projects", `${name.slice(0, 200)}-1x2y3z`, "memory");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "fact.md"), "x");
+    expect(run(project, config)).toEqual({ folder, files: [join(folder, "fact.md")] });
+  });
+});
+
 describe("session notices", () => {
   const END = join(ROOT, "hooks", "session-end.sh");
   const end = (home: string, body: object) =>

@@ -1,4 +1,5 @@
 #!/bin/sh
 # For /kb:recover: writes what an unsaved session holds to a private file, and measures the
-# sessions that nobody measured yet. A command of its own, so the skill can allow it by name.
+# sessions that nobody measured yet. For /kb:checkpoint: names the auto memory folder of this
+# project. A command of its own, so a skill can allow it by name.
 exec bun "$(dirname "$0")/../hooks/kb-transcript.ts" "$@"
