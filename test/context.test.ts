@@ -48,27 +48,32 @@ describe("kb context ranking", () => {
     expect(buildContext(store, repo).bodies).toEqual(["f-legacy", "e-helped", "d-fired", "c-shown", "a-quiet", "b-checked", "g-not-needed"]);
   });
 
-  test("in a repo, global notes take at most globalIndexLines places: open work first, then by kind, then last verified", () => {
+  test("in a repo, global notes take at most globalIndexLines places: open work first, then last activity, then kind, then last verified", () => {
     const store = tempStore();
     setConfig(store.home, { globalIndexLines: 3 });
     const repo = tempRepo({ remote: REMOTE });
     putNote(store, { id: "repo-note", kind: "how-to", scope: SCOPE });
-    putNote(store, { id: "g-howto", kind: "how-to", last_verified: "2026-04-01T00:00:00Z" });
+    putNote(store, { id: "g-howto", kind: "how-to" });
     putNote(store, { id: "g-rule-old", kind: "convention", last_verified: "2026-02-01T00:00:00Z" });
     putNote(store, { id: "g-rule-new", kind: "convention", last_verified: "2026-03-01T00:00:00Z" });
     putNote(store, { id: "g-trap", kind: "gotcha" });
+    putNote(store, { id: "g-trap-new", kind: "gotcha", last_verified: "2026-03-01T00:00:00Z" });
     putNote(store, { id: "g-open", kind: "open-work" });
-    // No count of reads lifts a global note: not the log, and not the counters of an older kb.
+    // A how-to that sessions open keeps its place before the gotchas that no session opened.
     for (const day of ["01", "02", "03"]) logAt(store, `2026-05-${day}T00:00:00Z`, { ev: "show", note: "g-howto", why: "task" });
-    legacyUsage(store, "old", { "g-howto": { uses: 50, last_used: "2026-05-01T00:00:00Z" }, "g-rule-old": { uses: 9, last_used: "2026-05-01T00:00:00Z" } });
+    // The newest activity counts, not the number of reads: one use on a later day goes first.
+    legacyUsage(store, "old", { "g-howto": { uses: 50, last_used: "2026-05-01T00:00:00Z" }, "g-rule-old": { uses: 1, last_used: "2026-05-04T00:00:00Z" } });
     const result = buildContext(store, repo);
-    expect(result.bodies).toEqual(["repo-note", "g-open", "g-trap", "g-rule-new"]);
-    expect(result.capped).toEqual(["g-rule-old", "g-howto"]);
-    expect(result.text).toContain("2 global notes of lower rank are left out here. `kb show <id>` prints one note. `kb search <words>` searches every note.");
+    expect(result.bodies).toEqual(["repo-note", "g-open", "g-rule-old", "g-howto"]);
+    // The notes with no activity come after those with some: by kind, then the newest check.
+    expect(result.capped).toEqual(["g-trap-new", "g-trap", "g-rule-new"]);
+    expect(result.text).toContain("3 global notes of lower rank are left out here. `kb show <id>` prints one note. `kb search <words>` searches every note.");
     // Left out on purpose is not over the budget, so no session hears that notes are hidden.
     expect(result.hiddenIndexLines).toBe(0);
     // Outside any repo, the global notes are the session's own, and none is left out.
-    expect(buildContext(store, plain()).capped).toEqual([]);
+    const outside = buildContext(store, plain());
+    expect(outside.capped).toEqual([]);
+    expect([...outside.bodies, ...outside.dropped]).toEqual(["g-open", "g-rule-old", "g-howto", "g-trap-new", "g-trap", "g-rule-new"]);
   });
 
   test("a globalIndexLines that is not a number falls back to the default, so no global note is lost", () => {

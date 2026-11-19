@@ -55,19 +55,23 @@ const EMPTY: ContextResult = { text: "", scope: null, index: [], bodies: [], dro
 /**
  * Repo notes before global notes, so the notes of the repo are never crowded out. Repo notes go by
  * kind (open-work, gotcha, convention, decision, how-to), then by last activity on any machine,
- * then last_verified. Global notes go open work first, then by kind, then last_verified. No count
- * of reads is in the order: a count measures neither the value of a note nor the need for it.
+ * then last_verified. Global notes go open work first, then by last activity, then by kind, then
+ * last_verified: in a repo only the top of them gets a place, and a note that sessions open must
+ * not lose it to a kind. A note with no activity comes after the notes that have some. No count of
+ * reads is in the order: a count measures neither the value of a note nor the need for it.
  * `active` is `lastActivity` of the store.
  */
 export function rank(notes: StoredNote[], active: Map<string, string>): StoredNote[] {
   const desc = (a: string | undefined, b: string | undefined) => (b ?? "").localeCompare(a ?? "");
+  const open = (note: StoredNote) => (note.kind === "open-work" ? 0 : 1);
   return [...notes].sort((a, b) => {
     const global = a.scope === "global";
     if (global !== (b.scope === "global")) return global ? 1 : -1;
-    // Open work is the first kind, so the order of the kinds puts it first.
+    // Open work is the first kind, so in a repo the order of the kinds puts it first.
     const kind = KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind);
+    const activity = desc(active.get(a.id), active.get(b.id));
     const rest = desc(a.last_verified, b.last_verified) || a.id.localeCompare(b.id);
-    return global ? kind || rest : kind || desc(active.get(a.id), active.get(b.id)) || rest;
+    return global ? open(a) - open(b) || activity || kind || rest : kind || activity || rest;
   });
 }
 

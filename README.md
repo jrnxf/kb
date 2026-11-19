@@ -35,7 +35,8 @@ highest.
   (20) and `contextChars` (8000, clamped under the 10,000 character hook cap, with the save rule
   on top). The repo's own notes rank first, by kind (open-work, gotcha, convention, decision,
   how-to), then last activity on any machine, then last verified. Global notes come after them:
-  open work first, then by kind, then last verified. No count of reads is in the order. In a repo,
+  open work first, then by last activity, then by kind, then last verified. So a global note that
+  sessions open keeps its place. No count of reads is in the order. In a repo,
   global notes take at most `globalIndexLines` places, so they never crowd out the repo's notes. Whole bodies drop from the bottom, and only a note without a body
   takes an index line. The store can grow for years and a session loads the same amount.
 - **A log says what each session got.** Each machine keeps an event log in `.state/log/`. It
