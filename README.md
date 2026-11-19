@@ -49,10 +49,14 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 - **Proven notes move to the repo.** `/kb:promote` proposes notes with high confidence and many
   uses for the repo's `CLAUDE.md` or `AGENTS.md`, shows the exact text, and writes after you
   confirm. This is the only write `kb` makes inside a repo. A promoted note is no longer injected.
-- **A missed checkpoint leaves a trace.** Nothing can run before `/clear`. So a session that ends
-  with `/clear` and no checkpoint is recorded, and the next session in that directory gets one
-  line with the path of its transcript, also when one of the two was in a subdirectory of the checkout. Before a compaction, a hook tells the summary what to
-  keep, and the next start says once that no checkpoint ran.
+- **A missed checkpoint can be recovered.** Nothing can run before `/clear`, but `/clear` keeps the
+  transcript on disk. So a session that ends with `/clear` and no checkpoint is recorded, and each
+  new session in that checkout says in one line that `/kb:recover` saves it. `/kb:recover` hands
+  what the user and the agent said, without tool output, to a Sonnet subagent. The subagent runs
+  the checkpoint steps and shows the usual report. `/kb:recover forget` stops the line. A session
+  with fewer than 2 prompts is not reported, and a record goes after 7 days. Nothing runs in the
+  background. Before a compaction, a hook tells the summary what to keep, and the next start says
+  once that no checkpoint ran.
 - **Sync.** If the store has a git remote, each write starts a background pull and push, and
   each session start does the same at most once per 5 minutes. Usage counters live in one file
   per machine, so two machines never edit the same file.
@@ -78,6 +82,7 @@ kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]         kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run]
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
 kb sync                      kb checkpointed <session-id>
+kb unsaved [--forget <session-id>]   sessions here that ended with no checkpoint
 ```
 
 `kb serve`, or `kb` alone in a terminal, opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
@@ -103,7 +108,7 @@ global, then other repos. `kb show` accepts a part of an id when only one note h
 has no notes is an error in `kb add`, `kb search` and `kb list`, so a typing error cannot put a
 note where no session loads it. The first note of a repo is written from inside that repo, or with `--repo`.
 
-Skills: `/kb:checkpoint`, `/kb:audit`, `/kb:promote`. Only you can start them. `/kb:note` saves a rule the
+Skills: `/kb:checkpoint`, `/kb:recover`, `/kb:audit`, `/kb:promote`. Only you can start them. `/kb:note` saves a rule the
 user states, and the agent starts it on its own.
 
 Every command accepts `--json`. The CLI knows nothing about Claude Code: only `hooks/` and `skills/` do.
