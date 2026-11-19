@@ -20,7 +20,8 @@ export const NOTES_PER_FILE = 5;
 /**
  * An agent can send several tool calls in one message, and all of them run before it reads the
  * first refusal. So a `stop` note refuses every call that matches it for this long after its first
- * refusal. A call after that passes: by then the agent has read the note.
+ * refusal. A call after that passes: by then the agent has read the note. kb cannot tell a call of
+ * the same message from a fast second try, so the reason of each refusal names the wait.
  */
 export const STOP_WINDOW_MS = 3000;
 
@@ -49,12 +50,13 @@ export interface Fired {
   /** What the agent reads. */
   text: string;
   /**
-   * True when a `stop` note is in the text and refuses the call: the caller refuses the tool call.
-   * The record of the refusal makes the same call pass after STOP_WINDOW_MS.
+   * True when a `stop` note refuses the call: the caller refuses the tool call, with the text as
+   * the reason. The record of the refusal makes the same call pass after STOP_WINDOW_MS.
    */
   stop: boolean;
   /** The repo the tool call belongs to, or "global". */
   scope: string;
+  /** The notes in the text. A refusal inside the window gives no note again, so it can have none. */
   fires: Fire[];
 }
 
@@ -105,10 +107,14 @@ interface Shape {
   countRest?: boolean;
 }
 
+const STOP_SECONDS = STOP_WINDOW_MS / 1000;
 /** A note that stops the call says so first, and says how the call passes. */
-const STOP_LEAD = "kb stopped this command once, because a note says that one run can do damage. Read the note. If the command still applies, run it again: the next run passes.";
+const STOP_LEAD = `kb stopped this command once, because a note says that one run can do damage. Read the note. If the command still applies, run it again in ${STOP_SECONDS} seconds: it passes then.`;
 /** Above the stop notes of the call that did not fit whole. */
 const STOP_TITLES = "These notes stop this command too. Read them with `kb show <id>`:";
+/** The reason of a refusal inside the window. The reader has each note from the first refusal, so only the ids come. */
+const stopAgain = (ids: string[]) =>
+  `kb stopped this command too. It came less than ${STOP_SECONDS} seconds after a refusal, and you have the reason from that refusal: ${ids.join(", ")}. If the command still applies, wait ${STOP_SECONDS} seconds, then run it again: it passes then.`;
 
 /**
  * The records of one reader. The record with the id of a note says that the reader has its body.
@@ -136,20 +142,23 @@ function stopOpen(seen: Seen, id: string, now: number): boolean {
 }
 
 /**
- * True when a stop note refuses this call, and that is recorded. With no record the same call
- * would be refused each time, so a stop that leaves no record refuses nothing.
+ * Whether a stop note refuses this call. "first": it does, and this call made the record of it.
+ * "again": a call before this one made the record, less than the window ago. null: the window is
+ * over. null also when nothing can be recorded: with no record the same call would be refused
+ * each time.
  */
-function refuse(seen: Seen, id: string, now: number): boolean {
+function refuse(seen: Seen, id: string, now: number): "first" | "again" | null {
   const first = seen.at(stopRecord(id));
-  // "seen": another call of the same message made the record this moment. It is inside the window.
-  if (first === null) return seen.claim(stopRecord(id)) !== "unrecorded";
-  return now - first < STOP_WINDOW_MS;
+  if (first !== null) return now - first < STOP_WINDOW_MS ? "again" : null;
+  const claim = seen.claim(stopRecord(id));
+  // "seen": another call of the same message made the record this moment.
+  return claim === "first" ? "first" : claim === "seen" ? "again" : null;
 }
 
 /**
  * Give the reader the hits it has not got yet, at most `cap`, and record each. null when there is
- * nothing new. A refusal claims every stop note of the call, so the next run passes: the first
- * `cap` of them come whole, and the others as a title.
+ * nothing new and nothing refuses the call. A refusal claims every stop note of the call, so a run
+ * after the window passes: the first `cap` of them come whole, and the others as a title.
  */
 function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: number, shape: Shape, now: number): Fired | null {
   if (hits.length === 0) return null;
@@ -158,6 +167,8 @@ function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: num
   const stopLines: string[] = [];
   const lines: string[] = [];
   const fires: Fire[] = [];
+  /** The stop notes that refused a call a moment ago, and refuse this one too. */
+  const again: string[] = [];
   const taken = new Set<string>();
   let given = 0;
   let rest = 0;
@@ -167,7 +178,12 @@ function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: num
     taken.add(id);
     const note = load(store, hit.note);
     if (!note) continue;
-    const stops = hit.kind === "stop" && refuse(seen, id, now);
+    const refusal = hit.kind === "stop" ? refuse(seen, id, now) : null;
+    if (refusal === "again") {
+      again.push(id);
+      continue;
+    }
+    const stops = refusal === "first";
     // A stop that refuses nothing loads as a plain command note.
     const kind = hit.kind === "stop" && !stops ? "cmd" : hit.kind;
     let form = formOf(kind, note);
@@ -190,14 +206,15 @@ function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: num
     else blocks.push(`### ${head}\n${kind === "path" ? `anchor on ${oneLine(hit.match, PATH_CHARS)}` : `trigger ${kind}: ${hit.match}`}\n${cutBody(note)}`);
     fires.push({ note: id, kind, form, match: hit.match });
   }
-  if (fires.length === 0) return null;
-  const stop = fires.some((fire) => fire.kind === "stop");
-  const parts = blocks.length === 0 ? [] : [stop ? STOP_LEAD : shape.lead(fires.length), ...blocks];
+  if (fires.length === 0 && again.length === 0) return null;
+  const first = fires.some((fire) => fire.kind === "stop");
+  const parts = again.length > 0 ? [stopAgain(again)] : [];
+  if (blocks.length > 0) parts.push(first ? STOP_LEAD : shape.lead(fires.length), ...blocks);
   if (stopLines.length > 0) parts.push(`${STOP_TITLES}\n${stopLines.join("\n")}`);
   if (lines.length > 0) parts.push(`${blocks.length === 0 ? shape.onlyTitles : shape.titles}\n${lines.join("\n")}`);
   let text = parts.join("\n\n");
   if (shape.countRest && rest > 0) text += `\n${rest} more. \`kb search\` finds them.`;
-  return { text, stop, scope, fires };
+  return { text, stop: first || again.length > 0, scope, fires };
 }
 
 /** The repo of a folder, or nulls. It runs git, so it is called only when a note of a repo may apply. */

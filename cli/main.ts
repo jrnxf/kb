@@ -90,7 +90,7 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
       hold the words in order, as whole words, the first as its command word. One word that is
       a common command (ls, git, bun, ...) needs a second word.
     "stop: git push --force"  the same match, and kb refuses the command once, with the note
-      as the reason. The next run passes. For a command where one run does damage.
+      as the reason. A run 3 seconds later passes. For a command where one run does damage.
     "err: address already in use"  after a tool call that failed with this text in its error.
       At least ${ERR_MIN_CHARS} characters. Case does not count.
   A saved note can come with "warnings": a gotcha or a how-to with no trigger and no anchor, and

@@ -41,18 +41,19 @@ highest.
   tool calls are shell commands. So a note can carry `triggers`, and a hook loads the note at the
   moment it applies:
   - `cmd: pkill -f` loads the note before a shell command that runs `pkill -f`. The command still runs.
-  - `stop: git push --force` refuses the command once, with the note as the reason. The next run
-    passes. It is for a command where one run does damage. It refuses the first run in a session
-    also when the session has the note from a file or an error. An agent can send several calls
-    in one message, and they all run before it reads the refusal. So kb refuses every call that
-    matches the note in the 3 seconds after the first refusal. A call after that passes.
+  - `stop: git push --force` refuses the command once, with the note as the reason. It is for a
+    command where one run does damage. It refuses the first run in a session also when the
+    session has the note from a file or an error. An agent can send several calls in one message,
+    and they all run before it reads the refusal. So kb refuses every call that matches the note
+    in the 3 seconds after the first refusal, with a short reason that names the note and the
+    wait. A call after that passes.
   - `err: address already in use` loads the note after a tool call that failed with that text in
     its error.
 
   The agent gets the id, the kind, the title and the body. A body over 700 characters is cut, with
   a pointer to `kb show`. `kb add` warns at the same length. At most three notes load for one tool
   call. A refusal is the exception: it takes every `stop` note of the command, three whole and the
-  others as a title, so the next run passes. Each note comes once per session and subagent, and
+  others as a title, so a run after the 3 seconds passes. Each note comes once per session and subagent, and
   again after a compaction or a `/clear`. A global note loads everywhere. A repo note loads for a
   command that can run in its repo: the repo of the session, and the repo of each `cd` in the
   command line that names a real folder. kb runs no shell, so a `cd` to a variable changes

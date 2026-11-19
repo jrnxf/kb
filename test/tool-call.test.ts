@@ -216,7 +216,7 @@ describe("a stop trigger refuses the command once", () => {
     putNote(store, { id: "frob-reset", title: "frobnicate reset drops the local database", triggers: ["stop: frobnicate reset"], body: "One run drops every table.\nTake a dump with `frobnicate dump` first." });
     expect(bash(store.home, repo, "frobnicate reset --yes")).toEqual({
       deny: [
-        "kb stopped this command once, because a note says that one run can do damage. Read the note. If the command still applies, run it again: the next run passes.",
+        "kb stopped this command once, because a note says that one run can do damage. Read the note. If the command still applies, run it again in 3 seconds: it passes then.",
         "",
         "### frob-reset [gotcha] frobnicate reset drops the local database",
         "trigger stop: frobnicate reset",
@@ -251,9 +251,11 @@ describe("a stop trigger refuses the command once", () => {
     // An agent sent two pushes in one message. The second runs before the agent read the first refusal.
     const at = (ms: number, command: string, who: { session_id: string; agent_id?: string } = { session_id: "s1" }) => beforeCommand(store, command, repo, who, 1_800_000_000_000 + ms);
     expect(at(0, "git push --force origin a")).toMatchObject({ stop: true, fires: [{ note: "force-push", kind: "stop", form: "body" }] });
-    expect(at(40, "git push --force origin b")).toMatchObject({ stop: true, fires: [{ note: "force-push", kind: "stop", form: "body" }] });
+    // The agent has the note from the first refusal. The second names it, and says how long to wait.
+    const again = "kb stopped this command too. It came less than 3 seconds after a refusal, and you have the reason from that refusal: force-push. If the command still applies, wait 3 seconds, then run it again: it passes then.";
+    expect(at(40, "git push --force origin b")).toEqual({ stop: true, text: again, scope: SCOPE, fires: [] });
     expect(at(40, "git push origin b")).toBeNull();
-    expect(at(STOP_WINDOW_MS - 1, "git push --force origin c")?.stop).toBe(true);
+    expect(at(STOP_WINDOW_MS - 1, "git push --force origin c")).toMatchObject({ stop: true, text: again });
     // The window starts at the first refusal. A refusal inside it does not make it longer.
     expect(at(STOP_WINDOW_MS, "git push --force origin a")).toBeNull();
     expect(at(STOP_WINDOW_MS + 60_000, "git push --force origin b")).toBeNull();
@@ -264,10 +266,26 @@ describe("a stop trigger refuses the command once", () => {
     // The same through the hook, on the real clock: two calls one after the other are both refused.
     putNote(store, { id: "frob-reset", triggers: ["stop: frobnicate reset"] });
     expect(bash(store.home, repo, "frobnicate reset a").deny).toContain("### frob-reset ");
-    expect(bash(store.home, repo, "frobnicate reset b").deny).toContain("### frob-reset ");
+    expect(bash(store.home, repo, "frobnicate reset b").deny).toStartWith("kb stopped this command too. It came less than 3 seconds after a refusal, and you have the reason from that refusal: frob-reset.");
     afterWindow(store);
     expect(bash(store.home, repo, "frobnicate reset b")).toEqual({});
-    expect(logged(store).map((e) => [e.note, e.kind])).toEqual([["frob-reset", "stop"], ["frob-reset", "stop"]]);
+    // The note came once, so the log has one fire.
+    expect(logged(store).map((e) => [e.note, e.kind])).toEqual([["frob-reset", "stop"]]);
+  });
+
+  test("a refusal inside the window still gives the notes that the reader has not got", () => {
+    const { store, repo } = fixture();
+    putNote(store, { id: "frob-reset", triggers: ["stop: frobnicate reset"] });
+    const at = (ms: number, command: string) => beforeCommand(store, command, repo, { session_id: "s1" }, 1_800_000_000_000 + ms);
+    expect(at(0, "frobnicate reset")?.fires.map((fire) => fire.note)).toEqual(["frob-reset"]);
+    // A second stop note, and a note on the command, are new at the second call.
+    putNote(store, { id: "frob-all", triggers: ["stop: frobnicate reset --all"] });
+    putNote(store, { id: "frob-slow", triggers: ["cmd: frobnicate reset"] });
+    const second = at(500, "frobnicate reset --all")!;
+    expect(second.stop).toBe(true);
+    expect(second.fires.map((fire) => [fire.note, fire.kind])).toEqual([["frob-all", "stop"], ["frob-slow", "cmd"]]);
+    expect(second.text.split("\n\n").map((part) => part.split("\n")[0]!.slice(0, 34))).toEqual(["kb stopped this command too. It ca", "kb stopped this command once, beca", "### frob-all [gotcha] Title of fro", "### frob-slow [gotcha] Title of fr"]);
+    expect(at(STOP_WINDOW_MS + 500, "frobnicate reset --all")).toBeNull();
   });
 
   test("the first refusal claims every stop note of the command: three come whole and the others as a title, and the next run passes", () => {
@@ -278,7 +296,7 @@ describe("a stop trigger refuses the command once", () => {
     expect(whole(first)).toEqual(["stop1", "stop2", "stop3"]);
     expect(first.split("\n\n").at(-1)).toBe("These notes stop this command too. Read them with `kb show <id>`:\n- stop4 [gotcha] Reason 4\n- stop5 [gotcha] Reason 5");
     afterWindow(store);
-    // The text said that the next run passes, and it does. The notes that came as a title come whole now, next to the command.
+    // The text said that a run after the window passes, and it does. The notes that came as a title come whole now, next to the command.
     const second = bash(store.home, repo, "frobnicate reset");
     expect(second.deny).toBeUndefined();
     expect(whole(second.context)).toEqual(["stop4", "stop5", "also"]);

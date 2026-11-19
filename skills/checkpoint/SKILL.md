@@ -103,7 +103,7 @@ A trigger or an anchor loads the note at the moment it applies.
 Give every `gotcha` and every `how-to` a trigger or an anchor. When none fits, say why in one line of the report.
 
 - A gotcha about a command gets `"triggers": ["cmd: pkill -f"]`. The note loads before a shell command that runs those words.
-- When one run of the command does damage, write `stop:` in place of `cmd:`. kb then refuses the command once, with the note as the reason. The next run passes.
+- When one run of the command does damage, write `stop:` in place of `cmd:`. kb then refuses the command once, with the note as the reason. A run 3 seconds later passes.
 - A gotcha about an error gets `"triggers": ["err: address already in use"]`. Use the stable part of the error text, at least 8 characters. Leave out a path, an id or a number that changes.
 - A fact about a file gets an anchor. The note loads when the agent reads or changes that file.
 - A note can have several triggers, and triggers and anchors together.
