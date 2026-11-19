@@ -6,6 +6,7 @@
 import { readFileSync } from "node:fs";
 import { unsavedSession, writeRecoverFile } from "../cli/session.ts";
 import { Store, git } from "../cli/store.ts";
+import { asOfTime } from "../cli/write.ts";
 
 export interface Conversation {
   /** The times the user said something: a prompt, the reason for a rejected tool call, an answer to a question. */
@@ -182,6 +183,21 @@ function commitsSince(cwd: string, time: string): string {
   return log.ok && log.out ? log.out : "none";
 }
 
+/**
+ * The notes that an earlier /kb:recover of this session wrote: they have the verification time
+ * that `kb add --as-of <ended>` gives. A search can miss a note that says the fact in other
+ * words, so the second recovery gets the list and adds no twin.
+ */
+function savedBefore(store: Store, ended: string): string {
+  try {
+    const at = asOfTime(ended);
+    const notes = store.notes().filter((note) => note.last_verified === at);
+    return notes.length > 0 ? notes.map((note) => `${note.id} | ${note.title}`).join("\n") : "none";
+  } catch {
+    return "none";
+  }
+}
+
 if (import.meta.main) {
   const session = process.argv[2];
   if (!session) {
@@ -196,7 +212,11 @@ if (import.meta.main) {
     process.exit(1);
   }
   const conversation = readConversation(mark.transcript);
-  const head = `# Session that ended ${mark.ended} in ${mark.cwd}\n\nCommits in that directory since it ended:\n${commitsSince(mark.cwd, mark.ended)}\n`;
+  const head = [
+    `# Session that ended ${mark.ended} in ${mark.cwd}\n`,
+    `Commits in that directory since it ended:\n${commitsSince(mark.cwd, mark.ended)}\n`,
+    `Notes that an earlier /kb:recover of this session saved:\n${savedBefore(store, mark.ended)}\n`,
+  ].join("\n");
   // The user's own words can hold a secret. The file is private, and it goes when the session is
   // marked or forgotten, or after 7 days.
   const file = writeRecoverFile(store, session, `${head}\n${conversation.text}`);

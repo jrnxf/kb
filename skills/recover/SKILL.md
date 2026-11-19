@@ -23,7 +23,7 @@ With the argument `forget`, run `kb unsaved --forget <session>` for each entry, 
 For each entry, run `kb-transcript <session>`.
 
 It writes what the user and the agent said to a private file in the store, and prints `{"file", "prompts", "chars"}`.
-The file has no tool call and no tool output. It starts with the commits made in `cwd` since the session ended.
+The file has no tool call and no tool output. It starts with two lists: the commits made in `cwd` since the session ended, and the notes that an earlier `/kb:recover` of this session saved.
 The file goes when step 5 marks the session.
 
 ## 3. Save its knowledge in a subagent
@@ -41,6 +41,7 @@ For each entry, oldest first, start one subagent with the Agent tool: `subagent_
 > Write no instruction file. For a rule the user stated, write nothing: list it in the report under **Rules**, with the rule as one line and the words "not written".
 > The session is old. Later sessions can have saved the same facts or finished its work. Search before every write.
 > The file starts with the commits made since the session ended. Read them before you save open work.
+> Then it lists the notes that an earlier recovery of this session saved. Never add one of them again: update it when it lacks a fact.
 > When the shell refuses the heredoc of step 3, write the JSON to a file in your scratchpad directory and run `kb add` with `< <file>`.
 > When `kb add` refuses a note because of a secret, write a placeholder for the secret. Never look for a way around the refusal.
 > Never run `kb checkpointed`.
@@ -69,4 +70,4 @@ For each session, in order:
 
 When you cannot ask now, end your turn with the question, and mark the session when the answer comes.
 In that later turn, `kb checkpointed` can need the user's approval. If it is refused, give the user the command to run.
-With no answer, the session stays unsaved and its notice comes back. A second `/kb:recover` reads it again, and the search before each write keeps each fact single.
+With no answer, the session stays unsaved and its notice comes back. A second `/kb:recover` reads it again. The list of saved notes and the search before each write keep each fact single.

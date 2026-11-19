@@ -184,7 +184,7 @@ describe("kb-transcript", () => {
     expect(r.code).toBe(0);
     const out = JSON.parse(r.out);
     expect(out).toEqual({ file: recoverFile(store, "s1"), prompts: 1, chars: expect.any(Number) });
-    expect(readFileSync(out.file, "utf8")).toBe(`# Session that ended 2020-01-01T00:00:00.000Z in ${repo}\n\nCommits in that directory since it ended:\n${first} init\n\n## user\n\nFix the login bug\n\n## agent\n\nThe cookie had no SameSite.\n`);
+    expect(readFileSync(out.file, "utf8")).toBe(`# Session that ended 2020-01-01T00:00:00.000Z in ${repo}\n\nCommits in that directory since it ended:\n${first} init\n\nNotes that an earlier /kb:recover of this session saved:\nnone\n\n## user\n\nFix the login bug\n\n## agent\n\nThe cookie had no SameSite.\n`);
     expect(statSync(out.file).mode & 0o777).toBe(0o600);
     expect(statSync(dirname(out.file)).mode & 0o777).toBe(0o700);
     // .state/ is never committed.
@@ -193,7 +193,20 @@ describe("kb-transcript", () => {
     // A session that ended after the last commit, or outside a repo, has no commit to show.
     lost(store, "s2", repo, new Date(Date.now() + 60_000).toISOString());
     lost(store, "s3", tempDir());
-    for (const session of ["s2", "s3"]) expect(readFileSync(JSON.parse(run(store, session).out).file, "utf8")).toContain("since it ended:\nnone\n\n## user");
+    for (const session of ["s2", "s3"]) expect(readFileSync(JSON.parse(run(store, session).out).file, "utf8")).toContain("since it ended:\nnone\n\nNotes that");
+  });
+
+  // A search can miss a note that says the same fact in other words. The list cannot.
+  test("names the notes that an earlier recovery of the session saved, so a second one adds no twin", () => {
+    const store = tempStore();
+    const dir = tempDir();
+    lost(store, "s1", dir, "2020-01-01T00:00:00.500Z");
+    const add = (time: string, title: string) => kb(store, ["add", "--json", "--as-of", time], { stdin: JSON.stringify({ title, kind: "gotcha", body: "x", scope: "global" }), cwd: dir });
+    add("2020-01-01T00:00:00.500Z", "The provider retries a webhook for 3 days");
+    add("2020-01-02T00:00:00Z", "A note from the recovery of another session");
+    kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "A note of today", kind: "gotcha", body: "x", scope: "global" }), cwd: dir });
+    const text = readFileSync(JSON.parse(run(store, "s1").out).file, "utf8");
+    expect(text).toContain("Notes that an earlier /kb:recover of this session saved:\nthe-provider-retries-a-webhook-for-3-days | The provider retries a webhook for 3 days\n\n## user");
   });
 
   test("reads only a session that has a mark", () => {
