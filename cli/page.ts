@@ -28,13 +28,16 @@ function ranked(store: Store, active: StoredNote[]): StoredNote[] {
   return scopes.flatMap((scope) => rank(active.filter((n) => n.scope === scope), lastActive));
 }
 
-/** Changes whenever a note, the trash or the order of the notes changes. The page refreshes when it differs. */
-export function storeVersion(store: Store): string {
+/**
+ * Changes whenever a note, the trash or the order of the notes changes. The page refreshes when it
+ * differs. `active` is the live notes in the order of the page: a caller that has them passes them,
+ * so one request ranks the notes once.
+ */
+export function storeVersion(store: Store, active: StoredNote[] = ranked(store, store.notes())): string {
   const strip = ({ path: _path, ...note }: StoredNote) => note;
   // An audit agent that ends changes the page too: its repo gets an audit to open.
   const audits = auditableScopes(store).map((scope) => runState(store, scope)?.status);
   // The order depends on the last activity, which is not in a note: a read changes the order and no note.
-  const active = ranked(store, store.notes());
   return Bun.hash(JSON.stringify([active.map(strip), store.notes({ trashed: true }).map(strip), openAudits(store), audits])).toString(36);
 }
 
@@ -47,11 +50,11 @@ function runs(store: Store) {
 }
 
 export function pageData(store: Store, token: string): PageData {
-  const active = store.notes();
+  const active = ranked(store, store.notes());
   const trashed = store.notes({ trashed: true });
   const days = store.config().trashDays;
   // Live notes scope by scope in rank order, then the trash, most recently trashed first.
-  const ordered = [...ranked(store, active), ...trashed.sort(byTrashedAt)];
+  const ordered = [...active, ...trashed.sort(byTrashedAt)];
   const notes = ordered.map((note): PageNote => ({
     id: note.id,
     title: note.title,
@@ -68,5 +71,5 @@ export function pageData(store: Store, token: string): PageData {
     body: note.body,
     html: renderBody(note.body),
   }));
-  return { version: storeVersion(store), token, kinds: [...KINDS], trashDays: days, notes, audits: openAudits(store), auditable: auditableScopes(store), runs: runs(store) };
+  return { version: storeVersion(store, active), token, kinds: [...KINDS], trashDays: days, notes, audits: openAudits(store), auditable: auditableScopes(store), runs: runs(store) };
 }

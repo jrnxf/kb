@@ -59,6 +59,24 @@ describe("the data behind the page", () => {
     expect(order()).toEqual(["a", "b"]);
     expect(storeVersion(store)).not.toBe(second);
   });
+
+  test("one request for the page reads the last activity once, and its version is the version of the store", () => {
+    const store = tempStore();
+    putNote(store, { id: "a", scope: "github.com/acme/api" });
+    putNote(store, { id: "g" });
+    logAt(store, "2026-03-01T00:00:00Z", { ev: "show", note: "a", why: "task" });
+    // Each read of the last activity reads the counters of an older kb once.
+    let reads = 0;
+    const usage = store.usage.bind(store);
+    store.usage = () => (reads++, usage());
+    const data = pageData(store, "t");
+    expect(reads).toBe(1);
+    expect(data.version).toBe(storeVersion(store));
+    expect(reads).toBe(2);
+    // The version is of the order it gets: another order is another version.
+    expect(data.notes.map((n) => n.id)).toEqual(["g", "a"]);
+    expect(storeVersion(store, store.notes().sort((x, y) => x.id.localeCompare(y.id)))).not.toBe(data.version);
+  });
 });
 
 test("the built page is up to date with its sources: run `bun run build` in web/ when this fails", () => {
