@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SAVE_RULE, budgetOf, buildContext, contextBudget, indexLine } from "../cli/context.ts";
+import { FORMAT_LINE, SAVE_RULE, budgetOf, buildContext, contextBudget, indexLine } from "../cli/context.ts";
 import { rememberRepo } from "../cli/repos.ts";
 import { slugify } from "../cli/note.ts";
 import { HARD_CONTEXT_CAP, type StoredNote } from "../cli/store.ts";
@@ -100,6 +100,19 @@ describe("kb context ranking", () => {
     expect(text.trimEnd().endsWith("`kb search <words>` searches every note.")).toBe(true);
     // The write path comes before the notes, so the budget can never cut it.
     expect(text.indexOf(SAVE_RULE)).toBeLessThan(text.indexOf("## Index"));
+  });
+
+  test("the fixed text is three lines: the scope, how to read the notes, and the write path", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: REMOTE });
+    putNote(store, { id: "one", scope: SCOPE });
+    expect(buildContext(store, repo).text).toStartWith(`# kb: saved knowledge for ${SCOPE}\n${FORMAT_LINE}\n${SAVE_RULE}\n\n## Notes`);
+    // Every session pays for these lines, so they stay short. The write path keeps its three parts.
+    expect(FORMAT_LINE).toContain("once");
+    expect(FORMAT_LINE).toContain('"..."');
+    expect(FORMAT_LINE.length).toBeLessThanOrEqual(100);
+    for (const part of ["/kb:note", "`kb add`", "`kb search`"]) expect(SAVE_RULE).toContain(part);
+    expect(FORMAT_LINE.length + SAVE_RULE.length).toBeLessThanOrEqual(400);
   });
 
   test("a note is printed once: its body, or an index line when the body did not fit", () => {
