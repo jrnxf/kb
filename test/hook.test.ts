@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { SAVE_RULE } from "../cli/context.ts";
 import { MEMORY_ON_NOTICE, MEMORY_RULE } from "../hooks/auto-memory.ts";
@@ -139,8 +139,41 @@ describe("plugin files", () => {
       expect(recover).toContain(`"${section}"`);
       expect(checkpoint).toContain(`\n### ${section}\n`);
     }
-    expect(recover).toContain("/../../hooks/transcript.ts");
-    expect(existsSync(join(ROOT, "skills", "recover", "..", "..", "hooks", "transcript.ts"))).toBe(true);
+    expect(existsSync(join(ROOT, "skills", "recover", "..", "checkpoint", "SKILL.md"))).toBe(true);
+  });
+
+  // The skill reads what an old session said, which is untrusted text. It allows by name only what it runs.
+  test("the recover skill allows only the commands that it and its subagent run", () => {
+    const recover = readFileSync(join(ROOT, "skills", "recover", "SKILL.md"), "utf8");
+    const checkpoint = readFileSync(join(ROOT, "skills", "checkpoint", "SKILL.md"), "utf8");
+    const allowed = /^allowed-tools: (.*)$/m.exec(recover)![1]!.split(", ");
+    const commands = allowed.filter((tool) => tool.startsWith("Bash(")).map((tool) => tool.slice(5, -1));
+    // A fixed command name, then a wildcard: a wildcard in front of or inside the name allows other programs.
+    for (const command of commands) expect(command).toMatch(/^(kb [a-z-]+ ?|kb-transcript )\*$/);
+    expect(allowed.filter((tool) => !tool.startsWith("Bash("))).toEqual(["Read", "Agent"]);
+    const names = commands.map((command) => command.replace(/ ?\*$/, ""));
+    // Every command in the skill, and in the checkpoint steps that the subagent follows, has its line.
+    const steps = checkpoint.slice(checkpoint.indexOf("\n## 1. "), checkpoint.indexOf("\n## 5. ")).replace(/### Move Claude Code's auto memory into kb[\s\S]*?(?=\n## 3\. )/, "");
+    const run = [...`${recover}\n${steps}`.matchAll(/`(kb(?:-transcript| [a-z-]+))\b[^`]*`/g)].map((match) => match[1]!);
+    expect(run).toContain("kb-transcript");
+    expect([...new Set(run)].filter((name) => !names.includes(name))).toEqual([]);
+    for (const name of names) expect(run).toContain(name);
+    expect(statSync(join(ROOT, "bin", "kb-transcript")).mode & 0o111).toBe(0o111);
+  });
+
+  // The subagent reads an old session. Only the main session, after the user settled the rules, says that it is saved.
+  test("the recover skill marks a session last, and its report never reads as a verdict on this session", () => {
+    const recover = readFileSync(join(ROOT, "skills", "recover", "SKILL.md"), "utf8");
+    const prompt = recover.split("\n").filter((line) => line.startsWith("> ")).join("\n");
+    expect(prompt).toContain("Never run `kb checkpointed`.");
+    expect(prompt.replace("Never run `kb checkpointed`.", "")).not.toContain("kb checkpointed");
+    expect(recover.indexOf("kb checkpointed <session>")).toBeGreaterThan(recover.indexOf("## 5. Settle the rules, then mark each session"));
+    expect(prompt).toContain("**Recovered the session of <date of ended> in <cwd>**");
+    expect(prompt).toContain('Never write "Safe to clear".');
+    expect(recover).toContain("This session still needs its own /kb:checkpoint if it did other work.");
+    // A note from an old conversation is verified when the session ended, and it is a guess until somebody checks it.
+    expect(prompt).toContain("Pass `--as-of <ended>` to every `kb add`.");
+    expect(prompt).toContain('Set `"confidence": "low"`');
   });
 
   test("bin/kb runs from another directory", () => {
@@ -211,6 +244,53 @@ describe("session notices", () => {
     end(store.home, endInput(repo, "gone", "clear", join(transcripts, "missing.jsonl")));
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain("ended with /clear");
     expect(unsaved(store, repo)).toEqual([]);
+  });
+
+  // A read that fails is not a short session. Only a transcript that is gone, or one measured as short, ends a mark.
+  test("a transcript that cannot be read now keeps its mark, and a later start reports it", () => {
+    if (process.getuid?.() === 0) return; // root reads every file
+    const store = tempStore();
+    const repo = tempRepo();
+    const path = transcript("locked");
+    end(store.home, endInput(repo, "locked", "clear", path));
+    chmodSync(path, 0o000);
+    try {
+      expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain("ended with /clear");
+      expect(unsaved(store, repo)).toEqual(["locked"]);
+    } finally {
+      chmodSync(path, 0o600);
+    }
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(NOTICE);
+  });
+
+  // A slash command is no prompt, and a /kb:recover turn is the report on another session.
+  test("a session that only cleared and asked once, or only ran /kb:recover, is forgotten", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    const say = (type: string, content: unknown) => JSON.stringify({ type, message: { content } });
+    const long = "word ".repeat(700);
+    const cleared = say("user", "<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>");
+    const recover = [
+      say("user", "<command-message>kb:recover</command-message>\n<command-name>/kb:recover</command-name>"),
+      say("assistant", [{ type: "text", text: `**Recovered the session of 2026-01-05 in /home/user/shop** ${long}` }]),
+      say("assistant", [{ type: "tool_use", id: "q1", name: "AskUserQuestion", input: {} }]),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "q1", content: "answered" }] }, toolUseResult: { answers: { "Does the rule still hold?": "Still holds" } } }),
+      say("assistant", [{ type: "text", text: `I wrote the rule. ${long}` }]),
+    ];
+    const work = [say("user", `Fix the cart total ${long}`), say("assistant", [{ type: "text", text: "Done." }]), say("user", "Now the rounding"), say("assistant", [{ type: "text", text: "Done." }])];
+    const sessions: Record<string, string[]> = {
+      "one-prompt": [cleared, say("user", `Fix the login bug ${long}`), say("assistant", [{ type: "text", text: "Done." }])],
+      "recover-only": [cleared, ...recover],
+      "recover-and-work": [cleared, ...recover, ...work],
+    };
+    for (const [session, lines] of Object.entries(sessions)) {
+      const path = join(transcripts, `${session}.jsonl`);
+      writeFileSync(path, lines.join("\n"));
+      end(store.home, endInput(repo, session, "clear", path));
+    }
+    expect(unsaved(store, repo).sort()).toEqual(["one-prompt", "recover-and-work", "recover-only"]);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(NOTICE);
+    expect(unsaved(store, repo)).toEqual(["recover-and-work"]);
   });
 
   // The hook gets the directory from Claude Code and `kb unsaved` from the shell. A notice that the

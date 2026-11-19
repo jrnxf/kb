@@ -88,10 +88,22 @@ highest.
 - **A missed checkpoint can be recovered.** Nothing can run before `/clear`, but `/clear` keeps the
   transcript on disk. So a session that ends with `/clear` and no checkpoint is recorded, and each
   new session in that checkout says in one line that `/kb:recover` saves it. `/kb:recover` hands
-  what the user and the agent said, without tool output, to a Sonnet subagent. The subagent runs
-  the checkpoint steps and shows the usual report. It writes no instruction file: it lists each
-  rule it found, and you say which still hold. `/kb:recover forget` stops the line. A session
-  with fewer than 2 prompts or 3000 characters is not reported, and a record goes after 7 days.
+  what the user and the agent said to a Sonnet subagent, which runs the checkpoint steps. No tool
+  call and no tool output gets through, also not the output of a `!` command. The reason you typed
+  when you rejected a tool call, and your answer to a question, stay in.
+  - The report starts with "Recovered" and the date and directory of the old session. It says
+    nothing about the session you are in, which still needs its own `/kb:checkpoint`.
+  - A recovered note is verified at the time the old session ended (`kb add --as-of`), with low
+    confidence. So `kb stale` sees the changes made since then.
+  - The subagent writes no instruction file. It lists each rule it found, and you say which still
+    hold. The session counts as saved only after that. Until then the line comes back, and a
+    second `/kb:recover` adds no note twice.
+  - The text of the old session is in `.state/recover/`, readable by you only. It goes when the
+    session is saved or forgotten, and after 7 days.
+  - `/kb:recover forget` stops the line. A session with fewer than 2 prompts or 3000 characters
+    is not reported. A slash command and a `/kb:recover` turn do not count, so a session that only
+    recovered another one is not reported. A record goes after 7 days.
+
   Nothing runs in the background. Before a compaction, a hook tells the summary what to keep, and
   the next start says once that no checkpoint ran.
 - **Sync.** If the store has a git remote, each write starts a background pull and push, and
@@ -110,6 +122,7 @@ highest.
 ```
 kb context [--repo .]        what a session gets at start
 kb add [--repo .]            create or update a note from JSON on stdin
+kb add --as-of <ISO time>    the same for a fact from an earlier time: the note is verified then
 kb show <id> [--no-use]      kb search <words> [--scope s] [--trash]
 kb list [--scope s] [--trash]  kb use <id>...
 kb trash <id>...             kb restore <id>...
