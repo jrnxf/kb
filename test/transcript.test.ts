@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { recordUnsaved } from "../cli/session.ts";
+import { findSecret } from "../cli/secrets.ts";
+import { recordUnsaved, unsavedSession } from "../cli/session.ts";
 import type { Store } from "../cli/store.ts";
-import { readConversation, worthRecovering } from "../hooks/transcript.ts";
+import { SPAN_LIMIT, readConversation, worthRecovering } from "../hooks/transcript.ts";
 import { ROOT, kb, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const write = (lines: unknown[]) => {
@@ -18,7 +19,12 @@ const says = (text: string) => agent([{ type: "text", text }]);
 const command = (name: string, args = "") => user(`<command-name>/${name}</command-name>\n            <command-message>${name}</command-message>\n            <command-args>${args}</command-args>`);
 const skill = (name: string, args = "") => user(`<command-message>${name}</command-message>\n<command-name>/${name}</command-name>${args ? `\n<command-args>${args}</command-args>` : ""}`);
 
-// /kb:recover hands this text to a subagent. A tool result can hold a secret, so it must never get through.
+// A tool call and its result, as Claude Code writes them: one line each.
+const call = (id: string, name: string, input: object) => agent([{ type: "tool_use", id, name, input }]);
+const result = (id: string, content: unknown, failed = false) => user([{ type: "tool_result", tool_use_id: id, content, ...(failed ? { is_error: true } : {}) }]);
+
+// /kb:recover hands this text to a subagent. A tool result can hold a secret, so the result of a
+// call that worked never gets through, and a failed call gives three short, masked lines.
 describe("the transcript reader", () => {
   const path = write([
     { type: "summary", summary: "a title" },
@@ -43,10 +49,10 @@ describe("the transcript reader", () => {
 
   test("keeps what the user and the agent said, one heading per turn", () => {
     const text = "## user\n\nFix the login bug\n\n## agent\n\nI will look.\n\nThe cookie had no SameSite.\n\n## user\n\nWhy?\n\n## agent\n\nBecause the proxy drops it.\n";
-    expect(readConversation(path)).toEqual({ prompts: 2, chars: "Fix the login bugI will look.The cookie had no SameSite.Why?Because the proxy drops it.".length, text });
+    expect(readConversation(path)).toEqual({ prompts: 2, chars: "Fix the login bugI will look.The cookie had no SameSite.Why?Because the proxy drops it.".length, failed: 0, text });
   });
 
-  test("leaves out tool calls, tool output, thinking, subagents and harness text", () => {
+  test("leaves out a tool call that worked and its output, thinking, subagents and harness text", () => {
     const { text } = readConversation(path);
     for (const left of ["SECRET123", ".env", "private reasoning", "subagent work", "harness text", "/cost", "Summary of the earlier part", "Caveat", "background result"]) expect(text).not.toContain(left);
   });
@@ -64,7 +70,7 @@ describe("the transcript reader", () => {
         says("Done."),
       ]),
     );
-    expect(read).toEqual({ prompts: 1, chars: "Deploy itDone.".length, text: "## user\n\nDeploy it\n\n## agent\n\nDone.\n" });
+    expect(read).toEqual({ prompts: 1, chars: "Deploy itDone.".length, failed: 0, text: "## user\n\nDeploy it\n\n## agent\n\nDone.\n" });
   });
 
   test("a slash command with no arguments is a short marker, and no prompt", () => {
@@ -145,9 +151,9 @@ describe("the transcript reader", () => {
     ];
 
     test("counts for nothing and leaves no text", () => {
-      expect(readConversation(write([command("clear"), ...recover]))).toEqual({ prompts: 0, chars: 0, text: "## user\n\n(the user ran /clear)\n" });
+      expect(readConversation(write([command("clear"), ...recover]))).toEqual({ prompts: 0, chars: 0, failed: 0, text: "## user\n\n(the user ran /clear)\n" });
       // Its argument is no prompt of the session either.
-      expect(readConversation(write([command("clear"), skill("kb:recover", "forget"), says("I forgot 2 sessions.")]))).toEqual({ prompts: 0, chars: 0, text: "## user\n\n(the user ran /clear)\n" });
+      expect(readConversation(write([command("clear"), skill("kb:recover", "forget"), says("I forgot 2 sessions.")]))).toEqual({ prompts: 0, chars: 0, failed: 0, text: "## user\n\n(the user ran /clear)\n" });
     });
 
     test("ends at the next prompt, so the work around it still counts", () => {
@@ -158,9 +164,141 @@ describe("the transcript reader", () => {
     });
   });
 
+  // An autonomous run has one prompt. What it learned is in its errors, and in what it did next.
+  describe("a tool call that failed", () => {
+    // Fake secrets are put together at run time, so this file holds no string that looks like a real one.
+    const TOKEN = `${"ghp_"}${"a1B2".repeat(9)}`;
+    const VALUE = `${"Abc123Def456"}${"Ghi789Jkl012"}`;
+    const run = [
+      user("Build the shop and run its tests"),
+      call("t1", "Bash", { command: "npm run build", description: "Build" }),
+      result("t1", "Exit code 127\nsh: npm: command not found", true),
+      says("This repo has no npm. I will use bun."),
+      call("t2", "Bash", { command: "bun run build" }),
+      result("t2", `built in 2 s\nDEPLOY_TOKEN=${TOKEN}`),
+      call("t3", "Read", { file_path: "/home/user/shop/config/rates.yml" }),
+      result("t3", "<tool_use_error>File does not exist.</tool_use_error>", true),
+      call("t4", "Read", { file_path: "/home/user/shop/config/rates.json" }),
+      result("t4", [{ type: "text", text: '{"standard": 0.23}' }]),
+      says("The rates are in rates.json."),
+    ];
+
+    test("gives the call, the error and the next call, and nothing of a call that worked", () => {
+      const read = readConversation(write(run));
+      expect(read.text).toBe(
+        [
+          "## user\n\nBuild the shop and run its tests\n",
+          "## agent\n",
+          "(a tool call failed)\ncall: Bash: npm run build\nerror: Exit code 127 sh: npm: command not found\n",
+          "This repo has no npm. I will use bun.\n",
+          "(the next tool call)\ncall: Bash: bun run build\n",
+          "(a tool call failed)\ncall: Read: /home/user/shop/config/rates.yml\nerror: File does not exist.\n",
+          "(the next tool call)\ncall: Read: /home/user/shop/config/rates.json\n",
+          "The rates are in rates.json.\n",
+        ].join("\n"),
+      );
+      // The output of the build that worked, and what the Read gave, are not there.
+      for (const left of ["built in 2 s", "DEPLOY_TOKEN", TOKEN, "0.23", "tool_use_error", "description"]) expect(read.text).not.toContain(left);
+      // The lines of a failed call are not what somebody said, so they do not count as characters.
+      expect(read).toMatchObject({ prompts: 1, failed: 2, chars: "Build the shop and run its testsThis repo has no npm. I will use bun.The rates are in rates.json.".length });
+      // The measure of a session start counts the same, and keeps no text.
+      expect(readConversation(write(run), true)).toEqual({ prompts: 1, chars: read.chars, failed: 2, text: "" });
+      expect(worthRecovering(write(run))).toEqual({ prompts: 1, chars: read.chars, failed: 2 });
+    });
+
+    test("a call that fails again has its error under it, and calls in one batch share the next call", () => {
+      const read = readConversation(
+        write([
+          user("Start the database"),
+          call("a", "Bash", { command: "pg_ctl start" }),
+          result("a", "Exit code 1\nno data directory", true),
+          call("b", "Bash", { command: "pg_ctl start -D data" }),
+          result("b", "Exit code 1\nport 5432 is in use", true),
+          // Two calls at once, and both fail.
+          call("c", "Grep", { pattern: "port", path: "config" }),
+          call("d", "mcp__db__status", { secret: "never shown" }),
+          result("c", "Path does not exist: config", true),
+          result("d", "no such database", true),
+          call("e", "Bash", { command: "pg_ctl start -D data -o '-p 5433'" }),
+          result("e", "server started"),
+        ]),
+      );
+      expect(read.failed).toBe(4);
+      expect(read.text).toBe(
+        [
+          "## user\n\nStart the database\n",
+          "## agent\n",
+          "(a tool call failed)\ncall: Bash: pg_ctl start\nerror: Exit code 1 no data directory\n",
+          "(the next tool call)\ncall: Bash: pg_ctl start -D data\n",
+          "(it failed too)\nerror: Exit code 1 port 5432 is in use\n",
+          // The input of a tool that kb does not know is not read: only its name is there.
+          "(the next tool call)\ncall: Grep: port\n",
+          "(it failed too)\nerror: Path does not exist: config\n",
+          "(a tool call failed)\ncall: mcp__db__status\nerror: no such database\n",
+          "(the next tool call)\ncall: Bash: pg_ctl start -D data -o '-p 5433'\n",
+        ].join("\n"),
+      );
+      expect(read.text).not.toContain("never shown");
+      expect(read.text).not.toContain("server started");
+    });
+
+    test("masks a secret in the call, in the error, in the next call and in what was said", () => {
+      const key = `-----BEGIN ${"RSA"} PRIVATE KEY-----\n${"MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEA".repeat(2)}\n${"q".repeat(40)}\n-----END ${"RSA"} PRIVATE KEY-----`;
+      const read = readConversation(
+        write([
+          user(`Deploy with the token ${TOKEN} to postgres://app:${"hunter2"}${"secret"}@db.example.com/shop`),
+          call("t1", "Bash", { command: `curl -H "Authorization: token ${TOKEN}" https://api.example.com/deploy` }),
+          result("t1", `Exit code 22\nAPI_KEY=${VALUE} was refused\n${key}\nthe key above is not allowed`, true),
+          call("t2", "Bash", { command: `deploy --url redis://:${"s3cret"}${"Passw0rd"}@cache.example.com` }),
+          result("t2", "ok"),
+          says(`I used AWS key ${"AKIA"}${"ABCDEFGHIJKLMNOP"}.`),
+        ]),
+      );
+      expect(read.text).toBe(
+        [
+          "## user\n\nDeploy with the token <masked: a GitHub token> to postgres://app:<masked: a password>@db.example.com/shop\n",
+          "## agent\n",
+          '(a tool call failed)\ncall: Bash: curl -H "Authorization: token <masked: a GitHub token>" https://api.example.com/deploy\nerror: Exit code 22 API_KEY=<masked: a secret value> was refused <masked: a private key> the key above is not allowed\n',
+          "(the next tool call)\ncall: Bash: deploy --url redis://:<masked: a password>@cache.example.com\n",
+          "I used AWS key <masked: an AWS access key>.\n",
+        ].join("\n"),
+      );
+      expect(findSecret(read.text)).toBeNull();
+    });
+
+    test("cuts each of the three at 300 characters, and masks before the cut", () => {
+      // A token that the cut would split: the half that is left has no shape that a scan knows.
+      const long = `${"x".repeat(SPAN_LIMIT - 10)} ${TOKEN} ${"y ".repeat(40_000)}${TOKEN}`;
+      const read = readConversation(write([user("Go"), call("t1", "Bash", { command: long }), result("t1", long, true), call("t2", "Write", { file_path: `/home/user/${"d/".repeat(400)}f.txt`, content: TOKEN }), result("t2", "ok")]));
+      const lines = read.text.split("\n").filter((line) => /^(call|error): /.test(line));
+      expect(lines).toHaveLength(3);
+      for (const line of lines) expect(line.replace(/^(call|error): /, "").length).toBeLessThanOrEqual(SPAN_LIMIT + 3);
+      expect(lines[1]).toEndWith("...");
+      expect(read.text).not.toContain("ghp_");
+      // The new content of a file is never read from a call.
+      expect(read.text).toContain("call: Write: /home/user/d/d/");
+    });
+
+    // The user stopped the call. Their reason is their own words, and no tool ran.
+    test("a call that the user rejected is no failed call, and a /kb:recover turn counts none", () => {
+      const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected.";
+      const rejected = readConversation(write([user("Deploy"), call("t1", "Bash", { command: "deploy --prod" }), result("t1", `${REJECTED} To tell you how to proceed, the user said:\nUse the preview.`, true), call("t2", "Bash", { command: "deploy --preview" }), result("t2", "ok")]));
+      expect(rejected).toMatchObject({ failed: 0, prompts: 2 });
+      expect(rejected.text).not.toContain("deploy --");
+      const recover = readConversation(write([skill("kb:recover", "all"), call("k1", "Bash", { command: "kb-transcript s1" }), result("k1", '{"error":"cannot be read"}', true), call("k2", "Bash", { command: "kb unsaved --json" }), result("k2", "[]")]));
+      expect(recover).toEqual({ prompts: 0, chars: 0, failed: 0, text: "" });
+    });
+
+    test("a failed call with no call in the transcript, or with no text, still gives its lines", () => {
+      const read = readConversation(write([user("Go"), result("lost", "boom", true), result("empty", "", true)]));
+      expect(read.failed).toBe(2);
+      expect(read.text).toBe("## user\n\nGo\n\n## agent\n\n(a tool call failed)\ncall: (not in the transcript)\nerror: boom\n\n(a tool call failed)\ncall: (not in the transcript)\nerror: (no error text)\n");
+    });
+  });
+
   test("a file that cannot be read has no size, which is not the size 0", () => {
     expect(worthRecovering(join(tempDir(), "missing.jsonl"))).toBeNull();
-    expect(worthRecovering(write([]))).toEqual({ prompts: 0, chars: 0 });
+    expect(worthRecovering(write([]))).toEqual({ prompts: 0, chars: 0, failed: 0 });
     if (process.getuid?.() === 0) return; // root reads every file
     chmodSync(path, 0o000);
     try {
@@ -168,7 +306,7 @@ describe("the transcript reader", () => {
     } finally {
       chmodSync(path, 0o600);
     }
-    expect(worthRecovering(path)).toEqual({ prompts: 2, chars: expect.any(Number) });
+    expect(worthRecovering(path)).toEqual({ prompts: 2, chars: expect.any(Number), failed: 0 });
   });
 });
 
@@ -193,7 +331,7 @@ describe("kb-transcript", () => {
     const r = run(store, "s1");
     expect(r.code).toBe(0);
     const out = JSON.parse(r.out);
-    expect(out).toEqual({ file: recoverFile(store, "s1"), prompts: 1, chars: expect.any(Number) });
+    expect(out).toEqual({ file: recoverFile(store, "s1"), prompts: 1, chars: expect.any(Number), failed: 0 });
     expect(readFileSync(out.file, "utf8")).toBe(`# Session that ended 2020-01-01T00:00:00.000Z in ${repo}\n\nCommits in that directory since it ended:\n${first} init\n\nNotes that an earlier /kb:recover of this session saved:\nnone\n\n## user\n\nFix the login bug\n\n## agent\n\nThe cookie had no SameSite.\n`);
     expect(statSync(out.file).mode & 0o777).toBe(0o600);
     expect(statSync(dirname(out.file)).mode & 0o777).toBe(0o700);
@@ -259,6 +397,56 @@ describe("kb-transcript", () => {
     expect(kb(store, ["add", "--json", "--recovered-from", "s1"], { stdin: note, cwd: dir }).json.status).toBe("created");
     expect(JSON.parse(readFileSync(mark, "utf8")).notes).toEqual(["never-written"]);
     expect(Math.abs(statSync(mark).mtimeMs - threeDaysAgo.getTime())).toBeLessThan(1000);
+  });
+
+  // The file goes to a subagent. No line of it may hold what `kb add` would refuse.
+  test("no line of the file holds a secret, also not a commit subject, and a directory that is gone has no commits", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    const token = `${"ghp_"}${"a1B2".repeat(9)}`;
+    writeFileSync(join(repo, "token.txt"), "x\n");
+    sh(repo, "git", "add", "-A");
+    sh(repo, "git", "commit", "-q", "-m", `Rotate ${token}`);
+    const transcript = write([
+      user(`The token is ${token}`),
+      agent([{ type: "tool_use", id: "t1", name: "Bash", input: { command: `curl -u app:${token} https://example.com` } }]),
+      user([{ type: "tool_result", tool_use_id: "t1", is_error: true, content: `Exit code 22\npassword: ${"Abc123Def456"}${"Ghi789Jkl012"}` }]),
+      says("Refused."),
+    ]);
+    recordUnsaved(store, { session: "s1", transcript, cwd: repo, ended: "2020-01-01T00:00:00.000Z" });
+    const out = JSON.parse(run(store, "s1").out);
+    expect(out).toMatchObject({ prompts: 1, failed: 1 });
+    const text = readFileSync(out.file, "utf8");
+    expect(findSecret(text)).toBeNull();
+    expect(text).not.toContain(token);
+    expect(text).toContain("Rotate <masked: a GitHub token>");
+    expect(text).toContain("error: Exit code 22 password: <masked: a secret value>");
+
+    // The worktree of a finished run is deleted. The conversation is still read.
+    const gone = join(tempDir(), "worktree");
+    recordUnsaved(store, { session: "s2", transcript, cwd: gone, root: gone, scope: "github.com/acme/shop", ended: "2020-01-01T00:00:00.000Z" });
+    expect(readFileSync(JSON.parse(run(store, "s2").out).file, "utf8")).toContain(`in ${gone}\n\nCommits in that directory since it ended:\nnot known: the directory is gone\n\nNotes that`);
+  });
+
+  // `kb unsaved` knows no transcript. This command measures for it, with no limit of a session start.
+  test("--measure forgets the sessions that are too short, and keeps the size of the others", () => {
+    const store = tempStore();
+    const dir = tempDir();
+    const other = tempDir();
+    const failing = (n: number) => [user("Run it"), ...Array.from({ length: n }, (_, i) => [agent([{ type: "tool_use", id: `t${i}`, name: "Bash", input: { command: `try ${i}` } }]), user([{ type: "tool_result", tool_use_id: `t${i}`, is_error: true, content: "Exit code 1" }])]).flat()];
+    const ended = new Date().toISOString();
+    recordUnsaved(store, { session: "short", transcript: write([user("Say ok"), says("ok")]), cwd: dir, ended });
+    recordUnsaved(store, { session: "two-errors", transcript: write(failing(2)), cwd: other, ended });
+    recordUnsaved(store, { session: "three-errors", transcript: write(failing(3)), cwd: other, ended });
+    recordUnsaved(store, { session: "talk", transcript: write([user(`Why? ${"word ".repeat(400)}`), says("word ".repeat(400)), user("And then?")]), cwd: dir, ended });
+    expect(run(store, "--measure")).toEqual({ code: 0, out: '{"sessions":2,"forgotten":2}\n', err: "" });
+    expect(kb(store, ["unsaved", "--all", "--json"]).json.map((s: { session: string }) => s.session).sort()).toEqual(["talk", "three-errors"]);
+    expect(unsavedSession(store, "three-errors")?.size).toEqual({ prompts: 1, chars: "Run it".length, failed: 3 });
+    // A second run reads no transcript again, and a store that does not exist is not made.
+    expect(run(store, "--measure").out).toBe('{"sessions":2,"forgotten":0}\n');
+    const missing = join(tempDir(), "missing");
+    expect(Bun.spawnSync([join(ROOT, "bin", "kb-transcript"), "--measure"], { env: { ...process.env, KB_HOME: missing }, stdout: "pipe" }).stdout.toString()).toBe('{"sessions":0,"forgotten":0}\n');
+    expect(existsSync(missing)).toBe(false);
   });
 
   test("reads only a session that has a mark", () => {

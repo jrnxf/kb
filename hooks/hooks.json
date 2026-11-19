@@ -1,5 +1,5 @@
 {
-  "description": "Inject saved kb notes at every session start, name the notes on a file when the agent reads it, protect them through compaction, and record a /clear with no checkpoint.",
+  "description": "Inject saved kb notes at every session start, name the notes on a file when the agent reads it, protect them through compaction, and record a session that ends with no checkpoint.",
   "hooks": {
     "SessionStart": [
       {
@@ -15,7 +15,6 @@
     ],
     "SessionEnd": [
       {
-        "matcher": "clear",
         "hooks": [
           {
             "type": "command",

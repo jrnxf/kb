@@ -1,5 +1,5 @@
 // Reads the SessionStart JSON on stdin and prints `kb context` for the session's directory,
-// the rule for where rules and facts go, and at most four one-line notices. With the other
+// the rule for where rules and facts go, and a few one-line notices. With the other
 // files in hooks/ and the skills, this is the only code that knows about Claude Code. After the
 // output it adds one `start` line to the event log: which notes this session got, and in what form.
 
@@ -23,6 +23,11 @@ const OUTPUT_LIMIT = 9900;
  * because a rule too many costs less than a fact in the wrong store.
  */
 let rules = `${SAVE_RULE}\n${MEMORY_RULE}`;
+/**
+ * False for a headless run (`claude -p`), where nobody reads a first reply. Claude Code names the
+ * way it was started in this variable, and print mode is "sdk-cli". No hook input says it.
+ */
+const attended = () => process.env.CLAUDE_CODE_ENTRYPOINT !== "sdk-cli";
 /** What a session gets when there is no note to show: no store yet, or a broken one. */
 const rulesOnly = () => `# kb\n${rules}\n`;
 
@@ -46,10 +51,10 @@ try {
 
   if (store.exists()) {
     const repo = resolveRepo(cwd, store);
-    // Sessions of this directory or checkout that ended with /clear and no checkpoint. A resume or
-    // a compaction is the same session, which already had the line. The step never throws and has
-    // its own time budget, so no transcript can cost the session its notes.
-    const lost = input.source === "startup" || input.source === "clear" ? unsavedNotice(store, cwd, repo.root) : null;
+    // Sessions of this directory or checkout that ended with no checkpoint, and from 5 on those of
+    // other directories. A resume or a compaction is the same session, which already had the line.
+    // The step never throws and has its own time budget, so no transcript can cost the session its notes.
+    const lost = input.source === "startup" || input.source === "clear" ? unsavedNotice(store, cwd, repo.root, undefined, undefined, input.source === "startup" && attended()) : null;
     if (lost) notices.push(lost);
 
     if (input.source === "compact" && typeof input.session_id === "string" && !isSaved(store, input.session_id)) {

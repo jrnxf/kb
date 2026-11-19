@@ -1,4 +1,4 @@
 #!/bin/sh
-# For /kb:recover: writes what an unsaved session said to a private file. A command of its own,
-# so the skill can allow it by name.
-exec bun "$(dirname "$0")/../hooks/transcript.ts" "$@"
+# For /kb:recover: writes what an unsaved session holds to a private file, and measures the
+# sessions that nobody measured yet. A command of its own, so the skill can allow it by name.
+exec bun "$(dirname "$0")/../hooks/kb-transcript.ts" "$@"

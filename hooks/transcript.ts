@@ -1,22 +1,29 @@
-// Reads a Claude Code transcript (.jsonl) and keeps only what the user and the agent said.
-// Tool calls and tool results are left out: they are large, and a tool result can hold a secret.
-// `kb-transcript <session id>` (bin/kb-transcript) writes the conversation of an unsaved session
-// to the store's per-machine state folder for /kb:recover.
+// Reads a Claude Code transcript (.jsonl) and keeps what the user and the agent said. For each
+// tool call that FAILED it also keeps three short lines: the call, the error, and the next call
+// the agent made. An autonomous run has one prompt, and it learns its lessons from errors.
+// Nothing of a tool call that worked gets through: a tool result is large, and it can hold a
+// secret. What `cli/secrets.ts` knows as a secret is masked in every line.
+// `kb-transcript <session id>` (hooks/kb-transcript.ts) writes the result for /kb:recover.
 
 import { readFileSync } from "node:fs";
-import { unsavedSession, writeRecoverFile } from "../cli/session.ts";
-import { Store, git } from "../cli/store.ts";
+import { maskSecrets } from "../cli/secrets.ts";
 
-export interface Conversation {
+/** How much a session holds. A later session start measures it once, and the mark keeps it. */
+export interface Size {
   /** The times the user said something: a prompt, the reason for a rejected tool call, an answer to a question. */
   prompts: number;
   /** The characters the user and the agent said. Headings and the name of a slash command do not count. */
   chars: number;
-  /** The conversation as Markdown: a heading per turn, then its text. */
+  /** The tool calls that failed. A call the user rejected is not one: its reason is the user's words. */
+  failed: number;
+}
+
+export interface Conversation extends Size {
+  /** The conversation as Markdown: a heading per turn, then its text and its failed tool calls. */
   text: string;
 }
 
-type Block = { type?: string; text?: string; name?: string; id?: string; tool_use_id?: string; is_error?: boolean; content?: unknown };
+type Block = { type?: string; text?: string; name?: string; id?: string; tool_use_id?: string; is_error?: boolean; content?: unknown; input?: unknown };
 type Line = {
   type?: string;
   isMeta?: boolean;
@@ -50,6 +57,31 @@ const REJECTED = "The user doesn't want to proceed with this tool use.";
 const SAID = "To tell you how to proceed, the user said:";
 const AFTER_REASON = "\n\nNote: The user's next message may contain";
 
+/** The longest call, error or next call that gets through. */
+export const SPAN_LIMIT = 300;
+/** No mask reads more of a tool result than this. The cut is at a space, so it splits no token. */
+const READ_LIMIT = 20_000;
+/** The fields of a tool input that say what the call did. Never the new text of a file. */
+const INPUT_KEYS = ["command", "file_path", "notebook_path", "pattern", "path", "url", "query"];
+
+/** One line of at most `SPAN_LIMIT` characters. The mask comes before the cut, so no half of a secret is left. */
+function short(text: string): string {
+  let head = text;
+  if (head.length > READ_LIMIT) {
+    head = head.slice(0, READ_LIMIT);
+    head = head.slice(0, Math.max(0, head.search(/\s\S*$/)));
+  }
+  const line = maskSecrets(head.replace(/\s+/g, " ").trim());
+  return line.length > SPAN_LIMIT ? `${line.slice(0, SPAN_LIMIT)}...` : line;
+}
+
+/** A tool call in one line: the tool, then its command, path or pattern. */
+function callOf(block: Block): string {
+  const input = block.input && typeof block.input === "object" ? (block.input as Record<string, unknown>) : {};
+  const key = INPUT_KEYS.find((name) => typeof input[name] === "string" && input[name]);
+  return short(`${block.name ?? "tool"}${key ? `: ${input[key] as string}` : ""}`);
+}
+
 const textOf = (content: unknown): string =>
   typeof content === "string"
     ? content
@@ -57,10 +89,19 @@ const textOf = (content: unknown): string =>
       ? content.filter((block: Block) => block?.type === "text" && typeof block.text === "string").map((block: Block) => block.text!).join("\n\n")
       : "";
 
+/** A tool call that the user stopped. It did not fail: the tool never ran. */
+const rejected = (block: Block) => block.is_error === true && textOf(block.content).startsWith(REJECTED);
+
+/** A tool call that ran and gave an error. */
+const failedCall = (block: Block) => block?.type === "tool_result" && block.is_error === true && !rejected(block);
+
+/** The error of a failed call in one line, without the tags of the harness. */
+const errorOf = (block: Block) => short(textOf(block.content).replace(NOISE, "").replace(/<\/?tool_use_error>/g, "")) || "(no error text)";
+
 /** The reason the user typed when they rejected a tool call, or "". */
 function rejectionReason(block: Block): string {
   const text = textOf(block.content);
-  if (block.is_error !== true || !text.startsWith(REJECTED)) return "";
+  if (!rejected(block)) return "";
   const at = text.indexOf(SAID);
   if (at < 0) return "";
   const reason = text.slice(at + SAID.length);
@@ -111,18 +152,29 @@ function userSaid(line: Line, asked: Set<string>): Said[] {
   return said;
 }
 
-/** Throws when the file cannot be read. */
-export function readConversation(path: string): Conversation {
+/**
+ * Throws when the file cannot be read. With `measure`, it only counts: no text is kept and no
+ * mask runs, so a session start pays for one pass over the file and no more.
+ */
+export function readConversation(path: string, measure = false): Conversation {
   const turns: { role: "user" | "agent"; text: string }[] = [];
   const asked = new Set<string>();
+  /** Each tool call by its id, so a result that failed can name its call. */
+  const calls = new Map<string, string>();
   let prompts = 0;
   let chars = 0;
+  let failed = 0;
+  /** A call failed, and the next call is not written yet. */
+  let awaiting = false;
+  /** The call that was written last as the next call. When it fails too, its error goes under it. */
+  let shown = "";
   // Inside a /kb:recover turn: from the command to the next prompt the user types. Its text is
   // the report on another session, which that session's recovery saved already.
   let recovering = false;
   const add = (role: "user" | "agent", text: string, counted: number) => {
     if (recovering) return;
     chars += counted;
+    if (measure) return;
     const last = turns.at(-1);
     // The agent's text arrives in several lines per turn. Join them, so each turn has one heading.
     if (last?.role === role) last.text += `\n\n${text}`;
@@ -142,10 +194,29 @@ export function readConversation(path: string): Conversation {
     if ((line.type !== "user" && line.type !== "assistant") || line.isMeta || line.isSidechain || line.isCompactSummary) continue;
     if (line.type === "assistant") {
       const content = line.message?.content;
-      if (Array.isArray(content)) for (const block of content) if (block?.type === "tool_use" && block.name === "AskUserQuestion" && block.id) asked.add(block.id);
       const text = textOf(content).trim();
       if (text) add("agent", text, text.length);
+      for (const block of Array.isArray(content) ? content : []) {
+        if (block?.type !== "tool_use" || !block.id) continue;
+        if (block.name === "AskUserQuestion") asked.add(block.id);
+        if (measure) continue;
+        calls.set(block.id, callOf(block));
+        if (!awaiting) continue;
+        // What the agent did after the error is half of the lesson.
+        add("agent", `(the next tool call)\ncall: ${calls.get(block.id)}`, 0);
+        awaiting = false;
+        shown = block.id;
+      }
       continue;
+    }
+    for (const block of Array.isArray(line.message?.content) ? (line.message!.content as Block[]) : []) {
+      if (!failedCall(block) || recovering) continue;
+      failed++;
+      if (measure) continue;
+      const id = block.tool_use_id ?? "";
+      add("agent", id && id === shown ? `(it failed too)\nerror: ${errorOf(block)}` : `(a tool call failed)\ncall: ${calls.get(id) ?? "(not in the transcript)"}\nerror: ${errorOf(block)}`, 0);
+      awaiting = true;
+      shown = "";
     }
     for (const said of userSaid(line, asked)) {
       if (said.kind === "command") {
@@ -161,71 +232,20 @@ export function readConversation(path: string): Conversation {
       }
     }
   }
-  const text = turns.map((turn) => `## ${turn.role}\n\n${turn.text}\n`).join("\n");
-  return { prompts, chars, text };
+  // The user and the agent can have typed a secret. The file goes to a subagent, so each line is masked.
+  const text = turns.map((turn) => `## ${turn.role}\n\n${maskSecrets(turn.text)}\n`).join("\n");
+  return { prompts, chars, failed, text };
 }
 
 /**
  * The size of a transcript's conversation, or null when the file cannot be read now.
  * Null is not "empty": the caller keeps the session and measures it at a later start.
  */
-export function worthRecovering(path: string): { prompts: number; chars: number } | null {
+export function worthRecovering(path: string): Size | null {
   try {
-    const { prompts, chars } = readConversation(path);
-    return { prompts, chars };
+    const { prompts, chars, failed } = readConversation(path, true);
+    return { prompts, chars, failed };
   } catch {
     return null;
-  }
-}
-
-/** The commits a later session made, newest first. /kb:recover reads them to see what work is finished. */
-function commitsSince(cwd: string, time: string): string {
-  const log = git(cwd, "log", "--oneline", "-30", `--since=${time}`);
-  return log.ok && log.out ? log.out : "none";
-}
-
-/**
- * The notes that an earlier /kb:recover of this session wrote, as its mark names them. A search
- * can miss a note that says the fact in other words, so the second recovery gets the list and
- * adds no twin. A note that went to the trash since then stays in the list, so it does not come back.
- */
-function savedBefore(store: Store, ids: string[] = []): string {
-  const lines = ids.flatMap((id) => {
-    const note = store.find(id);
-    return note ? [`${note.id}${note.trashed ? " (in the trash)" : ""} | ${note.title}`] : [];
-  });
-  return lines.length > 0 ? lines.join("\n") : "none";
-}
-
-/** A failure is one JSON line, as the result is. The skill reads it and goes on to the next session. */
-function fail(message: string): never {
-  console.log(JSON.stringify({ error: message }));
-  process.exit(1);
-}
-
-if (import.meta.main) {
-  const session = process.argv[2];
-  if (!session) {
-    console.error("usage: kb-transcript <session id>");
-    process.exit(1);
-  }
-  const store = new Store();
-  // Only a session with a mark is read, so the command never reads a path that a caller makes up.
-  const mark = store.exists() ? unsavedSession(store, session) : null;
-  if (!mark) fail(`no unsaved session ${session}. \`kb unsaved\` lists them.`);
-  try {
-    const conversation = readConversation(mark.transcript);
-    const head = [
-      `# Session that ended ${mark.ended} in ${mark.cwd}\n`,
-      `Commits in that directory since it ended:\n${commitsSince(mark.cwd, mark.ended)}\n`,
-      `Notes that an earlier /kb:recover of this session saved:\n${savedBefore(store, mark.notes)}\n`,
-    ].join("\n");
-    // The user's own words can hold a secret. The file is private, and it goes when the session is
-    // marked or forgotten, or after 7 days.
-    const file = writeRecoverFile(store, session, `${head}\n${conversation.text}`);
-    console.log(JSON.stringify({ file, prompts: conversation.prompts, chars: conversation.chars }));
-  } catch (error) {
-    // No path and no stack: the caller must not go and read the raw transcript, which holds tool output.
-    fail(`the conversation of session ${session} cannot be read now (${(error as { code?: string })?.code ?? "error"}). Its mark stays.`);
   }
 }
