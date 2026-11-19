@@ -1,7 +1,10 @@
 // `kb search`: every word of the query, in any order, anywhere in the title or the body of a note.
+// A word also finds its other forms: "retry" finds "retries", and "migrations" finds "migration".
+// A form never widens a query to another word: "note" does not find "not".
 
 import { readFileSync } from "node:fs";
 import type { Store, StoredNote } from "./store.ts";
+import { STOP_WORDS, fold, meaningWords, stem } from "./words.ts";
 
 export interface Hit {
   id: string;
@@ -25,9 +28,26 @@ export interface SearchResult {
   complete: boolean;
 }
 
+/** A stem under this length is too short to stand for a word: it would match by chance. */
+const MIN_STEM = 3;
+
+/**
+ * The stem that a query word matches by. Only a plain word has one: a query such as
+ * "express.raw()" matches as text only. A stop word has none, so it never matches by its form.
+ * The word loses its accent first, as the words of a note do: "migração" matches "migracao".
+ */
+export function queryStem(word: string): string | undefined {
+  const plain = fold(word);
+  if (!/^[\p{L}\p{N}]+$/u.test(plain) || STOP_WORDS.has(plain)) return undefined;
+  const found = stem(plain);
+  return found.length >= MIN_STEM ? found : undefined;
+}
+
 /**
  * Case-insensitive search for the words of the query. A note matches when each word is in its
- * title or body. When no note has every word of a query with several words, the notes with the
+ * title or body. A word is in a line when the line holds its text, or a word with the same stem.
+ * The stop words of a line have no stem.
+ * When no note has every word of a query with several words, the notes with the
  * most words match instead, if they have at least two. One hit per line that has a word.
  */
 export function searchNotes(store: Store, query: string, options: SearchOptions = {}): SearchResult {
@@ -36,6 +56,10 @@ export function searchNotes(store: Store, query: string, options: SearchOptions 
     (n) => !options.scope || n.scope === options.scope,
   );
   if (words.length === 0) return { hits: [], complete: true };
+  const stemOf = new Map(words.flatMap((word) => {
+    const found = queryStem(word);
+    return found === undefined ? [] : [[word, found] as const];
+  }));
 
   const found: { note: StoredNote; matched: number; hits: Hit[] }[] = [];
   for (const note of notes) {
@@ -47,7 +71,11 @@ export function searchNotes(store: Store, query: string, options: SearchOptions 
     lines.forEach((text, i) => {
       if (i < bodyStart && !text.startsWith("title:")) return;
       const lower = text.toLowerCase();
-      const here = words.filter((word) => lower.includes(word));
+      let stems: Set<string> | undefined;
+      // The key of the title line is no word of the note: "titles" must not find every note by it.
+      const said = () => (i < bodyStart ? lower.slice("title:".length) : lower);
+      const sameStem = (word: string) => stemOf.has(word) && (stems ??= new Set(meaningWords(said()).map(stem))).has(stemOf.get(word)!);
+      const here = words.filter((word) => lower.includes(word) || sameStem(word));
       if (here.length === 0) return;
       for (const word of here) matched.add(word);
       hits.push({ id: note.id, title: note.title, scope: note.scope, trashed: note.trashed, line: i + 1, text: text.trim() });

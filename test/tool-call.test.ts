@@ -360,6 +360,23 @@ describe("an err trigger loads its note after a failed call", () => {
     expect(logged(store)).toEqual([{ ev: "fire", session: "s1", scope: SCOPE, note: "flux", kind: "err", form: "body", match: "flux capacitor underflow", tool: "Bash" }]);
   });
 
+  // `kb add` exits with 2 for a neighbors answer, so the harness reports a failed call. The answer
+  // quotes the title of the neighbor, and that title holds the error text of its trigger.
+  test("a neighbors answer of kb add is no error: the title of a neighbor does not load its note", () => {
+    const { store, repo } = fixture();
+    putNote(store, { id: "flux", title: "A flux capacitor underflow means the cache is from an older zorp", triggers: ["err: flux capacitor underflow"], body: "Run `zorp cache clear`, then run the command again." });
+    const twin = JSON.stringify({ title: "Clear the zorp cache after a flux capacitor underflow", kind: "gotcha", body: "An older zorp wrote the cache. Run `zorp cache clear` and run the command again.", scope: "global" });
+    for (const flags of [["add", "--json"], ["add"]]) {
+      const held = kb(store, flags, { stdin: twin });
+      expect(held.code).toBe(2);
+      expect(held.stdout).toContain("flux capacitor underflow");
+      expect(failed(store.home, repo, `Exit code 2\n${held.stdout}`)).toEqual({});
+    }
+    expect(logged(store).filter((event) => event.ev === "fire")).toEqual([]);
+    // The error itself still loads the note.
+    expect(failed(store.home, repo, "Exit code 2\nflux capacitor underflow").context).toContain("### flux ");
+  });
+
   test("a call that the user stopped, and an input with no error text, load nothing", () => {
     const { store, repo } = fixture();
     putNote(store, { id: "flux", triggers: ["err: flux capacitor underflow"] });

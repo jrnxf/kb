@@ -172,7 +172,8 @@ describe("what a session start gives", () => {
     expect(FORMAT_LINE).toContain("once");
     expect(FORMAT_LINE).toContain('"..."');
     expect(FORMAT_LINE.length).toBeLessThanOrEqual(100);
-    for (const part of ["/kb:note", "`kb add`", "`kb search`"]) expect(SAVE_RULE).toContain(part);
+    // `--file` is in the rule, because a shell policy can refuse the JSON in a heredoc.
+    for (const part of ["/kb:note", "`kb add --file`", "`kb search`"]) expect(SAVE_RULE).toContain(part);
     expect(FORMAT_LINE.length + SAVE_RULE.length).toBeLessThanOrEqual(400);
   });
 
@@ -599,9 +600,9 @@ describe("the hold-back arm", () => {
   });
 
   test("a held-back start gives the notes that the commit before the briefs gave: the same bodies, index lines and length", () => {
-    // What `kb context` of commit 267e9f9 gives for the store of scripts/seed.ts: the last commit with the old policy.
-    // A change of the seed needs a new recording, from a checkout of that commit on the new store.
-    const main: Record<string, { chars: number; bodies: string[]; index: string[]; hidden: string[] }> = JSON.parse(readFileSync(join(ROOT, "test", "holdback-main-267e9f9.json"), "utf8"));
+    // What `kb context` of commit f6a850d gives for the store of scripts/seed.ts: the last commit with the old policy.
+    // A change of the seed or of the fixed text needs a new recording, from a checkout of that commit on the new store.
+    const main: Record<string, { chars: number; bodies: string[]; index: string[]; hidden: string[] }> = JSON.parse(readFileSync(join(ROOT, "test", "holdback-main-f6a850d.json"), "utf8"));
     const seeded = tempDir("kb-seed-");
     sh(ROOT, process.execPath, join(ROOT, "scripts", "seed.ts"), join(seeded, "s"));
     const home = join(seeded, "s", "store");

@@ -8,6 +8,7 @@ import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
+import { MAX_NEIGHBORS, NOT_WRITTEN, type Neighbor, findNeighbors } from "./neighbors.ts";
 import { type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
 import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { commitAt, resolveRepo } from "./scope.ts";
@@ -22,21 +23,27 @@ import { syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
 import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
+/** `kb add` exits with this code when it wrote nothing because of close notes: an answer to read, not an error (1). */
+const NEIGHBORS_EXIT = 2;
+
 const USAGE = `kb - a personal knowledge store for coding agents
 
   kb context [--repo .]                  text for a session start: the open work of the repo in short
                                          form, the index, a pointer. No note loads its body there.
                                          1 start in 10 keeps the older form, with whole bodies, so an
                                          audit can compare. --session <id> prints what that session got
-  kb add [--repo .] [--as-of <ISO time>] [--recovered-from <session-id>]
-                                         create or update a note from JSON on stdin. --as-of is for
-                                         a fact learned at an earlier time: the note is verified then.
+  kb add --file <path> [--repo .] [--as-of <ISO time>] [--recovered-from <session-id>]
+                                         create or update a note from the JSON in a file. Without
+                                         --file, the JSON comes from stdin.
+                                         --as-of is for a fact learned at an earlier time: the
+                                         note is verified then.
                                          --recovered-from records the note in that unsaved session
   kb show <id> [--check]                 print one note. A part of the id is enough when one note has
                                          it. --check when the read is a check, not a need for the note:
                                          an audit, or a look before an update
   kb search <words> [--scope s] [--trash] [--check]
-                                         notes that have every word, in any order, this repo first
+                                         notes that have every word, in any order, this repo first.
+                                         A word also finds its other forms: retry finds retries
   kb list [--scope s] [--trash]          every note with kind and verified date
                                          --scope takes "repo", "global" or a repo id
   kb verdict <${VERDICTS.join("|")}> <id>...
@@ -54,14 +61,16 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          notes for good, and empty-trash --scope only its trash. Each
                                          takes the exact repo id, never "global". Only when the user asks
   kb stale [--repo .]                    notes that may no longer be true, each with a reason: a changed
-                                         or missing anchor, no use, an old check, a close title, or
+                                         or missing anchor, no use, an old check, a close note, or
                                          the verdicts wrong and not-needed of sessions on any machine
   kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
   kb budget [--repo .]                   what a session start gives of each note: a brief, an index
                                          line, nothing until its trigger, or nothing at all
   kb audit [--repo .] [--no-wait]        start an agent that audits this repo's notes, and print the
                                          page link. Outside any repo, it audits the global notes
-  kb audit propose [--repo .]            save /kb:audit's proposal from JSON on stdin, for the page
+  kb audit propose --file <path> [--repo .]
+                                         save /kb:audit's proposal for the page, from the JSON in a
+                                         file. Without --file, the JSON comes from stdin
   kb audit status [--repo .]             where the audit of this scope stands, and the notes the user
                                          sent back for a rewrite
   kb instructions [--repo .]             the instruction files for a rule the user states: the global
@@ -83,7 +92,9 @@ A read, a write and a verdict each add one line to a log on this machine. The li
 session: --session <id>, or KB_SESSION, or the id that Claude Code sets for the command.
 The log stays on its machine. A small roll-up of it syncs with the store, at most once per day.
 
-kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?, "confidence"?, "supersedes"?}
+kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?, "confidence"?, "supersedes"?, "new"?}
+  Write the JSON to a file and pass --file <path>. A shell policy can refuse a command that
+  holds the JSON in a heredoc. A file always passes.
   scope: "repo" (the default inside a git repo), "global", or the id of a repo that has notes
   kind: ${KINDS.join(" | ")}
   confidence: ${CONFIDENCES.join(" | ")} (default medium)
@@ -102,20 +113,33 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
   The note is stored in each case.
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
   New triggers alone do not.
+  An update never changes the scope of a note, so leave "scope" out of it.
   With --as-of (a full ISO time with a zone), the verification has that time and the newest commit
   of the repo at that time. An update of a note that was verified after that time changes nothing:
   the result is {"status": "newer", "id", "last_verified"}.
   With --recovered-from, a created or updated note is recorded in that unsaved session, so a second
   recovery of the session sees it.
   Without "id", a note with the same title in the same scope
-  is not overwritten: the result is {"status": "exists", "id"}.`;
+  is not overwritten: the result is {"status": "exists", "id"}.
+  Without "id", kb also compares the words of the new note with the notes of its scope and the
+  global notes. When a note is close, nothing is written: the result is {"status": "neighbors",
+  "neighbors": [{"id", "scope", "kind", "title", "first_line", "shared", "score"}]}, at most ${MAX_NEIGHBORS}.
+  A note named in "supersedes" is never a neighbor: the new note replaces it.
+  "shared" names the words both notes have. Read each neighbor with kb show <id> --check. Then pass
+  its "id" with no "scope" to update the note that holds the same fact, or "new": true when this is
+  a different fact.
+  Update a neighbor of another scope only when the fact holds in that scope too: for a global
+  note, in every repo. Else pass "new": true.
+  With "new": true the note is written, and the result still lists the neighbors.
+  Exit codes: 0 for "created", "updated", "exists" and "newer". ${NEIGHBORS_EXIT} for "neighbors": nothing was
+  written, and the answer is on stdout as always. 1 for an error.`;
 
 interface Args {
   positional: string[];
   flags: Map<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["as-of", "forget", "recovered-from", "repo", "scope", "to", "port", "session", "since"]);
+const VALUE_FLAGS = new Set(["as-of", "file", "forget", "recovered-from", "repo", "scope", "to", "port", "session", "since"]);
 
 function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -145,7 +169,8 @@ function uniqueId(base: string, taken: Set<string>): string {
 
 // ---- commands: each returns a JSON value and the human text ----
 
-type Output = { json: unknown; text: string };
+/** `code` is the exit code, 0 when it is left out. */
+type Output = { json: unknown; text: string; code?: number };
 
 /** Body lines printed under one note in `kb search`. */
 const MAX_HIT_LINES = 3;
@@ -162,14 +187,45 @@ function cmdScope(store: Store, args: Args): Output {
   return { json: info, text: info.scope ?? "global" };
 }
 
-function cmdAdd(store: Store, args: Args, stdin: string): Output {
+/** The JSON a command reads: the file of --file, or stdin. A shell can refuse a heredoc. A file always passes. */
+async function inputText(args: Args): Promise<string> {
+  const file = args.flags.get("file");
+  if (file === undefined) return Bun.stdin.text();
+  try {
+    return readFileSync(resolve(String(file)), "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    const why = code === "ENOENT" ? "no such file" : code === "EISDIR" ? "it is a directory" : code === "EACCES" ? "no permission to read it" : (error as Error).message;
+    throw new KbError(`cannot read --file ${file}: ${why}`);
+  }
+}
+
+/** One close note as text: the line of `kb search`, with the kind, then the first line and the shared words. */
+const neighborText = (n: Neighbor) => `${n.id} | ${n.scope} | ${n.kind} | ${n.title}\n  ${n.first_line}\n  shared: ${n.shared.join(", ")}`;
+
+const NEIGHBORS_HINT = 'Read each with `kb show <id> --check`. To update the note that holds the same fact, pass its "id" and remove "scope". Pass "new": true when this is a different fact. When a neighbor says the opposite, update it with what is true now.';
+
+/**
+ * What the writer does with the close notes. A neighbor of another scope gets its own sentence: an
+ * update by id would put a fact about one repo into a note that every repo gets.
+ */
+function neighborsHint(neighbors: Neighbor[], scope: string): string {
+  const elsewhere = neighbors
+    .filter((n) => n.scope !== scope)
+    .map((n) => `${n.id} is ${n.scope === "global" ? "a global note: update it only when the fact holds in every repo" : `a note of ${n.scope}: update it only when the fact holds in that repo too`}. Else pass "new": true.`);
+  return [NEIGHBORS_HINT, ...elsewhere].join(" ");
+}
+
+const ADD_INPUT = "kb add reads one JSON object, from --file <path> or on stdin";
+
+function cmdAdd(store: Store, args: Args, text: string): Output {
   let input: Record<string, unknown>;
   try {
-    input = JSON.parse(stdin);
+    input = JSON.parse(text);
   } catch {
-    throw new KbError("kb add reads one JSON object on stdin");
+    throw new KbError(ADD_INPUT);
   }
-  if (input === null || typeof input !== "object" || Array.isArray(input)) throw new KbError("kb add reads one JSON object on stdin");
+  if (input === null || typeof input !== "object" || Array.isArray(input)) throw new KbError(ADD_INPUT);
 
   store.ensure();
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
@@ -191,8 +247,9 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
   if (typeof input.id === "string") {
     const existing = active.find((n) => n.id === input.id);
     if (!existing) throw new KbError(`no active note with id "${input.id}"`);
+    // The neighbor check names a global note for a repo draft. The draft's scope must not send the writer to the trash.
     if (input.scope !== undefined && resolveScopeInput(input.scope, repo.scope) !== existing.scope) {
-      throw new KbError("a note cannot change scope. Trash it and add a new one.");
+      throw new KbError(`the note ${existing.id} has the scope "${existing.scope}", and an update keeps it. Remove "scope" from the input to update the note.`);
     }
     // The note was checked after that time. Old text must not go under the newer check, so nothing changes.
     if (asOf !== undefined && Date.parse(existing.last_verified) > Date.parse(asOf)) {
@@ -236,19 +293,39 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
   if (scope !== "global" && repo.scope === scope && commit) raw.verified_at_commit = commit;
   if (input.triggers !== undefined) raw.triggers = requireTriggers(input.triggers);
   const note: Note = validateNote(raw);
+
+  // A known fact in other words has another title, so it passes the check above. The writer
+  // decides: update the close note, or say with "new" that this is a different fact.
+  const close = findNeighbors(active, note);
+  // A repo note that is close to a global note never stops the write: it cannot become global.
+  const own = close.filter((n) => n.scope === scope || n.scope === "global");
+  const neighbors = [...own, ...close.filter((n) => !own.includes(n))].slice(0, MAX_NEIGHBORS);
+  const shown = neighbors.map((n) => n.id);
+  if (own.length > 0 && input.new !== true) {
+    logEvent(store, { ev: "neighbors", title: note.title, neighbors: shown });
+    const hint = neighborsHint(neighbors, scope);
+    return {
+      json: { status: "neighbors", neighbors, hint },
+      text: [`neighbors: ${count(neighbors.length, "note is", "notes are")} ${NOT_WRITTEN}`, ...neighbors.map(neighborText), hint].join("\n"),
+      // Nothing was written, so a caller that reads only the exit code must not take it for a save.
+      code: NEIGHBORS_EXIT,
+    };
+  }
+
   const path = store.writeNote(note);
   afterWrite(store, `kb: add ${note.id}`);
-  logWrites(store, "add", [note.id]);
+  logWrites(store, "add", [note.id], shown);
   recovered(note.id);
-  return added("created", { id: note.id, path }, note, repo.scope !== null);
+  return added("created", { id: note.id, path }, note, repo.scope !== null, neighbors);
 }
 
 /** The result of a note that `kb add` saved, with what the writer should look at again. */
-function added(status: "created" | "updated", saved: { id: string; path: string }, note: Note, inRepo: boolean): Output {
+function added(status: "created" | "updated", saved: { id: string; path: string }, note: Note, inRepo: boolean, neighbors: Neighbor[] = []): Output {
   const warnings = noteWarnings(note, inRepo);
+  const close = neighbors.length > 0;
   return {
-    json: { status, ...saved, ...(warnings.length > 0 ? { warnings } : {}) },
-    text: [`${status} ${saved.id}`, ...warnings.map((warning) => `warning: ${warning}`)].join("\n"),
+    json: { status, ...saved, ...(close ? { neighbors } : {}), ...(warnings.length > 0 ? { warnings } : {}) },
+    text: [`${status} ${saved.id}`, ...warnings.map((warning) => `warning: ${warning}`), ...(close ? ["close notes, not changed:", ...neighbors.map(neighborText)] : [])].join("\n"),
   };
 }
 
@@ -523,7 +600,8 @@ function eventText(event: Logged): string {
       case "show": return `${e.note} (${e.why}${e.trashed ? ", in the trash" : ""})`;
       // A line of an older kb has no `complete`: its `hits` may count the closest notes.
       case "search": return `${JSON.stringify(e.query)}: ${e.complete === false ? `no note has every word, ${count(e.closest ?? 0, "closest note", "closest notes")}` : count(e.hits, "note", "notes")} (${e.why})`;
-      case "write": return `${e.op} ${e.note}`;
+      case "write": return `${e.op} ${e.note}${Array.isArray(e.neighbors) ? ` (close to ${e.neighbors.join(", ")})` : ""}`;
+      case "neighbors": return `${JSON.stringify(e.title)}: not written, close to ${e.neighbors.join(", ")}`;
       case "verdict": return `${e.verdict} ${e.note}`;
       case "unsaved": return e.reason ? `after ${e.reason}` : "";
       default: return typeof e.note === "string" ? e.note : "";
@@ -643,7 +721,7 @@ Press Ctrl+C to stop.`);
  * agent's proposal for the page. `kb audit status` says where the audit of this repo stands: none,
  * waiting for the user's picks, or applied, with the notes sent back.
  */
-async function cmdAudit(store: Store, args: Args, stdin: () => Promise<string>): Promise<Output> {
+async function cmdAudit(store: Store, args: Args, input: () => Promise<string>): Promise<Output> {
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
   const scope = repo.scope ?? "global";
   // The audit agent itself only asks where the audit stands: it never starts another one.
@@ -658,14 +736,15 @@ async function cmdAudit(store: Store, args: Args, stdin: () => Promise<string>):
     text: `${lead}\n${(await served()) ? `open ${url}` : `kb serve is not running. Start it with \`kb serve\`, then open ${url}`}`,
   });
   if (sub === "propose") {
-    let input: unknown;
+    const text = await input();
+    let proposal: unknown;
     try {
-      input = JSON.parse(await stdin());
+      proposal = JSON.parse(text);
     } catch {
-      throw new KbError('kb audit propose reads {"items": [...]} on stdin');
+      throw new KbError('kb audit propose reads {"items": [...]}, from --file <path> or on stdin');
     }
     store.ensure();
-    const audit = proposeAudit(store, input, repo);
+    const audit = proposeAudit(store, proposal, repo);
     return open(audit.items.length, `saved ${audit.items.length} cards for ${scope}`);
   }
   if (sub === undefined) {
@@ -745,7 +824,7 @@ async function main(): Promise<number> {
     switch (command) {
       case "context": out = cmdContext(store, args); break;
       case "scope": out = cmdScope(store, args); break;
-      case "add": out = cmdAdd(store, args, await Bun.stdin.text()); break;
+      case "add": out = cmdAdd(store, args, await inputText(args)); break;
       case "show": out = cmdShow(store, args); break;
       case "search": out = cmdSearch(store, args); break;
       case "list": out = cmdList(store, args); break;
@@ -763,13 +842,13 @@ async function main(): Promise<number> {
       case "checkpointed": out = cmdCheckpointed(store, args); break;
       case "unsaved": out = cmdUnsaved(store, args); break;
       case "serve": out = await cmdServe(store, args, json); break;
-      case "audit": out = await cmdAudit(store, args, () => Bun.stdin.text()); break;
+      case "audit": out = await cmdAudit(store, args, () => inputText(args)); break;
       case "sync": out = cmdSync(store); break;
       default: throw new KbError(`unknown command "${command}". Run \`kb help\`.`);
     }
     if (json) console.log(JSON.stringify(out.json, null, 2));
     else if (out.text && !args.flags.has("quiet")) console.log(out.text);
-    return 0;
+    return out.code ?? 0;
   } catch (error) {
     const message = error instanceof KbError ? error.message : `kb failed: ${(error as Error)?.message ?? error}`;
     if (json) console.log(JSON.stringify({ error: message }));

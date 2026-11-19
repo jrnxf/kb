@@ -7,6 +7,7 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { type Reader, type Seen, covers, fileInRepo, isFolder, pathInRepo, realFile, seenBy } from "./by-path.ts";
+import { isNeighborsAnswer } from "./neighbors.ts";
 import { BODY_CHARS, KINDS, type Note, parseNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { type Store, tilde } from "./store.ts";
@@ -333,7 +334,9 @@ export function afterRead(store: Store, file: string, reader: Reader, now = Date
 
 /** After a tool call that failed: the notes whose `err` trigger is in the error text, of the repo and of the global scope. */
 export function afterFailure(store: Store, error: string, cwd: string, reader: Reader, now = Date.now()): Fired | null {
-  if (!store.exists() || !error) return null;
+  // A `neighbors` answer of `kb add` is a failed call for the harness. It quotes the titles of
+  // stored notes, and the error words of a title must not load its note as if the error had come.
+  if (!store.exists() || !error || isNeighborsAnswer(error)) return null;
   const { notes } = triggerTable(store);
   const seen = seenBy(store, reader, now);
   const said = errorText(error);

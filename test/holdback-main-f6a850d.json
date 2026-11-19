@@ -1,6 +1,6 @@
 {
   "plain": {
-    "chars": 8142,
+    "chars": 8149,
     "bodies": [
       "move-the-last-two-laptops-to-the-new-shell-setup",
       "never-run-the-migration-tool-against-the-shared",
@@ -54,7 +54,7 @@
     "hidden": []
   },
   "repos/atlas-api": {
-    "chars": 8248,
+    "chars": 8255,
     "bodies": [
       "remove-the-legacy-tax-table-from-atlas-api",
       "finish-the-billing-retry-rework-in-atlas-api",
@@ -125,7 +125,7 @@
     ]
   },
   "repos/ferry": {
-    "chars": 8231,
+    "chars": 8238,
     "bodies": [
       "move-the-ferry-queue-metrics-to-the-new",
       "finish-the-queue-retry-rework-in-ferry",
