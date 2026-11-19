@@ -8,7 +8,7 @@ import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
-import { MAX_NEIGHBORS, type Neighbor, findNeighbors } from "./neighbors.ts";
+import { MAX_NEIGHBORS, NOT_WRITTEN, type Neighbor, findNeighbors } from "./neighbors.ts";
 import { type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
 import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { commitAt, resolveRepo } from "./scope.ts";
@@ -22,6 +22,9 @@ import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
 import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+
+/** `kb add` exits with this code when it wrote nothing because of close notes: an answer to read, not an error (1). */
+const NEIGHBORS_EXIT = 2;
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
@@ -120,7 +123,11 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
   "shared" names the words both notes have. Read each neighbor with kb show <id> --check. Then pass
   its "id" with no "scope" to update the note that holds the same fact, or "new": true when this is
   a different fact.
-  With "new": true the note is written, and the result still lists the neighbors.`;
+  Update a neighbor of another scope only when the fact holds in that scope too: for a global
+  note, in every repo. Else pass "new": true.
+  With "new": true the note is written, and the result still lists the neighbors.
+  Exit codes: 0 for "created", "updated", "exists" and "newer". ${NEIGHBORS_EXIT} for "neighbors": nothing was
+  written, and the answer is on stdout as always. 1 for an error.`;
 
 interface Args {
   positional: string[];
@@ -157,7 +164,8 @@ function uniqueId(base: string, taken: Set<string>): string {
 
 // ---- commands: each returns a JSON value and the human text ----
 
-type Output = { json: unknown; text: string };
+/** `code` is the exit code, 0 when it is left out. */
+type Output = { json: unknown; text: string; code?: number };
 
 /** Body lines printed under one note in `kb search`. */
 const MAX_HIT_LINES = 3;
@@ -189,6 +197,17 @@ async function inputText(args: Args): Promise<string> {
 const neighborText = (n: Neighbor) => `${n.id} | ${n.scope} | ${n.kind} | ${n.title}\n  ${n.first_line}\n  shared: ${n.shared.join(", ")}`;
 
 const NEIGHBORS_HINT = 'Read each with `kb show <id> --check`. To update the note that holds the same fact, pass its "id" and remove "scope". Pass "new": true when this is a different fact. When a neighbor says the opposite, update it with what is true now.';
+
+/**
+ * What the writer does with the close notes. A neighbor of another scope gets its own sentence: an
+ * update by id would put a fact about one repo into a note that every repo gets.
+ */
+function neighborsHint(neighbors: Neighbor[], scope: string): string {
+  const elsewhere = neighbors
+    .filter((n) => n.scope !== scope)
+    .map((n) => `${n.id} is ${n.scope === "global" ? "a global note: update it only when the fact holds in every repo" : `a note of ${n.scope}: update it only when the fact holds in that repo too`}. Else pass "new": true.`);
+  return [NEIGHBORS_HINT, ...elsewhere].join(" ");
+}
 
 const ADD_INPUT = "kb add reads one JSON object, from --file <path> or on stdin";
 
@@ -269,19 +288,20 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   const note: Note = validateNote(raw);
 
   // A known fact in other words has another title, so it passes the check above. The writer
-  // decides: update the close note, or say with "new" that this is a different fact. A note that
-  // this one supersedes is close by design, so it is left out.
-  const replaced = new Set(note.supersedes ?? []);
-  const close = findNeighbors(active.filter((n) => !replaced.has(n.id)), note);
+  // decides: update the close note, or say with "new" that this is a different fact.
+  const close = findNeighbors(active, note);
   // A repo note that is close to a global note never stops the write: it cannot become global.
   const own = close.filter((n) => n.scope === scope || n.scope === "global");
   const neighbors = [...own, ...close.filter((n) => !own.includes(n))].slice(0, MAX_NEIGHBORS);
   const shown = neighbors.map((n) => n.id);
   if (own.length > 0 && input.new !== true) {
     logEvent(store, { ev: "neighbors", title: note.title, neighbors: shown });
+    const hint = neighborsHint(neighbors, scope);
     return {
-      json: { status: "neighbors", neighbors, hint: NEIGHBORS_HINT },
-      text: [`neighbors: ${count(neighbors.length, "note is", "notes are")} close to this one. Nothing was written.`, ...neighbors.map(neighborText), NEIGHBORS_HINT].join("\n"),
+      json: { status: "neighbors", neighbors, hint },
+      text: [`neighbors: ${count(neighbors.length, "note is", "notes are")} ${NOT_WRITTEN}`, ...neighbors.map(neighborText), hint].join("\n"),
+      // Nothing was written, so a caller that reads only the exit code must not take it for a save.
+      code: NEIGHBORS_EXIT,
     };
   }
 
@@ -808,7 +828,7 @@ async function main(): Promise<number> {
     }
     if (json) console.log(JSON.stringify(out.json, null, 2));
     else if (out.text && !args.flags.has("quiet")) console.log(out.text);
-    return 0;
+    return out.code ?? 0;
   } catch (error) {
     const message = error instanceof KbError ? error.message : `kb failed: ${(error as Error)?.message ?? error}`;
     if (json) console.log(JSON.stringify({ error: message }));

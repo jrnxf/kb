@@ -4,7 +4,7 @@
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { NOT_NEEDED_SESSIONS, judgments, lastActivity } from "./log.ts";
-import { findNeighbors } from "./neighbors.ts";
+import { neighborCheck } from "./neighbors.ts";
 import { resolveRepo } from "./scope.ts";
 import { git, type Store, type StoredNote, writeAtomic } from "./store.ts";
 
@@ -108,7 +108,9 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
 
   // Promoted notes live in an instruction file now, so that file owns them. Like the audit, the
   // check covers one scope: the repo's notes in a repo, the global notes outside any repo.
-  const notes = store.notes().filter((n) => !n.promoted_to && n.scope === (repo.scope ?? "global"));
+  const scope = repo.scope ?? "global";
+  const all = store.notes();
+  const notes = all.filter((n) => !n.promoted_to && n.scope === scope);
   const add = (note: StoredNote, reason: StaleReason, detail: string) => result.candidates.push({ id: note.id, title: note.title, scope: note.scope, reason, detail });
 
   // One git call per distinct commit, not one per anchor.
@@ -149,19 +151,22 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
     if (notNeeded >= NOT_NEEDED_SESSIONS && !since(verdicts.helped)) add(note, "not-needed", `at least ${notNeeded} sessions judged it not needed since the last check, and none said it helped`);
   }
 
-  // Possible duplicates, by the measure of `kb add`: a note that `kb add` would hold today, for a
-  // note of its scope or a global one. Of two notes of the scope, the newer is the candidate. A
-  // global note is no candidate in a repo, so there the repo note is.
-  const others = store.notes().filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === (repo.scope ?? "global")));
+  // Possible duplicates, by the measure of `kb add`: two notes of the scope that are close in
+  // their words. The newer one is the candidate. A pair has one scope, because a merge has one:
+  // `kb add` catches a repo note that is close to a global note, when the note is written. In a
+  // repo the global notes still give word weights, as they do for `kb add`. The check is built
+  // once, and each note of the scope asks it.
+  const near = neighborCheck(all.filter((n) => n.scope === scope || n.scope === "global"), scope);
+  const byId = new Map(notes.map((n) => [n.id, n]));
   const paired = new Set<string>();
   for (const note of notes) {
-    for (const close of findNeighbors(others.filter((n) => n.id !== note.id), note)) {
+    for (const close of near(note)) {
+      const other = byId.get(close.id);
       const pair = [note.id, close.id].sort().join("\n");
-      if (paired.has(pair)) continue;
+      if (!other || paired.has(pair)) continue;
       paired.add(pair);
-      const other = others.find((n) => n.id === close.id)!;
       // Two notes of one time go by id, so the answer does not depend on the order of the store.
-      const otherFirst = other.scope !== note.scope || other.created < note.created || (other.created === note.created && other.id < note.id);
+      const otherFirst = other.created < note.created || (other.created === note.created && other.id < note.id);
       const [older, newer] = otherFirst ? [other, note] : [note, other];
       add(newer, "duplicate", `close to ${older.id}: both have ${close.shared.join(", ")}`);
     }

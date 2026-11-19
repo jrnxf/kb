@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { contextBudget } from "../cli/context.ts";
+import { findNeighbors, neighborCheck } from "../cli/neighbors.ts";
 import { findStale } from "../cli/stale.ts";
 import { kb, legacyUsage, logAt, otherMachine, plain, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
 
@@ -224,12 +225,50 @@ describe("kb stale", () => {
       expect(findStale(store, repo, NOW).candidates).toEqual([]);
     });
 
-    test("a repo note close to a global note is the candidate in the repo, whichever is newer. The global audit does not name the pair", () => {
+    // The audit of a repo got this pair, and proposed a merge that `kb audit propose` refuses across scopes.
+    test("a repo note close to a global note is no candidate, in the repo or outside: a pair has one scope", () => {
       const { repo, store } = fixture();
       putNote(store, { id: "in-repo", scope: SCOPE, ...second, created: "2026-01-01T00:00:00Z", last_verified: FRESH });
       putNote(store, { id: "everywhere", ...first, created: "2026-02-01T00:00:00Z", last_verified: FRESH });
-      expect(findStale(store, repo, NOW).candidates.map((c) => `${c.id}:${c.reason}:${c.detail.split(":")[0]}`)).toEqual(["in-repo:duplicate:close to everywhere"]);
+      expect(findStale(store, repo, NOW).candidates).toEqual([]);
       expect(findStale(store, plain(), NOW).candidates).toEqual([]);
+      // `kb add` is where this twin is caught: it holds a repo draft for the global note.
+      const held = kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ ...second, title: "Give the Stripe webhook the raw body", kind: "gotcha" }) });
+      expect(held.json.neighbors.map((n: any) => n.id).sort()).toEqual(["everywhere", "in-repo"]);
+      // A second note in each scope makes a pair there, and only there.
+      putNote(store, { id: "in-repo-2", scope: SCOPE, ...first, created: "2026-01-05T00:00:00Z", last_verified: FRESH });
+      putNote(store, { id: "everywhere-2", ...second, created: "2026-02-05T00:00:00Z", last_verified: FRESH });
+      const pairs = (dir: string) => findStale(store, dir, NOW).candidates.map((c) => `${c.id}:${c.detail.split(":")[0]}`);
+      expect(pairs(repo)).toEqual(["in-repo-2:close to in-repo"]);
+      expect(pairs(plain())).toEqual(["everywhere-2:close to everywhere"]);
+    });
+
+    // `kb add` left out a note that the new note supersedes, and `kb stale` then named the two as twins.
+    test("a note and a note that it supersedes are no candidates, as in kb add", () => {
+      const { repo, store } = fixture();
+      putNote(store, { id: "old", scope: SCOPE, ...first, created: "2026-01-01T00:00:00Z", last_verified: FRESH });
+      putNote(store, { id: "new", scope: SCOPE, ...second, created: "2026-02-01T00:00:00Z", last_verified: FRESH, supersedes: ["old"] });
+      expect(findStale(store, repo, NOW).candidates).toEqual([]);
+      // A third note that says the same is still a twin of both.
+      putNote(store, { id: "third", scope: SCOPE, title: "Give the Stripe webhook the raw body", body: second.body, created: "2026-03-01T00:00:00Z", last_verified: FRESH });
+      expect(findStale(store, repo, NOW).candidates.map((c) => `${c.id}>${c.detail.split(":")[0]!.replace("close to ", "")}`).sort()).toEqual(["third>new", "third>old"]);
+    });
+
+    // The word weights were built again for each note. One build must give the numbers of `kb add`.
+    test("each pair has the score that kb add gives the newer note against a store without it", () => {
+      const { repo, store } = fixture();
+      putNote(store, { id: "a", scope: SCOPE, ...first, created: "2026-01-01T00:00:00Z", last_verified: FRESH });
+      putNote(store, { id: "b", scope: SCOPE, ...second, created: "2026-01-02T00:00:00Z", last_verified: FRESH });
+      for (let i = 0; i < 12; i++) putNote(store, { id: `other-${i}`, scope: i % 2 ? SCOPE : "global", last_verified: FRESH });
+      const notes = store.notes();
+      const b = notes.find((n) => n.id === "b")!;
+      const alone = findNeighbors(notes.filter((n) => n.id !== "b"), b);
+      expect(alone.map((n) => n.id)).toEqual(["a"]);
+      // The same store with b in it: b does not count for its own weights.
+      expect(neighborCheck(notes, SCOPE)(b)).toEqual(alone);
+      // A copy of b under another id counts for the weights, and the score is then another one.
+      expect(neighborCheck([...notes, { ...b, id: "b-copy" }], SCOPE)(b).find((n) => n.id === "a")!.score).not.toBe(alone[0]!.score);
+      expect(findStale(store, repo, NOW).candidates.map((c) => `${c.id}>${c.detail.split(":")[0]}`)).toEqual(["b>close to a"]);
     });
 
     test("a note in another repo, in the trash or in an instruction file makes no candidate", () => {

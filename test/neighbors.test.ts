@@ -46,6 +46,28 @@ describe("findNeighbors", () => {
     expect(findNeighbors([repeats], { title: "alpha beta", body: "", scope: "global" }).map((n) => n.score)).toEqual([1]);
   });
 
+  // The rule was in `kb add` only, so `kb stale` named a note and the note that replaced it as twins.
+  test("a note and a note that it supersedes are never neighbors, whichever of the two is the new one", () => {
+    const newer = { ...note("shared-db-2", draft.title, draft.body), supersedes: ["shared-db"] };
+    expect(findNeighbors([shared, deploy], { ...draft, supersedes: ["shared-db"] })).toEqual([]);
+    expect(findNeighbors([newer, deploy], shared)).toEqual([]);
+    expect(findNeighbors([newer, deploy], { ...shared, id: "another" }).map((n) => n.id)).toEqual(["shared-db-2"]);
+    // A note is no neighbor of itself.
+    expect(findNeighbors([shared, deploy], shared)).toEqual([]);
+  });
+
+  test("a note in another script is a neighbor of a note with the same words", () => {
+    const ru = note("ru", "Никогда не запускай миграции на общей базе staging", "Базу staging делят четыре команды. Миграция там удалила нужную колонку.");
+    const found = findNeighbors([ru, shared, deploy], { title: "Общая база staging: миграции запускать нельзя", body: "Миграция на staging удалила колонку другой команды.", scope: "global" });
+    expect(found.map((n) => n.id)).toEqual(["ru"]);
+    expect(found[0]!.shared).toEqual(expect.arrayContaining(["миграции", "колонку"]));
+    // Chinese writes no space between words, so a word is the run between two punctuation marks.
+    const zh = note("zh", "不要在共享数据库上运行迁移", "四个团队共用这个数据库。迁移删除了正在使用的列，只在本地副本上运行。");
+    const again = { title: "共享数据库：不要在共享数据库上运行迁移", body: "迁移删除了正在使用的列。四个团队共用这个数据库。", scope: "global" };
+    expect(findNeighbors([ru, zh, shared, deploy], again).map((n) => n.id)).toEqual(["zh"]);
+    expect(findNeighbors([ru, zh, shared, deploy], { title: "预览链接七天后过期", body: "过期后重新部署。", scope: "global" })).toEqual([]);
+  });
+
   test("the closest note comes first", () => {
     const older = note("older", "The staging database is shared, never run migrations against it", "Staging is shared by several teams.");
     const found = findNeighbors([deploy, older, shared], { ...draft, title: "Staging database is shared", body: "Do not run migrations there." });

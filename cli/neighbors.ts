@@ -26,7 +26,11 @@ export interface NoteText {
   title: string;
   body: string;
   promoted_to?: string;
+  supersedes?: string[];
 }
+
+/** A new note, or a stored note that `kb stale` compares with the others. */
+export type Draft = Pick<NoteText, "title" | "body" | "scope" | "supersedes"> & { id?: string };
 
 /**
  * A note at or over this score is a neighbor. Tuned on the seeded store of scripts/seed.ts with
@@ -39,6 +43,15 @@ export interface NoteText {
 export const NEIGHBOR_THRESHOLD = 0.32;
 export const MAX_NEIGHBORS = 3;
 const MAX_SHARED = 5;
+
+/** The end of the first line of a `neighbors` answer of `kb add`, in its text form. */
+export const NOT_WRITTEN = "close to this one. Nothing was written.";
+
+/**
+ * True for the output of a `kb add` that answered `neighbors`. The command exits with 2 then, so a
+ * harness can show the call as failed. The answer quotes stored notes, so it is no error text.
+ */
+export const isNeighborsAnswer = (output: string) => output.includes('"status": "neighbors"') || output.includes(NOT_WRITTEN);
 
 // BM25 with its usual constants.
 const K1 = 1.2;
@@ -86,11 +99,9 @@ function toDoc(text: { title: string; body: string }): Doc {
  * shared words of a twin count for nothing. This one stays level from 1 note to 150. The title has
  * no extra weight: a short title would then make a short note look like a part of every long one.
  */
-function scorer(corpus: Doc[]): { closeness: (a: Doc, b: Doc) => number; weight: (term: string) => number } {
-  const df = new Map<string, number>();
-  for (const doc of corpus) for (const term of doc.tf.keys()) df.set(term, (df.get(term) ?? 0) + 1);
-  const average = corpus.reduce((sum, doc) => sum + doc.length, 0) / Math.max(1, corpus.length) || 1;
-  const weight = (term: string) => Math.log(1 + corpus.length / Math.max(df.get(term) ?? 0, 0.5)) ** 2;
+function measure(size: number, total: number, df: (term: string) => number): { closeness: (a: Doc, b: Doc) => number; weight: (term: string) => number } {
+  const average = total / Math.max(1, size) || 1;
+  const weight = (term: string) => Math.log(1 + size / Math.max(df(term), 0.5)) ** 2;
   const saturate = (count: number, length: number) => (count * (K1 + 1)) / (count + K1 * (1 - B + (B * length) / average));
   const bm25 = (query: Doc, doc: Doc) => {
     let score = 0;
@@ -110,6 +121,22 @@ function scorer(corpus: Doc[]): { closeness: (a: Doc, b: Doc) => number; weight:
   return { closeness, weight };
 }
 
+/**
+ * The word counts of the stored notes, taken once: `kb stale` asks for each note of a scope. The
+ * result gives the measure for one note. `out` are the stored notes that the note is not compared
+ * with, such as the note itself. They give no weight either, so a stored note scores as it did
+ * when `kb add` got it as a new note.
+ */
+function scorer(corpus: Doc[]): (out: Doc[]) => ReturnType<typeof measure> {
+  const df = new Map<string, number>();
+  for (const doc of corpus) for (const term of doc.tf.keys()) df.set(term, (df.get(term) ?? 0) + 1);
+  const total = corpus.reduce((sum, doc) => sum + doc.length, 0);
+  return (out) => {
+    const others = (term: string) => (df.get(term) ?? 0) - out.filter((doc) => doc.tf.has(term)).length;
+    return measure(corpus.length - out.length, total - out.reduce((sum, doc) => sum + doc.length, 0), others);
+  };
+}
+
 /** The shared words that weigh most, as the new note writes them. Words of one weight keep the order of the new note, so its title comes first. */
 function sharedWords(draft: Doc, doc: Doc, weight: (term: string) => number): string[] {
   const heavy = (term: string) => weight(term) * Math.min(draft.tf.get(term)!, doc.tf.get(term)!);
@@ -122,29 +149,42 @@ function sharedWords(draft: Doc, doc: Doc, weight: (term: string) => number): st
 }
 
 /**
- * The notes close to a new note, the closest first: the notes of its scope and the global notes.
+ * The check for the notes of one scope, with the word weights built once: `kb stale` asks it for
+ * every note of the scope. It compares a note with the notes of its scope and the global notes.
  * For a global note, the notes of every repo too, because a repo can hold the fact already.
  * The same notes give the word weights. So the name of a repo, which each of its notes has, weighs
  * little among them. A note that moved to an instruction file is left out: that file owns the rule
  * now, and every session loads it.
  */
-export function findNeighbors(notes: NoteText[], draft: { title: string; body: string; scope: string }, threshold = NEIGHBOR_THRESHOLD): Neighbor[] {
+export function neighborCheck(notes: NoteText[], scope: string, threshold = NEIGHBOR_THRESHOLD): (draft: Draft) => Neighbor[] {
   const stored = notes
-    .filter((note) => !note.promoted_to && (draft.scope === "global" || note.scope === draft.scope || note.scope === "global"))
+    .filter((note) => !note.promoted_to && (scope === "global" || note.scope === scope || note.scope === "global"))
     .map((note) => ({ note, doc: toDoc(note) }));
-  const { closeness, weight } = scorer(stored.map((s) => s.doc));
-  const mine = toDoc(draft);
-  return stored
-    .map(({ note, doc }) => ({ note, doc, score: closeness(mine, doc) }))
-    .filter((found) => found.score >= threshold)
-    .sort((x, y) => y.score - x.score || x.note.id.localeCompare(y.note.id))
-    .map(({ note, doc, score }) => ({
-      id: note.id,
-      scope: note.scope,
-      kind: note.kind,
-      title: note.title,
-      first_line: note.body.split("\n").find((line) => line.trim())?.trim() ?? "",
-      shared: sharedWords(mine, doc, weight),
-      score: Math.round(score * 100) / 100,
-    }));
+  const weigh = scorer(stored.map((s) => s.doc));
+  // A note is no twin of itself, nor of a note that it replaces: the two are close by design.
+  const replaces = (a: Draft | NoteText, b: Draft | NoteText) => b.id !== undefined && (a.supersedes ?? []).includes(b.id);
+  return (draft) => {
+    const mine = toDoc(draft);
+    const apart = new Set(stored.filter(({ note }) => note.id === draft.id || replaces(draft, note) || replaces(note, draft)));
+    const { closeness, weight } = weigh([...apart].map((s) => s.doc));
+    return stored
+      .filter((s) => !apart.has(s))
+      .map(({ note, doc }) => ({ note, doc, score: closeness(mine, doc) }))
+      .filter((found) => found.score >= threshold)
+      .sort((x, y) => y.score - x.score || x.note.id.localeCompare(y.note.id))
+      .map(({ note, doc, score }) => ({
+        id: note.id,
+        scope: note.scope,
+        kind: note.kind,
+        title: note.title,
+        first_line: note.body.split("\n").find((line) => line.trim())?.trim() ?? "",
+        shared: sharedWords(mine, doc, weight),
+        score: Math.round(score * 100) / 100,
+      }));
+  };
+}
+
+/** The notes close to a new note, the closest first. See `neighborCheck`. */
+export function findNeighbors(notes: NoteText[], draft: Draft, threshold = NEIGHBOR_THRESHOLD): Neighbor[] {
+  return neighborCheck(notes, draft.scope, threshold)(draft);
 }

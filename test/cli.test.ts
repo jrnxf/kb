@@ -225,7 +225,6 @@ describe("kb add: close notes", () => {
     putNote(store, stored);
     putNote(store, { id: "ports", title: "The dev server needs port 4100 free", body: "It fails with a misleading error when the port is taken." });
     const held = add(store, { ...twin, scope: "global" });
-    expect(held.code).toBe(0);
     expect(held.json.status).toBe("neighbors");
     expect(held.json.neighbors).toEqual([
       { id: "raw-body", scope: "global", kind: "gotcha", title: stored.title, first_line: "express.json() runs before the webhook route and breaks the signature check.", shared: ["route", "raw", "stripe", "webhook", "body"], score: expect.any(Number) },
@@ -237,6 +236,59 @@ describe("kb add: close notes", () => {
     expect(text).toStartWith("neighbors: 1 note is close to this one. Nothing was written.\nraw-body | global | gotcha | Stripe signature check needs the raw body\n");
     // An update keeps the scope of the note, so the hint says to leave the scope of the draft out.
     expect(text).toContain('To update the note that holds the same fact, pass its "id" and remove "scope". Pass "new": true when this is a different fact.');
+  });
+
+  // The answer had the exit code 0. A caller that read only the code took it for a save, and the note was lost.
+  test("a neighbors answer exits with code 2, with the answer on stdout. Every answer that needs no second write exits with 0, and an error with 1", () => {
+    const store = tempStore();
+    putNote(store, stored);
+    const held = add(store, { ...twin, scope: "global" });
+    expect(held.code).toBe(2);
+    expect(held.json).toMatchObject({ status: "neighbors", neighbors: [{ id: "raw-body" }], hint: expect.any(String) });
+    expect(held.stderr).toBe("");
+    const text = kb(store, ["add"], { stdin: JSON.stringify({ ...twin, scope: "global" }) });
+    expect(text.code).toBe(2);
+    expect(text.stdout).toStartWith("neighbors: 1 note is close to this one. Nothing was written.\n");
+    expect(text.stderr).toBe("");
+    expect(store.notes()).toHaveLength(1);
+
+    const exists = add(store, { ...twin, title: stored.title, scope: "global" });
+    expect([exists.json.status, exists.code]).toEqual(["exists", 0]);
+    const created = add(store, { ...twin, scope: "global", new: true });
+    expect([created.json.status, created.code]).toEqual(["created", 0]);
+    const updated = add(store, { id: "raw-body", body: twin.body });
+    expect([updated.json.status, updated.code]).toEqual(["updated", 0]);
+    const newer = kb(store, ["add", "--json", "--as-of", "2020-01-01T00:00:00Z"], { stdin: JSON.stringify({ id: "raw-body", body: "old" }) });
+    expect([newer.json.status, newer.code]).toEqual(["newer", 0]);
+    const bad = add(store, { ...twin, title: "Another title", kind: "idea", scope: "global" });
+    expect([typeof bad.json.error, bad.code]).toEqual(["string", 1]);
+
+    const help = kb(store, ["help"]).stdout;
+    expect(help).toContain('Exit codes: 0 for "created", "updated", "exists" and "newer". 2 for "neighbors"');
+  });
+
+  // The hint said to update the neighbor by id. An agent then put a fact about one repo into a global note.
+  test("the hint says of a neighbor in another scope when an update is right: a global note holds in every repo", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/web.git" });
+    putNote(store, stored);
+    const everywhere = 'raw-body is a global note: update it only when the fact holds in every repo. Else pass "new": true.';
+    const held = add(store, twin, repo);
+    expect(held.json).toMatchObject({ status: "neighbors", neighbors: [{ id: "raw-body", scope: "global" }] });
+    expect(held.json.hint).toEndWith(everywhere);
+    expect(kb(store, ["add"], { cwd: repo, stdin: JSON.stringify(twin) }).stdout.trimEnd()).toEndWith(everywhere);
+    // A neighbor of the scope of the draft gets no such sentence.
+    putNote(store, { ...stored, id: "web-raw-body", scope: "github.com/acme/web" });
+    const both = add(store, { ...twin, title: "Give the Stripe webhook the raw body" }, repo).json;
+    expect(both.neighbors.map((n: any) => n.id).sort()).toEqual(["raw-body", "web-raw-body"]);
+    expect(both.hint).toContain(everywhere);
+    expect(both.hint).not.toContain("web-raw-body is");
+    // A global draft: its global neighbor is in its scope. The repo note is not.
+    const global = add(store, { ...twin, title: "Stripe webhooks need the raw body", scope: "global" }).json;
+    expect(global.neighbors.map((n: any) => n.id).sort()).toEqual(["raw-body", "web-raw-body"]);
+    expect(global.hint).not.toContain("raw-body is a global note");
+    expect(global.hint).toEndWith('web-raw-body is a note of github.com/acme/web: update it only when the fact holds in that repo too. Else pass "new": true.');
+    expect(kb(store, ["help"]).stdout).toContain("Update a neighbor of another scope only when the fact holds in that scope too: for a global\n  note, in every repo.");
   });
 
   test("with \"new\": true the note is written, the result still lists the neighbors, and the flag is not stored", () => {
@@ -299,6 +351,17 @@ describe("kb add: close notes", () => {
     putNote(store, { ...stored, id: "second-raw-body", title: "Stripe needs the raw body for its signature check" });
     const held = add(store, { ...twin, title: "Give the Stripe webhook the raw body", scope: "global", supersedes: ["raw-body", made.json.id] });
     expect(held.json).toMatchObject({ status: "neighbors", neighbors: [{ id: "second-raw-body" }] });
+  });
+
+  // The id comes from the ASCII letters and digits of the title. The words of the note can be in any script.
+  test("a note in another script gets its twin back as a neighbor, and kb search finds it by its own words", () => {
+    const store = tempStore();
+    const made = add(store, { title: "Staging DB: никогда не запускай миграции на общей базе", kind: "gotcha", body: "Базу делят четыре команды. Миграция там удалила нужную колонку.", scope: "global" });
+    expect(made.json).toMatchObject({ status: "created", id: "staging-db" });
+    const held = add(store, { title: "Общая база staging: миграции запускать нельзя", kind: "gotcha", body: "Миграция удалила колонку другой команды.", scope: "global" });
+    expect([held.json.status, held.code]).toEqual(["neighbors", 2]);
+    expect(held.json.neighbors[0]).toMatchObject({ id: "staging-db", shared: expect.arrayContaining(["миграции", "колонку"]) });
+    expect(kb(store, ["search", "миграция", "колонку"]).stdout).toStartWith("staging-db | global | Staging DB: никогда");
   });
 
   // An agent in a repo wrote a draft with "scope": "repo", got a global neighbor, and passed its id.
