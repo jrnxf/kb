@@ -9,7 +9,7 @@ import { rememberRepo } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
 import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
-import { resolveRepo } from "./scope.ts";
+import { commitAt, resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
 import { DEFAULT_PORT, isKbServer, runningPort, serve } from "./serve.ts";
@@ -18,12 +18,13 @@ import { forgetUnsaved, markSaved, unsavedSessions } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
-import { afterWrite, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, moveNotes, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, moveNotes, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
   kb context [--repo .]                  text for a session start: index, top notes, pointer
-  kb add [--repo .]                      create or update a note from JSON on stdin
+  kb add [--repo .] [--as-of <ISO time>] create or update a note from JSON on stdin. --as-of is for
+                                         a fact learned at an earlier time: the note is verified then
   kb show <id> [--no-use]                print one note, and count a use of it. A part of the id is
                                          enough when one note has it. --no-use for a check, not a use
   kb search <words> [--scope s] [--trash]
@@ -67,6 +68,8 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence
   kind: ${KINDS.join(" | ")}
   confidence: ${CONFIDENCES.join(" | ")} (default medium)
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
+  With --as-of, the verification has that time and the newest commit of the repo at that time. An
+  update never moves a note back: a note verified after that time keeps its time and commit.
   Without "id", a note with the same title in the same scope
   is not overwritten: the result is {"status": "exists", "id"}.`;
 
@@ -75,7 +78,7 @@ interface Args {
   flags: Map<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["forget", "repo", "scope", "to", "port"]);
+const VALUE_FLAGS = new Set(["as-of", "forget", "repo", "scope", "to", "port"]);
 
 function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -132,6 +135,8 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
   store.ensure();
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
   const now = nowIso();
+  // A fact from an earlier time, such as a session recovered later, is verified then and not now.
+  const asOf = args.flags.has("as-of") ? asOfTime(String(args.flags.get("as-of"))) : undefined;
   const active = store.notes();
   const trashed = store.notes({ trashed: true });
 
@@ -142,7 +147,7 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     if (input.scope !== undefined && resolveScopeInput(input.scope, repo.scope) !== existing.scope) {
       throw new KbError("a note cannot change scope. Trash it and add a new one.");
     }
-    const updated = updateNote(store, input as Record<string, unknown> & { id: string }, repo);
+    const updated = updateNote(store, input as Record<string, unknown> & { id: string }, repo, asOf);
     return { json: { status: "updated", ...updated }, text: `updated ${updated.id}` };
   }
 
@@ -169,9 +174,10 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     id: uniqueId(slug, new Set([...active, ...trashed].map((n) => n.id).concat([...store.usage().keys()]))),
     scope,
     created: now,
-    last_verified: now,
+    last_verified: asOf ?? now,
   };
-  if (scope !== "global" && repo.scope === scope && repo.head) raw.verified_at_commit = repo.head;
+  const commit = asOf === undefined ? repo.head : commitAt(repo.root, asOf);
+  if (scope !== "global" && repo.scope === scope && commit) raw.verified_at_commit = commit;
   const note: Note = validateNote(raw);
   const path = store.writeNote(note);
   afterWrite(store, `kb: add ${note.id}`);

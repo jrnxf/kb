@@ -2,7 +2,7 @@
 
 import { existsSync } from "node:fs";
 import { KbError, serializeNote, validateNote } from "./note.ts";
-import type { RepoInfo } from "./scope.ts";
+import { type RepoInfo, commitAt } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { clearStaleCache } from "./stale.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
@@ -32,20 +32,32 @@ export function requireNote(store: Store, id: string): StoredNote {
   throw new KbError(`no note with id "${id}"${close.length > 0 ? `. Ids with that text: ${close.slice(0, 8).join(", ")}${more}` : ""}`);
 }
 
+/** The time `kb add --as-of` takes, as kb writes a time. A time after now is now. */
+export function asOfTime(value: string): string {
+  const time = Date.parse(value);
+  if (Number.isNaN(time)) throw new KbError("--as-of needs an ISO time, such as 2026-01-31T12:00:00Z");
+  return new Date(Math.min(time, Date.now())).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
 /**
  * Merge the given fields over an active note. `repo` is where the change was made:
  * a change of content inside the note's own repo also records that repo's HEAD.
+ * With `asOf`, the content comes from an earlier time (a session recovered later): the note is
+ * verified at that time and at the commit of that time, never now.
  */
-export function updateNote(store: Store, input: Record<string, unknown> & { id: string }, repo: Pick<RepoInfo, "scope" | "head">): { id: string; path: string } {
+export function updateNote(store: Store, input: Record<string, unknown> & { id: string }, repo: Pick<RepoInfo, "scope" | "head"> & { root?: string | null }, asOf?: string): { id: string; path: string } {
   const existing = store.notes().find((n) => n.id === input.id);
   if (!existing) throw new KbError(`no active note with id "${input.id}"`);
   rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors }, `the new text of ${existing.id}`);
   const { path: _path, trashed: _trashed, ...stored } = existing;
   const merged: Record<string, unknown> = { ...stored, ...input, scope: existing.scope, created: existing.created };
   // Only a change of content says that somebody looked at the fact again.
-  if (["title", "body", "anchors"].some((key) => key in input)) {
-    merged.last_verified = nowIso();
-    if (repo.scope === existing.scope && repo.head) merged.verified_at_commit = repo.head;
+  // Old content must not replace a later check of the note: then the stored time and commit stay.
+  const later = asOf !== undefined && Date.parse(existing.last_verified) > Date.parse(asOf);
+  if (["title", "body", "anchors"].some((key) => key in input) && !later) {
+    merged.last_verified = asOf ?? nowIso();
+    const commit = asOf === undefined ? repo.head : commitAt(repo.root ?? null, asOf);
+    if (repo.scope === existing.scope && commit) merged.verified_at_commit = commit;
   }
   const note = validateNote(merged);
   const path = store.writeNote(note);

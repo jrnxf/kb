@@ -90,6 +90,69 @@ describe("kb add", () => {
     expect(note.anchors).toEqual(["src/ledger.ts#append"]);
   });
 
+  // /kb:recover writes a note from an old conversation. It is verified when that session ended, not today.
+  describe("--as-of", () => {
+    const repoWithHistory = () => {
+      const repo = tempRepo({ remote: "https://github.com/acme/billing.git" });
+      const commit = (date: string) => {
+        sh(repo, "env", `GIT_AUTHOR_DATE=${date}`, `GIT_COMMITTER_DATE=${date}`, "git", "commit", "-q", "--allow-empty", "-m", `at ${date}`);
+        return sh(repo, "git", "rev-parse", "--short", "HEAD");
+      };
+      // tempRepo made one commit now. The dated ones come before it in time, as in a real history.
+      sh(repo, "git", "checkout", "-q", "--orphan", "past");
+      const february = commit("2020-02-01T10:00:00Z");
+      const march = commit("2020-03-01T10:00:00Z");
+      return { repo, february, march };
+    };
+    const asOf = (store: Store, time: string, note: object, cwd?: string) => kb(store, ["add", "--json", "--as-of", time], { stdin: JSON.stringify(note), cwd });
+    const SCOPE = "github.com/acme/billing";
+
+    test("a new note is created now, and verified at that time and at the commit of that time", () => {
+      const store = tempStore();
+      const { repo, february } = repoWithHistory();
+      const result = asOf(store, "2020-02-15T12:00:00.500Z", { title: "Ledger rows are append-only", kind: "decision", body: "x" }, repo);
+      expect(result.json.status).toBe("created");
+      const note = store.find(result.json.id)!;
+      expect(note).toMatchObject({ scope: SCOPE, last_verified: "2020-02-15T12:00:00Z", verified_at_commit: february });
+      expect(note.created > "2026").toBe(true);
+    });
+
+    test("no commit is recorded when the repo has none that old, and for a global note", () => {
+      const store = tempStore();
+      const { repo } = repoWithHistory();
+      const early = store.find(asOf(store, "2020-01-01T00:00:00Z", { title: "Before the first commit", kind: "gotcha", body: "x" }, repo).json.id)!;
+      expect(early.last_verified).toBe("2020-01-01T00:00:00Z");
+      expect(early.verified_at_commit).toBeUndefined();
+      const global = store.find(asOf(store, "2020-02-15T12:00:00Z", { title: "A tool fact", kind: "gotcha", body: "x", scope: "global" }, repo).json.id)!;
+      expect(global.last_verified).toBe("2020-02-15T12:00:00Z");
+      expect(global.verified_at_commit).toBeUndefined();
+    });
+
+    test("an update moves an older note to that time, and leaves a note that was verified later", () => {
+      const store = tempStore();
+      const { repo, february, march } = repoWithHistory();
+      putNote(store, { id: "older", scope: SCOPE, last_verified: "2020-01-10T00:00:00Z" });
+      putNote(store, { id: "later", scope: SCOPE, last_verified: "2020-03-10T00:00:00Z", verified_at_commit: march });
+      for (const id of ["older", "later"]) expect(asOf(store, "2020-02-15T12:00:00Z", { id, body: "from the old session" }, repo).json.status).toBe("updated");
+      expect(store.find("older")).toMatchObject({ body: "from the old session", last_verified: "2020-02-15T12:00:00Z", verified_at_commit: february });
+      // The old conversation knows less than the check that came after it.
+      expect(store.find("later")).toMatchObject({ body: "from the old session", last_verified: "2020-03-10T00:00:00Z", verified_at_commit: march });
+    });
+
+    test("a time after now is now, and a value that is no time is refused", () => {
+      const store = tempStore();
+      const note = store.find(asOf(store, "2999-01-01T00:00:00Z", { title: "From the future", kind: "gotcha", body: "x", scope: "global" }).json.id)!;
+      expect(note.last_verified).toBe(note.created);
+      for (const bad of ["yesterday-ish", ""]) {
+        const result = asOf(store, bad, { title: "Never written", kind: "gotcha", body: "x", scope: "global" });
+        expect(result.code).toBe(1);
+        expect(result.json.error).toContain("--as-of needs an ISO time");
+      }
+      expect(kb(store, ["add", "--as-of"], { stdin: "{}" })).toMatchObject({ code: 1, stderr: "--as-of needs a value\n" });
+      expect(store.notes().map((n) => n.id)).toEqual([note.id]);
+    });
+  });
+
   test("rejects bad input with every problem named, and writes nothing", () => {
     const store = tempStore();
     const bad = add(store, { title: "T", kind: "idea", body: "", scope: "global", confidence: "sure" });
