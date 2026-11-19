@@ -90,12 +90,16 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
 /**
  * What a writer should look at again in a note that was saved. Never a refusal: the note is
  * stored. A gotcha or a how-to with no trigger and no anchor loads only at the session start, where
- * most notes are one title among many.
+ * most notes are one title among many. Open work with the scope global is one index line in every
+ * repo session: a session shows the next step only for the open work of its own repo.
  */
-export function noteWarnings(note: Pick<Note, "kind" | "body" | "anchors" | "triggers">): string[] {
+export function noteWarnings(note: Pick<Note, "kind" | "scope" | "body" | "anchors" | "triggers">): string[] {
   const warnings: string[] = [];
   if ((note.kind === "gotcha" || note.kind === "how-to") && note.anchors.length === 0 && !note.triggers?.length) {
     warnings.push(`a ${note.kind} with no trigger and no anchor loads only at the session start. Give it "triggers" (cmd:, stop: or err:) or "anchors", or say in your report why it has none.`);
+  }
+  if (note.kind === "open-work" && note.scope === "global") {
+    warnings.push(`open work belongs to a repo. With the scope global it is one index line in every repo session, and none shows its next step. Trash this note and save it in the repo of the work, with "scope": "repo".`);
   }
   const chars = note.body.trim().length;
   if (chars > BODY_CHARS) warnings.push(`the body has ${chars} characters. A trigger loads at most ${BODY_CHARS}, and cuts the rest. Keep the fact, why it matters, and how to apply it.`);

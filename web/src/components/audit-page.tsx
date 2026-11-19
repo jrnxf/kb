@@ -88,7 +88,7 @@ function Meter({ data, left }: { data: AuditData; left: number }) {
   return (
     <span
       className="flex items-center gap-3 text-[13px]"
-      title={`A session lists at most ${data.index.budget} notes. ${data.index.hidden} did not fit, so no session sees them. Each trash or merge gives one of them a line.`}
+      title={`The index of a session has a character budget. The lines of ${data.index.hidden} ${data.index.hidden === 1 ? "note" : "notes"} did not fit, so no session sees them. Each trash or merge makes room for one of them.`}
     >
       <span className={cn("tabular-nums", done ? "text-(--k-convention)" : "text-muted-foreground")}>
         {done ? (
@@ -391,7 +391,7 @@ function Divider({ group, count, onOneByOne, onKeepAll }: { group: string; count
 }
 
 /** Where sessions see the note now, in the user's words. */
-const placeText = { body: "sessions load it in full", index: "sessions see its title only", hidden: "no session sees it" } as const;
+const placeText = { brief: "sessions see its next step", index: "sessions see its title", trigger: "loads at its trigger", hidden: "no session sees it" } as const;
 
 function Meta({ note, reason }: { note: AuditNote; reason?: string }) {
   return (

@@ -93,6 +93,27 @@ describe("the audit page data", () => {
     expect(card("m").merge!.map((n) => n.id)).toEqual(["m2"]);
     expect(card("v").note.body).toBe("body of v");
   });
+
+  test("each note says what a session start gives of it now: a brief, an index line, nothing until its trigger, or nothing", () => {
+    const store = tempStore();
+    const GLOBAL: RepoInfo = { scope: null, root: null, head: null };
+    putNote(store, { id: "work", kind: "open-work", body: "Next: move the laptops." });
+    putNote(store, { id: "plain" });
+    putNote(store, { id: "at-cmd", triggers: ["cmd: zorp --wipe"] });
+    const items = ["work", "plain", "at-cmd"].map((id) => ({ id, action: "keep", why: "x" }));
+    proposeAudit(store, { items }, GLOBAL);
+    const places = () => Object.fromEntries(auditData(store, "global", "tok").cards.map((c) => [c.id, c.note.place]));
+    expect(places()).toEqual({ work: "brief", plain: "index", "at-cmd": "trigger" });
+    expect(auditData(store, "global", "tok")).toMatchObject({ index: { lines: 1, hidden: 0 }, hidden: [] });
+    // Over the character budget, the lowest ranked lines are gone: those notes reach no session.
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 500 } }));
+    for (let i = 0; i < 30; i++) putNote(store, { id: `more-${String(i).padStart(2, "0")}` });
+    const over = auditData(store, "global", "tok");
+    expect(over.index.hidden).toBeGreaterThan(0);
+    expect(over.hidden).toHaveLength(over.index.hidden);
+    expect(over.hidden.at(-1)).toBe("plain");
+    expect(places()).toEqual({ work: "brief", plain: "hidden", "at-cmd": "trigger" });
+  });
 });
 
 describe("Apply", () => {
@@ -558,6 +579,10 @@ describe("the deck", () => {
   test("counts no line for a note that had none", () => {
     const out = card({ note: { ...card({}).note, place: "hidden" } });
     expect(freed([out, card({})], [{ action: "trash" }, { action: "trash" }])).toBe(1);
+    // A global note that loads at its trigger has no line either. A brief gives its room back.
+    const atTrigger = card({ note: { ...card({}).note, place: "trigger" } });
+    const brief = card({ note: { ...card({}).note, place: "brief" } });
+    expect(freed([atTrigger, brief], [{ action: "trash" }, { action: "trash" }])).toBe(1);
   });
 
   test("sends every card to Apply, keep too, with the user's text", () => {

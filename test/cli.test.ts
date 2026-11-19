@@ -258,7 +258,8 @@ describe("kb add with triggers", () => {
     expect(kb(store, ["list", "--json"]).json).toMatchObject([{ id: "by-hand", triggers }]);
     expect(kb(store, ["show", "by-hand", "--json"]).json.triggers).toEqual(triggers);
     expect(kb(store, ["search", "cache", "--json"]).json.map((n: { id: string }) => n.id)).toEqual(["by-hand"]);
-    expect(kb(store, ["context"], { cwd: repo }).stdout).toContain("by-hand");
+    // A global note with a trigger takes no index line: the session start reads the same triggers.
+    expect(kb(store, ["context", "--json"], { cwd: repo }).json).toMatchObject({ triggerOnly: ["by-hand"], index: [] });
     // The trigger loads the note, as the quoted form does.
     expect(beforeCommand(store, "zorp --wipe", repo, { session_id: "s1" })?.fires).toMatchObject([{ note: "by-hand", kind: "cmd" }]);
     // A write keeps what it read, in the quoted form.
@@ -319,7 +320,14 @@ describe("kb add with triggers", () => {
     // A trigger or an anchor is enough, and the other kinds load by their place in the session start.
     expect(add(store, { ...gotcha, title: "With a trigger", triggers: ["err: flux capacitor underflow"] }).json.warnings).toBeUndefined();
     expect(add(store, { ...gotcha, title: "With an anchor", anchors: ["src/pay.ts"] }).json.warnings).toBeUndefined();
-    for (const kind of ["decision", "convention", "open-work"]) expect(add(store, { ...gotcha, title: `A ${kind}`, kind }).json.warnings).toBeUndefined();
+    for (const kind of ["decision", "convention"]) expect(add(store, { ...gotcha, title: `A ${kind}`, kind }).json.warnings).toBeUndefined();
+    // Open work belongs to a repo: with the scope global no repo session shows its next step.
+    const inRepo = kb(store, ["add", "--json"], { cwd: tempRepo({ remote: "git@github.com:acme/billing.git" }), stdin: JSON.stringify({ title: "Ship the export", kind: "open-work", body: "Next: write the pager." }) });
+    expect(inRepo.json).toMatchObject({ status: "created" });
+    expect(inRepo.json.warnings).toBeUndefined();
+    const work = add(store, { ...gotcha, title: "Move the laptops", kind: "open-work", scope: "global" });
+    expect(work.json.status).toBe("created");
+    expect(work.json.warnings).toEqual(['open work belongs to a repo. With the scope global it is one index line in every repo session, and none shows its next step. Trash this note and save it in the repo of the work, with "scope": "repo".']);
     // A body of 700 characters is fine: a trigger loads it whole. One more is worth a second look.
     expect(add(store, { ...gotcha, title: "At the aim", kind: "decision", body: "x".repeat(700) }).json.warnings).toBeUndefined();
     const long = add(store, { ...gotcha, title: "Over the aim", body: "x".repeat(701) });
@@ -610,13 +618,14 @@ describe("kb log", () => {
     // A second verdict in the same session replaces the first.
     logAt(store, "2026-06-01T10:07:00Z", { ev: "verdict", ...s1, note: "a", verdict: "helped" });
     logAt(store, "2026-06-01T10:08:00Z", { ev: "checkpoint", ...s1 });
-    logAt(store, "2026-07-01T09:00:00Z", { ev: "start", session: "s2", scope: SCOPE, source: "clear", bodies: ["a", "b"], index: [], hidden: ["c"], chars });
+    // The first start has the form of an older kb, with whole bodies. This one has the form of today.
+    logAt(store, "2026-07-01T09:00:00Z", { ev: "start", session: "s2", scope: SCOPE, source: "clear", holdback: false, briefs: ["b"], bodies: [], index: ["a"], triggerOnly: ["quiet"], hidden: ["c"], chars: { ...chars, briefs: 200, bodies: 0 } });
     logAt(store, "2026-07-01T09:30:00Z", { ev: "unsaved", session: "s2", reason: "clear" });
     return store;
   }
-  const zero = { body: 0, index: 0, hidden: 0, opened: { task: 0, check: 0 }, fired: 0, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } };
+  const zero = { body: 0, brief: 0, index: 0, hidden: 0, opened: { task: 0, check: 0 }, fired: 0, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } };
 
-  test("--json has one row per note: how often it was a body, a line, hidden, opened, fired, and its verdicts", () => {
+  test("--json has one row per note: how often it was a body, a brief, a line, hidden, opened, fired, and its verdicts", () => {
     const store = fixture();
     const json = kb(store, ["log", "--json"]).json;
     expect(json).toEqual({
@@ -630,20 +639,20 @@ describe("kb log", () => {
       checkpoints: 1,
       unsaved: 1,
       notes: [
-        { id: "a", scope: SCOPE, kind: "gotcha", state: "active", ...zero, body: 2, verdicts: { helped: 1, "not-needed": 0, wrong: 0 }, last_activity: "2026-06-01T10:07:00Z" },
-        { id: "b", scope: SCOPE, kind: "decision", state: "active", ...zero, body: 1, index: 1, opened: { task: 1, check: 1 }, last_activity: "2026-06-01T10:02:00Z" },
+        { id: "a", scope: SCOPE, kind: "gotcha", state: "active", ...zero, body: 1, index: 1, verdicts: { helped: 1, "not-needed": 0, wrong: 0 }, last_activity: "2026-06-01T10:07:00Z" },
+        { id: "b", scope: SCOPE, kind: "decision", state: "active", ...zero, brief: 1, index: 1, opened: { task: 1, check: 1 }, last_activity: "2026-06-01T10:02:00Z" },
         { id: "c", scope: "global", kind: "gotcha", state: "active", ...zero, hidden: 2, fired: 1, last_activity: "2026-06-01T10:01:00Z" },
         // A note that is gone still has its history, and a note in the trash says so.
         { id: "deleted-since", scope: null, kind: null, state: "gone", ...zero, hidden: 1, last_activity: null },
         { id: "in-trash", scope: "global", kind: "gotcha", state: "trash", ...zero, last_activity: null },
-        // An active note that no session got is a row of zeros, not a gap.
+        // An active note that no session got is a row of zeros, not a gap: here a note that waits for its trigger.
         { id: "quiet", scope: "global", kind: "gotcha", state: "active", ...zero, last_activity: null },
       ],
     });
     const text = kb(store, ["log"]).stdout;
     expect(text).toContain("2 sessions, 2 starts, 1 checkpoint, 1 unsaved | searches: 0 for a task, 1 as a check");
-    expect(text).toMatch(/^id +body +index +hidden +opened +checked +fired +helped +not-needed +wrong$/m);
-    expect(text).toMatch(/^b +1 +1 +0 +1 +1 +0 +0 +0 +0$/m);
+    expect(text).toMatch(/^id +body +brief +index +hidden +opened +checked +fired +helped +not-needed +wrong$/m);
+    expect(text).toMatch(/^b +0 +1 +1 +0 +1 +1 +0 +0 +0 +0$/m);
     expect(text).not.toMatch(/^quiet/m);
     expect(text).toContain("1 active note has no event.");
   });
@@ -654,7 +663,7 @@ describe("kb log", () => {
     const json = kb(store, ["log", "--since", days("2026-06-15T00:00:00Z"), "--json"]).json;
     expect(json).toMatchObject({ from: "2026-07-01T09:00:00Z", events: 2, sessions: 1, starts: 1, checkpoints: 0, unsaved: 1 });
     expect(json.since > "2026-06-01" && json.since < "2026-07-01").toBe(true);
-    expect(json.notes.find((n: any) => n.id === "a")).toMatchObject({ body: 1, verdicts: { helped: 0 } });
+    expect(json.notes.find((n: any) => n.id === "a")).toMatchObject({ body: 0, index: 1, verdicts: { helped: 0 } });
     for (const bad of ["0", "-3", "soon"]) expect(kb(store, ["log", "--since", bad]).code).toBe(1);
   });
 
@@ -674,6 +683,12 @@ describe("kb log", () => {
     expect(text).toMatch(/  search +"ledger rows": 2 notes \(check\)$/m);
     expect(text).toMatch(/  verdict +helped a$/m);
     expect(text).toContain("no verdict yet:\n- b | opened | The title of b\n- c | fired | Title of c\n");
+    // A start of today names its briefs, and a brief can be judged. A start of the hold-back arm says so.
+    const today = kb(store, ["log", "--session", "s2"]).stdout;
+    expect(today).toMatch(/  start +clear: 1 brief, 1 index line, 1 hidden, 1000 characters$/m);
+    expect(today).toContain("no verdict yet:\n- b | brief | The title of b\n");
+    logAt(store, "2026-07-02T09:00:00Z", { ev: "start", session: "s3", scope: SCOPE, source: "startup", holdback: true, briefs: [], bodies: ["a", "b"], index: [], triggerOnly: [], hidden: ["c"], chars: { fixed: 700, briefs: 0, index: 0, bodies: 300, total: 1000 } });
+    expect(kb(store, ["log", "--session", "s3"]).stdout).toMatch(/  start +startup \(hold-back\): 0 briefs, 2 bodies, 0 index lines, 1 hidden, 1000 characters$/m);
     // A session with no event, and a store with no log.
     expect(kb(store, ["log", "--session", "nobody", "--json"]).json).toMatchObject({ session: "nobody", scope: null, events: 0, notes: [], unjudged: [], timeline: [] });
     expect(kb(tempStore(), ["log", "--json"]).json).toMatchObject({ from: null, events: 0, notes: [] });

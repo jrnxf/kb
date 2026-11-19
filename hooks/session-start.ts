@@ -1,7 +1,8 @@
-// Reads the SessionStart JSON on stdin and prints `kb context` for the session's directory,
-// the rule for where rules and facts go, and at most four one-line notices. With the other
-// files in hooks/ and the skills, this is the only code that knows about Claude Code. After the
-// output it adds one `start` line to the event log: which notes this session got, and in what form.
+// Reads the SessionStart JSON on stdin and prints `kb context` for the session's directory (the
+// open work of the repo in short form, and the index), the rule for where rules and facts go, and
+// at most four one-line notices. With the other files in hooks/ and the skills, this is the only
+// code that knows about Claude Code. After the output it adds one `start` line to the event log:
+// which notes this session got, and in what form.
 
 import { forgetSeen } from "../cli/by-path.ts";
 import { SAVE_RULE, buildContext } from "../cli/context.ts";
@@ -40,8 +41,10 @@ try {
   const store = new Store();
   // The notes a trigger loaded before a compaction or a /clear are gone from the context, so they may load again.
   if (input.source === "compact" || input.source === "clear") forgetSeen(store, input.session_id);
-  const context = buildContext(store, cwd);
-  const { text, hiddenIndexLines } = context;
+  // HOLDBACK: the session id picks the arm, so a resume, a compaction and a /clear stay in one.
+  const context = buildContext(store, cwd, typeof input.session_id === "string" ? input.session_id : undefined);
+  const { text } = context;
+  const hidden = context.hidden.length;
   const notices: string[] = [];
 
   if (store.exists()) {
@@ -61,8 +64,8 @@ try {
     const stale = cachedStaleCount(store, repo.scope, repo.head);
     // Hook output reaches the agent only, so each line asks it to pass the message on.
     if (stale && stale.notes > STALE_NOTICE_ABOVE) notices.push(`${stale.notes} kb notes for this scope may be stale. Tell the user in one line, in your first reply, that /kb:audit checks them.`);
-    // Bodies that do not fit are normal in a large store. Index lines that do not fit mean notes are invisible.
-    if (hiddenIndexLines > 0) notices.push(`The kb store is over its index budget here: ${hiddenIndexLines} ${hiddenIndexLines === 1 ? "note is" : "notes are"} hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
+    // The index is how a note reaches a session. Index lines that do not fit mean notes are invisible.
+    if (hidden > 0) notices.push(`The kb store is over its index budget here: ${hidden} ${hidden === 1 ? "note is" : "notes are"} hidden from the index. Tell the user in one line, in your first reply, that /kb:audit fixes this.`);
     if (text && !stale?.fresh) detached(store, ["stale", "--repo", cwd, "--quiet"]);
   }
 
@@ -83,17 +86,21 @@ try {
   const output = shown.length === 0 ? head : `${head}\n${shown.join("\n")}\n`;
   process.stdout.write(output);
   // The log comes after the output, so it can never change or delay what the session gets.
-  const { index, bodies } = context.charsBy;
+  const { briefs, index, bodies } = context.charsBy;
   logEvent(store, {
     ev: "start",
     ...hookWho(input),
     scope: context.scope ?? "global",
     source: typeof input.source === "string" ? input.source : "unknown",
+    // HOLDBACK: the flag says which policy this start had. Only the hold-back arm has bodies.
+    holdback: context.holdback,
+    briefs: context.briefs,
     bodies: context.bodies,
     index: context.index,
-    // In no session: a note the index budget cut, or a global note over the global cap.
-    hidden: [...context.dropped.filter((id) => !context.index.includes(id)), ...context.capped],
-    chars: { fixed: output.length - index - bodies, index, bodies, total: output.length },
+    triggerOnly: context.triggerOnly,
+    // In no session: the index line did not fit the character budget.
+    hidden: context.hidden,
+    chars: { fixed: output.length - briefs - index - bodies, briefs, index, bodies, total: output.length },
   });
   // Fetch changes from other machines in the background, at most once per 5 minutes.
   kickSync(store, 5 * 60_000);

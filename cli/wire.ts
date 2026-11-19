@@ -70,8 +70,12 @@ export interface AuditNote {
   kind: string;
   scope: string;
   body: string;
-  /** What the note takes in a session now: its body, an index line, or nothing. */
-  place: "body" | "index" | "hidden";
+  /**
+   * What the note takes at a session start now: a brief of open work, an index line, or nothing.
+   * `trigger`: a global note that takes no line on purpose, because it loads at its trigger.
+   * `hidden`: its index line did not fit, so no session sees it.
+   */
+  place: "brief" | "index" | "trigger" | "hidden";
 }
 
 export interface AuditCard {
@@ -133,8 +137,8 @@ export interface AuditData {
   scope: string;
   created: string;
   cards: AuditCard[];
-  /** The session index as it is now. hidden counts the notes that reach no session. */
-  index: { lines: number; budget: number; hidden: number };
+  /** The session index as it is now. hidden counts the notes that reach no session: their lines are over the character budget. */
+  index: { lines: number; hidden: number };
   /** The ids of the notes that reach no session. */
   hidden: string[];
   result?: AuditResult;

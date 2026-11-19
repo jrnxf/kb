@@ -262,69 +262,94 @@ describe("kb add, metadata only", () => {
 });
 
 describe("kb budget", () => {
-  test("within budget it suggests nothing", () => {
+  /** Titles this long put a handful of notes over a small character budget. */
+  const title = (id: string) => `${id}: a fact with a title that takes some room in the index of a session`;
+
+  test("within budget it suggests nothing, and says what a session start gives of each note", () => {
     const { repo, store } = fixture();
+    putNote(store, { id: "work", scope: SCOPE, kind: "open-work", body: "State: half done.\nNext: write the pager." });
     putNote(store, { id: "a", scope: SCOPE });
+    putNote(store, { id: "g-plain" });
+    putNote(store, { id: "g-cmd", triggers: ["cmd: zorp --wipe"] });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
-    expect(b).toMatchObject({ scope: SCOPE, over: false, trim: [], index: { lines: 0, budget: 60, hidden: 0 }, context: { bodies: 1, dropped: 0, budget: contextBudget(8000) } });
-    expect(b.notes[0]).toEqual({ id: "a", kind: "gotcha", scope: SCOPE, chars: expect.any(Number), shown: "body" });
+    expect(b).toMatchObject({ scope: SCOPE, over: false, trim: [], ask: [], index: { lines: 2, triggerOnly: 1, hidden: 0 }, briefs: { count: 1, limit: 3, open: 1, budget: 1500 }, context: { budget: contextBudget(8000) } });
+    // Rank order. A brief and an index line cost their characters, and a note that waits for its trigger costs none.
+    expect(b.notes).toEqual([
+      { id: "work", kind: "open-work", scope: SCOPE, chars: b.briefs.chars, shown: "brief" },
+      { id: "a", kind: "gotcha", scope: SCOPE, chars: "- a [gotcha] Title of a\n".length, shown: "index" },
+      { id: "g-cmd", kind: "gotcha", scope: "global", chars: 0, shown: "trigger" },
+      { id: "g-plain", kind: "gotcha", scope: "global", chars: expect.any(Number), shown: "index" },
+    ]);
+    expect(b.briefs.chars).toBeGreaterThan(50);
+    expect(b.context.chars).toBe(kb(store, ["context", "--json"], { cwd: repo }).json.chars);
+    const text = kb(store, ["budget"], { cwd: repo }).stdout;
+    expect(text).toBe(
+      [
+        `scope    ${SCOPE}`,
+        `context  ${b.context.chars} of ${b.context.budget} characters at a session start`,
+        `briefs   1 of 1 open-work note here, at most 3: the title, the next step and a pointer. ${b.briefs.chars} of 1500 characters`,
+        "index    2 lines, one per other note, in rank order",
+        "trigger  1 global note with no line: it loads at its cmd, stop or err trigger",
+        "hidden   0 notes",
+        "every note reaches a session: as a brief, as an index line or at its trigger",
+        "",
+      ].join("\n"),
+    );
+    expect(text).not.toMatch(/bod(y|ies)/);
   });
 
-  test("bodies that drop to an index line are not a reason to make room", () => {
+  test("a note with no body at the session start, or with no line because of its trigger, is not a reason to make room", () => {
     const { repo, store } = fixture();
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 60, contextChars: 1500 } }));
     const body = "word ".repeat(80);
     for (const id of ["a", "b", "c", "d", "e"]) putNote(store, { id, scope: SCOPE, body });
+    for (const id of ["g-1", "g-2"]) putNote(store, { id, body, triggers: ["err: flux capacitor underflow"] });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
-    expect(b.context.dropped).toBeGreaterThan(0);
-    expect(b.index.hidden).toBe(0);
-    expect(b.index.lines).toBe(b.context.dropped);
-    expect(b).toMatchObject({ over: false, trim: [] });
+    expect(b).toMatchObject({ over: false, trim: [], ask: [], index: { lines: 5, triggerOnly: 2, hidden: 0 } });
     const text = kb(store, ["budget"], { cwd: repo }).stdout;
     expect(text).not.toContain("Trash or merge first");
     expect(text).toContain("every note reaches a session");
-    expect(text).toContain("longest  ");
   });
 
   test("when notes reach no session it names as many as are hidden: the lowest ranked decisions and how-tos, never open work or a rule", () => {
     const { repo, store } = fixture();
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 2, contextChars: 1500 } }));
-    const body = "word ".repeat(80);
-    putNote(store, { id: "work", scope: SCOPE, kind: "open-work", body });
-    putNote(store, { id: "trap", scope: SCOPE, kind: "gotcha", body });
-    putNote(store, { id: "used", scope: SCOPE, kind: "how-to", body });
-    for (const id of ["howto-1", "howto-2", "howto-3"]) putNote(store, { id, scope: SCOPE, kind: "how-to", body });
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 700 } }));
+    putNote(store, { id: "work", scope: SCOPE, kind: "open-work", body: "Next: write the pager." });
+    putNote(store, { id: "trap", scope: SCOPE, kind: "gotcha", title: title("trap") });
+    putNote(store, { id: "used", scope: SCOPE, kind: "how-to", title: title("used") });
+    for (const id of ["howto-1", "howto-2", "howto-3"]) putNote(store, { id, scope: SCOPE, kind: "how-to", title: title(id) });
     // Activity ranks a note first in its kind. A count of reads plays no part.
     logAt(store, "2026-02-01T00:00:00Z", { ev: "show", note: "used", why: "task" });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
     expect(b.over).toBe(true);
     expect(b.index.hidden).toBeGreaterThan(0);
-    expect(b.index.lines).toBe(2);
+    expect(b.index.hidden).toBeLessThan(4);
+    expect(b.notes.filter((n: any) => n.shown === "hidden").map((n: any) => n.id)).toEqual(["howto-1", "howto-2", "howto-3"].slice(-b.index.hidden));
     const ids = b.trim.map((d: any) => d.id);
     expect(ids).toHaveLength(b.index.hidden);
     for (const id of ids) expect(id).toMatch(/^howto-/);
     expect(b.trim[0]).toEqual({ id: "howto-3", reason: "low rank, 6 of 6" });
     expect(JSON.stringify(b)).not.toMatch(/"uses"|last_used|never used/);
     expect(b.ask).toEqual([]);
-    expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is full\.\nTrash or merge first: howto-/);
+    expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is over its character budget\.\nTrash or merge first: howto-/);
   });
 
   test("gotchas and conventions fill the rest of the hidden count as notes to ask about, never as notes to trim", () => {
     const { repo, store } = fixture();
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 1, contextChars: 1500 } }));
-    const body = "word ".repeat(80);
-    putNote(store, { id: "howto", scope: SCOPE, kind: "how-to", body });
-    for (const id of ["rule-1", "rule-2", "rule-3"]) putNote(store, { id, scope: SCOPE, kind: "convention", body });
-    putNote(store, { id: "trap", scope: SCOPE, kind: "gotcha", body });
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 500 } }));
+    putNote(store, { id: "howto", scope: SCOPE, kind: "how-to", title: title("howto") });
+    for (const id of ["rule-1", "rule-2", "rule-3", "rule-4"]) putNote(store, { id, scope: SCOPE, kind: "convention", title: title(id) });
+    putNote(store, { id: "trap", scope: SCOPE, kind: "gotcha", title: title("trap") });
+    // A global note that waits for its trigger takes no line, so taking it out frees none.
+    putNote(store, { id: "g-cmd", kind: "decision", triggers: ["cmd: zorp --wipe"] });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
     expect(b.over).toBe(true);
+    expect(b.index.hidden).toBeGreaterThan(1);
     expect(b.trim.map((d: any) => d.id)).toEqual(["howto"]);
     expect(b.ask).toHaveLength(b.index.hidden - 1);
     for (const d of b.ask) expect(["gotcha", "convention"]).toContain(d.kind);
     const text = kb(store, ["budget"], { cwd: repo }).stdout;
-    expect(text).toContain("Trash or merge first: howto (low rank, 5 of 5)");
-    expect(text).toContain("Then ask the user, because these are rules: rule-3 (convention, low rank, 4 of 5)");
+    expect(text).toContain("Trash or merge first: howto (low rank, 6 of 7)");
+    expect(text).toContain("Then ask the user, because these are rules: rule-4 (convention, low rank, 5 of 7)");
   });
 
 });
-

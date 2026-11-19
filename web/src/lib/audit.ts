@@ -63,8 +63,11 @@ export function choiceForKey(card: AuditCard, key: string): Choice | undefined {
 
 export const agentPick = (card: AuditCard): Pick => ({ action: card.action });
 
-/** True when the note takes a place in a session now, so taking it out frees a line for another note. */
-const placed = (note: AuditNote) => note.place !== "hidden";
+/**
+ * True when the note takes room at a session start now, so taking it out frees a line for another
+ * note. A note that loads at its trigger takes none, and neither does a note that is hidden.
+ */
+const placed = (note: AuditNote) => note.place === "index" || note.place === "brief";
 
 /**
  * The index lines the picks give back. A note that leaves gives its line to a note that reaches no

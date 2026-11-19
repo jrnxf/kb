@@ -136,8 +136,8 @@ describe("the event log", () => {
     const summary = summarize(events);
     expect(summary).toMatchObject({ events: 5, sessions: 1, starts: 1, from: "2026-03-01T10:00:00Z", to: "2026-03-01T10:05:00Z" });
     expect(summary.notes).toEqual([
-      { id: "a", body: 0, index: 0, hidden: 0, opened: { task: 1, check: 0 }, fired: 0, verdicts: { helped: 1, "not-needed": 0, wrong: 0 } },
-      { id: "b", body: 0, index: 1, hidden: 0, opened: { task: 0, check: 0 }, fired: 1, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } },
+      { id: "a", body: 0, brief: 0, index: 0, hidden: 0, opened: { task: 1, check: 0 }, fired: 0, verdicts: { helped: 1, "not-needed": 0, wrong: 0 } },
+      { id: "b", body: 0, brief: 0, index: 1, hidden: 0, opened: { task: 0, check: 0 }, fired: 1, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } },
     ]);
     expect(lastActivity(store)).toEqual(new Map([["a", "2026-03-01T10:02:00Z"], ["b", "2026-03-01T10:03:00Z"]]));
   });
@@ -221,8 +221,8 @@ describe("the summary of the log", () => {
     const summary = summarize(readLog(store));
     expect(summary).toMatchObject({ events: 13, sessions: 1, starts: 2, searches: { task: 0, check: 0 } });
     expect(summary.notes).toEqual([
-      { id: "a", body: 1, index: 0, hidden: 0, opened: { task: 1, check: 0 }, fired: 0, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } },
-      { id: "b", body: 0, index: 0, hidden: 1, opened: { task: 0, check: 0 }, fired: 0, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } },
+      { id: "a", body: 1, brief: 0, index: 0, hidden: 0, opened: { task: 1, check: 0 }, fired: 0, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } },
+      { id: "b", body: 0, brief: 0, index: 0, hidden: 1, opened: { task: 0, check: 0 }, fired: 0, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } },
     ]);
     expect(lastActivity(store)).toEqual(new Map([["a", "2026-03-01T10:00:00Z"]]));
     expect(judgments(store).size).toBe(0);

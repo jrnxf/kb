@@ -240,7 +240,7 @@ export function auditData(store: Store, scope: string, token: string): AuditData
     scope: audit.scope,
     created: audit.created,
     cards,
-    index: { lines: budget.index.lines, budget: budget.index.budget, hidden: budget.index.hidden },
+    index: { lines: budget.index.lines, hidden: budget.index.hidden },
     hidden: budget.notes.filter((n) => n.shown === "hidden").map((n) => n.id),
     result: audit.result,
   };

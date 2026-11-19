@@ -7,8 +7,13 @@ import { dirname, join, relative, resolve } from "node:path";
 import { KINDS, KbError, type Note, parseNote, serializeNote } from "./note.ts";
 
 export interface Config {
-  /** globalIndexLines: the places global notes may take in a repo session, bodies and index lines together. */
-  budgets: { indexLines: number; contextChars: number; globalIndexLines: number };
+  /**
+   * contextChars: the characters a session start may take, the one hard limit of the index.
+   * briefChars: the characters the open-work briefs may take of them.
+   */
+  budgets: { contextChars: number; briefChars: number };
+  /** HOLDBACK: the share of session starts that keep the old policy for bodies, 0 to 1. 0 turns it off. */
+  holdback: number;
   decayDays: number;
   /** A note with no activity and no check for this many days has expired. The audit proposes trash for it. */
   expireDays: number;
@@ -45,8 +50,13 @@ export const HARD_CONTEXT_CAP = 8800;
 /** A count of days from the config: a number of 1 or more, else the default. */
 const days = (value: unknown, fallback: number): number => (typeof value === "number" && Number.isFinite(value) && value >= 1 ? value : fallback);
 
+/** A number from the config between two bounds, else the default. */
+const within = (value: unknown, min: number, max: number, fallback: number): number =>
+  typeof value === "number" && Number.isFinite(value) && value >= min && value <= max ? value : fallback;
+
 const DEFAULT_CONFIG: Config = {
-  budgets: { indexLines: 60, contextChars: 8000, globalIndexLines: 20 },
+  budgets: { contextChars: 8000, briefChars: 1500 },
+  holdback: 0.1,
   decayDays: 180,
   expireDays: 90,
   trashDays: 30,
@@ -119,12 +129,15 @@ export class Store {
     return {
       ...DEFAULT_CONFIG,
       ...raw,
+      // Only the budgets of this version are read. A config of an older kb can still name
+      // `indexLines` and `globalIndexLines`: both limits are gone, and the keys are ignored.
       budgets: {
-        ...DEFAULT_CONFIG.budgets,
-        ...(raw.budgets ?? {}),
-        // 0 is a choice: no global notes in a repo session. A value that is not a number is a mistake.
-        globalIndexLines: Number.isFinite(raw.budgets?.globalIndexLines) && raw.budgets!.globalIndexLines! >= 0 ? Math.floor(raw.budgets!.globalIndexLines!) : DEFAULT_CONFIG.budgets.globalIndexLines,
+        contextChars: within(raw.budgets?.contextChars, 0, Infinity, DEFAULT_CONFIG.budgets.contextChars),
+        // 0 is a choice: no briefs, so open work is in the index only.
+        briefChars: within(raw.budgets?.briefChars, 0, Infinity, DEFAULT_CONFIG.budgets.briefChars),
       },
+      // HOLDBACK: a share that is not a number from 0 to 1 is a mistake, so the default holds.
+      holdback: within(raw.holdback, 0, 1, DEFAULT_CONFIG.holdback),
       // A wrong value must not empty the trash, expire every note or stop every command.
       trashDays: days(raw.trashDays, DEFAULT_CONFIG.trashDays),
       decayDays: days(raw.decayDays, DEFAULT_CONFIG.decayDays),
