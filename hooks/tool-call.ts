@@ -26,8 +26,8 @@ try {
     fired = afterFailure(store, text(input.error), cwd, input);
   }
   if (fired) {
-    // A stop refuses the call, and the reason is all the agent gets. The record of the note is
-    // written already, so the same call passes the next time.
+    // A stop refuses the call, and the reason is all the agent gets. The record of the refusal is
+    // written already, so the same call passes once the agent had the time to read the reason.
     const out = fired.stop
       ? { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: fired.text }
       : { hookEventName: event, additionalContext: fired.text };

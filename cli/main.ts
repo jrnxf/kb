@@ -9,7 +9,7 @@ import { rememberRepo } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
 import { type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
-import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
+import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { commitAt, resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
@@ -20,7 +20,7 @@ import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
-import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, BODY_AIM, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
@@ -90,11 +90,11 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
       hold the words in order, as whole words, the first as its command word. One word that is
       a common command (ls, git, bun, ...) needs a second word.
     "stop: git push --force"  the same match, and kb refuses the command once, with the note
-      as the reason. The second run passes. For a command where one run does damage.
+      as the reason. The next run passes. For a command where one run does damage.
     "err: address already in use"  after a tool call that failed with this text in its error.
       At least ${ERR_MIN_CHARS} characters. Case does not count.
   A saved note can come with "warnings": a gotcha or a how-to with no trigger and no anchor, and
-  a body over ${BODY_AIM} characters. The note is stored in each case.
+  a body over ${BODY_CHARS} characters. The note is stored in each case.
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
   New triggers alone do not.
   With --as-of (a full ISO time with a zone), the verification has that time and the newest commit

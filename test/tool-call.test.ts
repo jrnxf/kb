@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { STOP_WINDOW_MS, beforeCommand } from "../cli/fire.ts";
 import { serializeNote } from "../cli/note.ts";
 import type { Store } from "../cli/store.ts";
 import { ROOT, kb, logged, plain, putNote, tempDir, tempRepo, tempStore } from "./helpers.ts";
@@ -65,6 +66,18 @@ const edit = (home: string, cwd: string, file: string, tool = "Edit", who: Who =
 const failed = (home: string, cwd: string, error: string, who: Who = {}, more: Record<string, unknown> = {}) =>
   answer(home, { ...base(cwd, who), hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: "zorp sync" }, tool_use_id: "toolu_1", error, is_interrupt: false, duration_ms: 12, ...more });
 
+/** Move every refusal of the store past the window, as an agent that reads the refusal and then runs the command again. */
+function afterWindow(store: Store): void {
+  const root = store.statePath("by-path");
+  for (const reader of readdirSync(root)) {
+    for (const record of readdirSync(join(root, reader))) if (record.endsWith(".stop")) writeFileSync(join(root, reader, record), String(Date.now() - STOP_WINDOW_MS));
+  }
+}
+
+/** The ids of the notes that came whole, and of the notes that came as a title. */
+const whole = (text: string | undefined) => [...(text ?? "").matchAll(/^### (\S+)/gm)].map((m) => m[1]);
+const titles = (text: string | undefined) => [...(text ?? "").matchAll(/^- (\S+)/gm)].map((m) => m[1]);
+
 const start = (home: string, cwd: string, source: string, session = "s1") => expect(run(START_HOOK, home, { session_id: session, cwd, hook_event_name: "SessionStart", source }).code).toBe(0);
 
 describe("a cmd trigger loads its note before the command", () => {
@@ -87,7 +100,7 @@ describe("a cmd trigger loads its note before the command", () => {
     const { store, repo } = fixture();
     putNote(store, { id: "zorp-wipe", triggers: ["cmd: zorp --wipe"] });
     putNote(store, { id: "on-file", scope: SCOPE, anchors: ["src/pay.ts"] });
-    for (const command of ["git status", "zorp --list", "echo 'zorp --wipe'", "ls src", "bun test 2>&1 | tail -5", ""]) expect(bash(store.home, repo, command)).toEqual({});
+    for (const command of ["git status", "zorp --list", "echo 'zorp --wipe'", "ls src", "bun test 2>&1 | tail -5", "grep -rn 'zorp --wipe' bash", ""]) expect(bash(store.home, repo, command)).toEqual({});
     // A folder that is no repo, and that does not exist: the hook needs no repo to say nothing.
     expect(bash(store.home, join(plain(), "gone"), "git status")).toEqual({});
     expect(logged(store)).toEqual([]);
@@ -129,6 +142,27 @@ describe("a cmd trigger loads its note before the command", () => {
     expect(ids(bash(store.home, plain(), `cd ${other} && make deploy`, { session: "s4" }).context)).toEqual(["everywhere", "in-web"]);
   });
 
+  test("the repo of the call always counts, and so does the repo of each cd in the line that names a real folder", () => {
+    const { store, repo } = fixture();
+    const other = tempRepo({ remote: "git@github.com:acme/web.git" });
+    putNote(store, { id: "in-billing", scope: SCOPE, triggers: ["cmd: make deploy"] });
+    putNote(store, { id: "in-web", scope: "github.com/acme/web", triggers: ["cmd: make deploy"] });
+    let n = 0;
+    const ids = (command: string, cwd = repo) => whole(bash(store.home, cwd, command, { session: `f${n++}` }).context);
+    // kb cannot read a variable, and a folder that is not there is no repo: the command runs in the repo of the call.
+    expect(ids('cd "$REPO" && make deploy')).toEqual(["in-billing"]);
+    expect(ids("cd /home/user/gone && make deploy")).toEqual(["in-billing"]);
+    expect(ids("cd src && make deploy")).toEqual(["in-billing"]);
+    // A cd in a subshell, and a cd back: kb cannot say which command runs where, so both repos count.
+    expect(ids(`(cd ${other} && make build); make deploy`)).toEqual(["in-billing", "in-web"]);
+    expect(ids(`cd ${other} && make build && cd - && make deploy`)).toEqual(["in-billing", "in-web"]);
+    expect(ids(`make build; if cd -P -- ${other}; then make deploy; fi`, plain())).toEqual(["in-web"]);
+    // A relative cd starts at the cd before it.
+    mkdirSync(join(other, "app"));
+    expect(ids(`cd ${join(other, "..")} && cd project/app && make deploy`, plain())).toEqual(["in-web"]);
+    expect(ids(`cd ${join(other, "..")} && cd app && make deploy`, plain())).toEqual([]);
+  });
+
   test("at most three notes load for one call, and the rest at the next call that matches", () => {
     const { store, repo } = fixture();
     for (let i = 1; i <= 5; i++) putNote(store, { id: `n${i}`, triggers: ["cmd: zorp --wipe"] });
@@ -138,18 +172,24 @@ describe("a cmd trigger loads its note before the command", () => {
     expect(ids()).toEqual([]);
   });
 
-  test("a long body is cut at 600 characters at the end of a word, with where the rest is", () => {
+  test("a body of 700 characters comes whole, as `kb add` aims for. A longer one is cut at the end of a word, with where the rest is", () => {
     const { store, repo } = fixture();
     putNote(store, { id: "long", triggers: ["cmd: zorp --wipe"], body: "word ".repeat(400) });
-    putNote(store, { id: "fits", triggers: ["cmd: zorp --wipe"], body: "x".repeat(600) });
+    putNote(store, { id: "fits", triggers: ["cmd: zorp --wipe"], body: "x".repeat(700) });
+    putNote(store, { id: "over", triggers: ["cmd: zorp --wipe"], body: "x".repeat(701) });
     const text = bash(store.home, repo, "zorp --wipe").context!;
-    const [, fits, long] = text.split("\n\n");
-    expect(fits).toBe(`### fits [gotcha] Title of fits\ntrigger cmd: zorp --wipe\n${"x".repeat(600)}`);
+    const [, fits, long, over] = text.split("\n\n");
+    expect(fits).toBe(`### fits [gotcha] Title of fits\ntrigger cmd: zorp --wipe\n${"x".repeat(700)}`);
     const lines = long!.split("\n");
     expect(lines.at(-1)).toBe("`kb show long` prints the rest.");
     expect(lines.at(-2)).toEndWith(" word...");
-    expect(lines.at(-2)!.length).toBeLessThanOrEqual(603);
-    expect(lines.at(-2)!.length).toBeGreaterThan(520);
+    expect(lines.at(-2)!.length).toBeLessThanOrEqual(703);
+    expect(lines.at(-2)!.length).toBeGreaterThan(620);
+    expect(over).toEndWith(`\n${"x".repeat(700)}...\n\`kb show over\` prints the rest.`);
+    // The limit of the hook is the limit that `kb add` warns at: one number for both.
+    const add = (body: string) => kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ title: `Body of ${body.length}`, kind: "decision", scope: "global", body }) }).json.warnings;
+    expect(add("y".repeat(700))).toBeUndefined();
+    expect(add("y".repeat(701))).toEqual(["the body has 701 characters. A trigger loads at most 700, and cuts the rest. Keep the fact, why it matters, and how to apply it."]);
   });
 
   test("each note is one fire in the log, with its trigger, and satisfies kb verdict not-needed", () => {
@@ -176,7 +216,7 @@ describe("a stop trigger refuses the command once", () => {
     putNote(store, { id: "frob-reset", title: "frobnicate reset drops the local database", triggers: ["stop: frobnicate reset"], body: "One run drops every table.\nTake a dump with `frobnicate dump` first." });
     expect(bash(store.home, repo, "frobnicate reset --yes")).toEqual({
       deny: [
-        "kb stopped this command once, because a note says that one run can do damage. Read the note. If the command still applies, run it again: it passes the second time.",
+        "kb stopped this command once, because a note says that one run can do damage. Read the note. If the command still applies, run it again: the next run passes.",
         "",
         "### frob-reset [gotcha] frobnicate reset drops the local database",
         "trigger stop: frobnicate reset",
@@ -184,21 +224,69 @@ describe("a stop trigger refuses the command once", () => {
         "Take a dump with `frobnicate dump` first.",
       ].join("\n"),
     });
+    afterWindow(store);
     expect(bash(store.home, repo, "frobnicate reset --yes")).toEqual({});
     expect(bash(store.home, repo, "frobnicate reset --yes")).toEqual({});
     // Another session, and a subagent, have not read the note: each is stopped once.
     expect(bash(store.home, repo, "frobnicate reset", { session: "s2" }).deny).toContain("### frob-reset ");
     expect(bash(store.home, repo, "frobnicate reset", { agent: "agent-a1" }).deny).toContain("### frob-reset ");
+    afterWindow(store);
     expect(bash(store.home, repo, "frobnicate reset", { agent: "agent-a1" })).toEqual({});
     // After a compaction the note is gone from the context, so the command is stopped once more.
     start(store.home, repo, "compact");
     expect(bash(store.home, repo, "frobnicate reset").deny).toContain("### frob-reset ");
+    afterWindow(store);
     expect(bash(store.home, repo, "frobnicate reset")).toEqual({});
     expect(logged(store).filter((e) => e.ev === "fire").map((e) => [e.session, e.agent, e.kind, e.match])).toEqual([
       ["s1", undefined, "stop", "frobnicate reset"],
       ["s2", undefined, "stop", "frobnicate reset"],
       ["s1", "agent-a1", "stop", "frobnicate reset"],
       ["s1", undefined, "stop", "frobnicate reset"],
+    ]);
+  });
+
+  test("every call that matches in the 3 seconds after the first refusal is refused too, and a later call passes", () => {
+    const { store, repo } = fixture();
+    putNote(store, { id: "force-push", triggers: ["stop: git push --force"] });
+    // An agent sent two pushes in one message. The second runs before the agent read the first refusal.
+    const at = (ms: number, command: string, who: { session_id: string; agent_id?: string } = { session_id: "s1" }) => beforeCommand(store, command, repo, who, 1_800_000_000_000 + ms);
+    expect(at(0, "git push --force origin a")).toMatchObject({ stop: true, fires: [{ note: "force-push", kind: "stop", form: "body" }] });
+    expect(at(40, "git push --force origin b")).toMatchObject({ stop: true, fires: [{ note: "force-push", kind: "stop", form: "body" }] });
+    expect(at(40, "git push origin b")).toBeNull();
+    expect(at(STOP_WINDOW_MS - 1, "git push --force origin c")?.stop).toBe(true);
+    // The window starts at the first refusal. A refusal inside it does not make it longer.
+    expect(at(STOP_WINDOW_MS, "git push --force origin a")).toBeNull();
+    expect(at(STOP_WINDOW_MS + 60_000, "git push --force origin b")).toBeNull();
+    // Each reader has its own window.
+    expect(at(STOP_WINDOW_MS + 1, "git push --force", { session_id: "s1", agent_id: "agent-a1" })?.stop).toBe(true);
+    expect(STOP_WINDOW_MS).toBe(3000);
+
+    // The same through the hook, on the real clock: two calls one after the other are both refused.
+    putNote(store, { id: "frob-reset", triggers: ["stop: frobnicate reset"] });
+    expect(bash(store.home, repo, "frobnicate reset a").deny).toContain("### frob-reset ");
+    expect(bash(store.home, repo, "frobnicate reset b").deny).toContain("### frob-reset ");
+    afterWindow(store);
+    expect(bash(store.home, repo, "frobnicate reset b")).toEqual({});
+    expect(logged(store).map((e) => [e.note, e.kind])).toEqual([["frob-reset", "stop"], ["frob-reset", "stop"]]);
+  });
+
+  test("the first refusal claims every stop note of the command: three come whole and the others as a title, and the next run passes", () => {
+    const { store, repo } = fixture();
+    for (let i = 1; i <= 5; i++) putNote(store, { id: `stop${i}`, title: `Reason ${i}`, triggers: ["stop: frobnicate reset"] });
+    putNote(store, { id: "also", triggers: ["cmd: frobnicate reset"] });
+    const first = bash(store.home, repo, "frobnicate reset").deny!;
+    expect(whole(first)).toEqual(["stop1", "stop2", "stop3"]);
+    expect(first.split("\n\n").at(-1)).toBe("These notes stop this command too. Read them with `kb show <id>`:\n- stop4 [gotcha] Reason 4\n- stop5 [gotcha] Reason 5");
+    afterWindow(store);
+    // The text said that the next run passes, and it does. The notes that came as a title come whole now, next to the command.
+    const second = bash(store.home, repo, "frobnicate reset");
+    expect(second.deny).toBeUndefined();
+    expect(whole(second.context)).toEqual(["stop4", "stop5", "also"]);
+    expect(second.context).toContain("trigger cmd: frobnicate reset");
+    expect(bash(store.home, repo, "frobnicate reset")).toEqual({});
+    expect(logged(store).map((e) => [e.note, e.kind, e.form])).toEqual([
+      ["stop1", "stop", "body"], ["stop2", "stop", "body"], ["stop3", "stop", "body"], ["stop4", "stop", "title"], ["stop5", "stop", "title"],
+      ["stop4", "cmd", "body"], ["stop5", "cmd", "body"], ["also", "cmd", "body"],
     ]);
   });
 
@@ -221,6 +309,7 @@ describe("a stop trigger refuses the command once", () => {
     // The edit gave only the title. One run of the command does damage, so the stop must not rely on it.
     expect(edit(store.home, repo, join(repo, "src/pay.ts")).context).toContain("- frob-reset [how-to]");
     expect(bash(store.home, repo, "frobnicate reset").deny).toContain("### frob-reset [how-to]");
+    afterWindow(store);
     expect(bash(store.home, repo, "frobnicate reset")).toEqual({});
     expect(failed(store.home, repo, "Exit code 1\nfatal: database is gone")).toEqual({});
     expect(edit(store.home, repo, join(repo, "src/pay.ts"))).toEqual({});
@@ -235,6 +324,7 @@ describe("a stop trigger refuses the command once", () => {
     const got = bash(store.home, repo, "frobnicate reset docs/a.md");
     expect(got.deny).toStartWith("kb stopped this command once");
     expect([...got.deny!.matchAll(/^(?:### |- )(\S+)/gm)].map((m) => m[1])).toEqual(["b-stop", "a-cmd", "c-path"]);
+    afterWindow(store);
     expect(bash(store.home, repo, "frobnicate reset docs/a.md")).toEqual({});
   });
 });
@@ -305,7 +395,9 @@ describe("an anchor loads its note when a tool call names the file", () => {
     expect(named("git diff HEAD~1 -- ./src/pay.ts docs/a.md")).toEqual(["cents", "docs-rule"]);
     expect(named("git show HEAD:src/pay.ts")).toEqual(["cents"]);
     expect(named("echo x >> src/pay.ts")).toEqual(["cents"]);
-    expect(named("ls docs")).toEqual(["docs-rule"]);
+    expect(named("ls docs/")).toEqual(["docs-rule"]);
+    expect(named("ls ./docs")).toEqual(["docs-rule"]);
+    expect(named("cd src && ls ../docs")).toEqual(["docs-rule"]);
     expect(named("wc -l 'docs/a.md'")).toEqual(["docs-rule"]);
     expect(named("cat src/pay.ts", plain())).toEqual([]);
     expect(named(`cd ${repo} && cat src/pay.ts`, plain())).toEqual(["cents"]);
@@ -313,6 +405,56 @@ describe("an anchor loads its note when a tool call names the file", () => {
     for (const command of ["cat src/pay.tsx", "cat src/pay.ts.bak", "cat vendor/src/pay.ts", "cat mydocs/a.md", "cat docs.md", "echo src/pay", "cat /home/user/other/src/pay.ts"]) expect(named(command)).toEqual([]);
     // The body of a heredoc is data: a note that is written must not load the notes on the files it names.
     expect(named("kb add --json <<'KB_NOTE'\n{\"anchors\": [\"src/pay.ts\"]}\nKB_NOTE")).toEqual([]);
+  });
+
+  test("a word of a command is a path only with a / or a . in it, and the command word never is", () => {
+    const { store, repo } = fixture();
+    for (const dir of ["test", "web"]) mkdirSync(join(repo, dir));
+    putNote(store, { id: "on-test", scope: SCOPE, anchors: ["test"] });
+    putNote(store, { id: "on-web", scope: SCOPE, anchors: ["web/"] });
+    putNote(store, { id: "on-readme", scope: SCOPE, anchors: ["README.md"] });
+    putNote(store, { id: "on-run", scope: SCOPE, anchors: ["scripts/run.sh"] });
+    // A false fire would also use the one time that the note comes in this session.
+    for (const command of ["bun test", "echo web", "git checkout test", "ls web test", "test -d src", "web --port 3000", "scripts/run.sh --fast", "./scripts/run.sh"]) expect(bash(store.home, repo, command)).toEqual({});
+    expect(whole(bash(store.home, repo, "bun test test/pay.test.ts").context)).toEqual(["on-test"]);
+    expect(whole(bash(store.home, repo, "ls web/").context)).toEqual(["on-web"]);
+    expect(whole(bash(store.home, repo, "cat README.md").context)).toEqual(["on-readme"]);
+    expect(whole(bash(store.home, repo, "bash scripts/run.sh").context)).toEqual(["on-run"]);
+  });
+
+  test("a Write into a folder that does not exist yet loads the notes on the folder above it", () => {
+    const { store, repo } = fixture();
+    putNote(store, { id: "src-rule", scope: SCOPE, anchors: ["src"] });
+    putNote(store, { id: "new-rule", scope: SCOPE, anchors: ["docs/guide/intro.md"] });
+    expect(whole(edit(store.home, repo, join(repo, "src/new/deep/pay.ts"), "Write").context)).toEqual(["src-rule"]);
+    expect(whole(edit(store.home, repo, join(repo, "docs/guide/intro.md"), "Write").context)).toEqual(["new-rule"]);
+    // No folder above the file is in a repo: nothing loads, and nothing breaks.
+    expect(edit(store.home, repo, join(plain(), "src/new/pay.ts"), "Write")).toEqual({});
+    expect(logged(store).map((e) => [e.note, e.match, e.scope])).toEqual([["src-rule", "src/new/deep/pay.ts", SCOPE], ["new-rule", "docs/guide/intro.md", SCOPE]]);
+  });
+
+  test("a note that came as a title still loads whole once at its trigger, and a note that came whole is done", () => {
+    const { store, repo } = fixture();
+    putNote(store, { id: "by-cmd", scope: SCOPE, kind: "how-to", anchors: ["src/pay.ts"], triggers: ["cmd: zorp --wipe"] });
+    putNote(store, { id: "by-err", scope: SCOPE, kind: "decision", anchors: ["src/pay.ts"], triggers: ["err: flux capacitor underflow"] });
+    putNote(store, { id: "a-gotcha", scope: SCOPE, anchors: ["src/pay.ts"], triggers: ["cmd: zorp --wipe"] });
+    const file = join(repo, "src/pay.ts");
+    // The edit gives two titles. A title is one line: the agent may never open the note.
+    const first = edit(store.home, repo, file).context;
+    expect([whole(first), titles(first)]).toEqual([["a-gotcha"], ["by-err", "by-cmd"]]);
+    // The title comes no second time, from no hook.
+    expect(edit(store.home, repo, file)).toEqual({});
+    expect(bash(store.home, repo, "cat src/pay.ts")).toEqual({});
+    // The trigger of each note still loads its body, once. The gotcha came whole, so it is done.
+    expect(whole(bash(store.home, repo, "zorp --wipe src/pay.ts").context)).toEqual(["by-cmd"]);
+    expect(whole(failed(store.home, repo, "Exit code 1\nflux capacitor underflow").context)).toEqual(["by-err"]);
+    expect(bash(store.home, repo, "zorp --wipe src/pay.ts")).toEqual({});
+    expect(failed(store.home, repo, "Exit code 1\nflux capacitor underflow")).toEqual({});
+    expect(edit(store.home, repo, file)).toEqual({});
+    expect(logged(store).map((e) => [e.note, e.kind, e.form])).toEqual([
+      ["a-gotcha", "path", "body"], ["by-err", "path", "title"], ["by-cmd", "path", "title"],
+      ["by-cmd", "cmd", "body"], ["by-err", "err", "body"],
+    ]);
   });
 
   test("the Read hook and this hook share one record, so a note comes once for a file", () => {
@@ -348,8 +490,8 @@ describe("the trigger table", () => {
     expect(fires(store, repo, "zorp --wipe", "s1")).toEqual(["zorp-wipe"]);
     const first = table(store);
     expect(first.notes).toEqual([
-      { id: "on-file", scope: SCOPE, kind: "gotcha", cmd: [], stop: [], err: [], paths: ["src/pay.ts"] },
-      { id: "zorp-wipe", scope: "global", kind: "gotcha", cmd: [["zorp", "--wipe"]], stop: [], err: ["flux capacitor underflow"], paths: [] },
+      { id: "on-file", file: `notes/${SCOPE}/on-file.md`, scope: SCOPE, kind: "gotcha", cmd: [], stop: [], err: [], paths: ["src/pay.ts"] },
+      { id: "zorp-wipe", file: "notes/global/zorp-wipe.md", scope: "global", kind: "gotcha", cmd: [["zorp", "--wipe"]], stop: [], err: ["flux capacitor underflow"], paths: [] },
     ] as never);
     // No note changed: the table stays as it is.
     bash(store.home, repo, "git status");
@@ -383,9 +525,22 @@ describe("the trigger table", () => {
     expect(fires(store, repo, "zorp --wipe", "s3")).toEqual(["zorp-wipe"]);
     // A table that names a note with no file: the hook gives nothing, and records nothing for it.
     const saved = table(store);
-    writeFileSync(store.statePath("triggers.json"), JSON.stringify({ ...saved, notes: [{ ...saved.notes[0], id: "ghost" }] }));
+    writeFileSync(store.statePath("triggers.json"), JSON.stringify({ ...saved, notes: [{ ...saved.notes[0], id: "ghost", file: "notes/global/ghost.md" }] }));
     expect(bash(store.home, repo, "zorp --wipe", { session: "s4" })).toEqual({});
     expect(existsSync(join(store.statePath("by-path"), "s4", "ghost"))).toBe(false);
+  });
+
+  test("a note file that a hand renamed still loads: the hook reads the file that the store found", () => {
+    const { store, repo } = fixture();
+    putNote(store, { id: "zorp-wipe", triggers: ["cmd: zorp --wipe", "stop: zorp nuke"] });
+    putNote(store, { id: "on-file", scope: SCOPE, kind: "decision", anchors: ["src/pay.ts"] });
+    renameSync(join(store.home, "notes/global/zorp-wipe.md"), join(store.home, "notes/global/Zorp wipe (old name).md"));
+    mkdirSync(join(store.home, "notes", SCOPE, "moved"));
+    renameSync(join(store.home, "notes", SCOPE, "on-file.md"), join(store.home, "notes", SCOPE, "moved", "pay.md"));
+    expect(kb(store, ["list", "--json"]).json.map((n: { id: string }) => n.id).sort()).toEqual(["on-file", "zorp-wipe"]);
+    expect(fires(store, repo, "zorp --wipe", "s1")).toEqual(["zorp-wipe"]);
+    expect(bash(store.home, repo, "zorp nuke", { session: "s2" }).deny).toContain("### zorp-wipe ");
+    expect(titles(edit(store.home, repo, join(repo, "src/pay.ts")).context)).toEqual(["on-file"]);
   });
 
   test("the state of the table is not in git", () => {

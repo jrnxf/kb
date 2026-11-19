@@ -43,6 +43,16 @@ describe("a cmd trigger and a command line", () => {
     ["pkill -f", "ssh build.example.com 'pkill -f x'"],
     ["pkill -f", "ssh build.example.com pkill -f x"],
     ["pkill -f", "eval 'pkill -f x'"],
+    ["pkill -f", "sudo bash -c 'pkill -f x'"],
+    ["pkill -f", "bash -lc 'pkill -f x'"],
+    ["pkill -f", "/bin/zsh -c 'pkill -f x'"],
+    ["pkill -f", "env A=1 sh -ec 'pkill -f x'"],
+    ["pkill -f", "pgrep x | xargs -I{} sh -c 'pkill -f {}'"],
+    ["pkill -f", "find . -name '*.pid' -exec sh -c 'pkill -f x' \\;"],
+    ["pkill -f", "watch -n1 'pkill -f x'"],
+    ["pkill -f", "su build -c 'pkill -f x'"],
+    ["pkill -f", "bash -c \"bash -c 'pkill -f x'\""],
+    ["zorp", "bash -c zorp"],
     ["pkill -f", "pkill \\\n  -f x"],
     ["pkill -f", "cat <<EOF\nsome text\nEOF\npkill -f x"],
     ["pkill -f", "diff <(pkill -f x) /dev/null"],
@@ -76,6 +86,13 @@ describe("a cmd trigger and a command line", () => {
     ["pkill -f", "kb add --json <<'KB_NOTE'\n{\"title\": \"x\", \"body\": \"pkill -f x\"}\nKB_NOTE", "the body of a heredoc is data"],
     ["pkill -f", "cat <<-EOF\n\tpkill -f x\n\tEOF\necho done", "the body of a heredoc is data"],
     ["pkill -f", "bash -c \"echo 'pkill -f'\"", "a quoted argument inside the script is data"],
+    ["rm -rf", "grep -rn 'rm -rf' bash", "bash is a folder that grep looks in, not the command word"],
+    ["rm -rf", "grep -c 'rm -rf' sh", "sh is an argument, also after a -c"],
+    ["pkill -f", "git commit -m 'no pkill -f in eval' ssh", "a shell name among the arguments runs nothing"],
+    ["pkill -f", "cat notes/bash 'pkill -f x'", "a shell name among the arguments runs nothing"],
+    ["pkill -f", "sudo grep -rn 'pkill -f' bash", "after a wrapper, only the words after the shell can be its script"],
+    ["pkill -f", "bash run.sh 'pkill -f x'", "with no -c, the argument goes to the script as data"],
+    ["pkill -f", "bash -c 'run \"$1\"' name 'pkill -f x'", "only the word after -c is the script"],
     ["pkill -f", "X='pkill -f' ls", "an assignment is data"],
     ["pkill -f", "printf '%s' \"$(echo 'pkill -f')\"", "a quoted argument is data"],
     ["pkill -f", "cat <<< 'pkill -f'", "a here-string is data"],
@@ -104,8 +121,10 @@ describe("a cmd trigger and a command line", () => {
     expect(simpleCommands(`echo ${"x".repeat(300_000)} && pkill -f x`).some((words) => words[0] === "pkill")).toBe(false);
   });
 
-  test("the words of a command that can be paths", () => {
-    expect(pathWords(simpleCommands("sed -n 1,3p src/pay.ts && git show HEAD:docs/a.md --output=out/x.txt"))).toEqual(["sed", "-n", "1", "3p", "src/pay.ts", "git", "show", "HEAD", "docs/a.md", "--output", "out/x.txt"]);
+  test("the words of a command that can be paths: a part with a / or a . in it, and never the command word", () => {
+    expect(pathWords(simpleCommands("sed -n 1,3p src/pay.ts && git show HEAD:docs/a.md --output=out/x.txt"))).toEqual(["src/pay.ts", "docs/a.md", "out/x.txt"]);
+    expect(pathWords(simpleCommands("bun test && echo web && ls test web && FOO=1 ./run.sh a.ts"))).toEqual(["a.ts"]);
+    expect(pathWords(simpleCommands("ls test/ ./web . && if ! scripts/up.sh README.md; then bash scripts/up.sh; fi"))).toEqual(["test/", "./web", ".", "README.md", "scripts/up.sh"]);
   });
 });
 

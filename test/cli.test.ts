@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { beforeCommand } from "../cli/fire.ts";
 import { lastActivity, logEvent } from "../cli/log.ts";
 import { parseNote } from "../cli/note.ts";
 import { search } from "../cli/search.ts";
@@ -245,6 +246,36 @@ describe("kb add with triggers", () => {
     expect(add(store, { id: "a", triggers: [`cmd: curl -H ${"ghp_"}${"a1B2".repeat(9)}`] }).json.error).toContain("triggers, item 1");
   });
 
+  test("a trigger that a hand wrote with no quotes is the same trigger, and a broken one costs only itself, never the note", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    // YAML reads `- cmd: zorp --wipe` as a map with one key. The other items are of no use to any kb.
+    const file = join(store.home, "notes", "global", "by-hand.md");
+    const front = (triggers: string) => `---\nid: by-hand\ntitle: zorp --wipe removes the cache\nscope: global\nkind: gotcha\ncreated: 2026-01-01T00:00:00Z\nlast_verified: 2026-01-01T00:00:00Z\nanchors: []\n${triggers}confidence: high\n---\nPass --project.\n`;
+    mkdirSync(join(store.home, "notes", "global"), { recursive: true });
+    writeFileSync(file, front("triggers:\n  - cmd: zorp --wipe\n  - \"stop: zorp nuke\"\n  - err: 12345678\n  - 7\n  - [cmd, zorp]\n  - cmd: zorp\n    stop: zorp\n  -\n  - when: a later kb knows\n"));
+    const triggers = ["cmd: zorp --wipe", "stop: zorp nuke", "err: 12345678", "when: a later kb knows"];
+    expect(kb(store, ["list", "--json"]).json).toMatchObject([{ id: "by-hand", triggers }]);
+    expect(kb(store, ["show", "by-hand", "--json"]).json.triggers).toEqual(triggers);
+    expect(kb(store, ["search", "cache", "--json"]).json.map((n: { id: string }) => n.id)).toEqual(["by-hand"]);
+    expect(kb(store, ["context"], { cwd: repo }).stdout).toContain("by-hand");
+    // The trigger loads the note, as the quoted form does.
+    expect(beforeCommand(store, "zorp --wipe", repo, { session_id: "s1" })?.fires).toMatchObject([{ note: "by-hand", kind: "cmd" }]);
+    // A write keeps what it read, in the quoted form.
+    expect(add(store, { id: "by-hand", confidence: "medium" }).json.status).toBe("updated");
+    expect(readFileSync(file, "utf8")).toContain('triggers:\n  - "cmd: zorp --wipe"\n  - "stop: zorp nuke"\n  - "err: 12345678"\n  - "when: a later kb knows"\nconfidence: medium\n');
+    // One trigger alone, with no list, and a key with nothing after it.
+    writeFileSync(file, front("triggers:\n  cmd: zorp --wipe\n"));
+    expect(store.find("by-hand")!.triggers).toEqual(["cmd: zorp --wipe"]);
+    writeFileSync(file, front("triggers:\n"));
+    expect(store.find("by-hand")).toMatchObject({ id: "by-hand" });
+    expect(store.find("by-hand")!.triggers).toBeUndefined();
+    // A write is still strict: the map form and a trigger of no known kind are refused, with the reason.
+    expect(add(store, { id: "by-hand", triggers: [{ cmd: "zorp --wipe" }] }).json.error).toBe('invalid note: triggers: a trigger is a text such as "cmd: pkill -f"');
+    expect(add(store, { id: "by-hand", triggers: ["when: a later kb knows"] }).json.error).toContain("must start with cmd:, stop:, err:");
+    expect(add(store, { ...gotcha, title: "A new note", triggers: [{ cmd: "zorp --wipe" }] }).json.error).toContain("a trigger is a text");
+  });
+
   test("an update of triggers alone is no verification, and an update of other fields keeps them", () => {
     const store = tempStore();
     const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
@@ -289,11 +320,11 @@ describe("kb add with triggers", () => {
     expect(add(store, { ...gotcha, title: "With a trigger", triggers: ["err: flux capacitor underflow"] }).json.warnings).toBeUndefined();
     expect(add(store, { ...gotcha, title: "With an anchor", anchors: ["src/pay.ts"] }).json.warnings).toBeUndefined();
     for (const kind of ["decision", "convention", "open-work"]) expect(add(store, { ...gotcha, title: `A ${kind}`, kind }).json.warnings).toBeUndefined();
-    // A body of 700 characters is fine. One more is worth a second look.
+    // A body of 700 characters is fine: a trigger loads it whole. One more is worth a second look.
     expect(add(store, { ...gotcha, title: "At the aim", kind: "decision", body: "x".repeat(700) }).json.warnings).toBeUndefined();
     const long = add(store, { ...gotcha, title: "Over the aim", body: "x".repeat(701) });
     expect(long.json.status).toBe("created");
-    expect(long.json.warnings).toEqual([expect.stringContaining(none), "the body has 701 characters. Aim for under 700: the fact, why it matters, how to apply it."]);
+    expect(long.json.warnings).toEqual([expect.stringContaining(none), "the body has 701 characters. A trigger loads at most 700, and cuts the rest. Keep the fact, why it matters, and how to apply it."]);
     // An update answers for the note as it is stored now, and the text form prints each warning on a line.
     expect(add(store, { id: bare.json.id, confidence: "high" }).json.warnings).toHaveLength(1);
     expect(add(store, { id: bare.json.id, triggers: ["cmd: zorp --wipe"] }).json).toEqual({ status: "updated", id: bare.json.id, path: bare.json.path });

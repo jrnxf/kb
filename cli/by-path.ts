@@ -2,7 +2,7 @@
 // it, loads when a session works on that file. This file finds the repo path of a file, and keeps
 // the record that gives each note to each reader once. fire.ts decides what loads.
 
-import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { resolveRepo } from "./scope.ts";
 import type { Store } from "./store.ts";
@@ -24,13 +24,34 @@ export function covers(anchor: string, file: string): boolean {
   return anchor !== "" && (file === anchor || file.startsWith(`${anchor}/`));
 }
 
-const real = (path: string) => {
+/**
+ * The path with every link resolved. A part that does not exist yet stays as written, under the
+ * resolved folder that holds it: a Write can name a file in a folder that it is about to make.
+ */
+const real = (path: string): string => {
   try {
     return realpathSync(path);
   } catch {
-    return path;
+    const up = dirname(path);
+    return up === path ? path : join(real(up), basename(path));
   }
 };
+
+/** True when the path is a folder that exists. */
+export function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** The nearest folder at or above the path that exists. git cannot run in a folder that is not there yet. */
+function existingFolder(path: string): string {
+  let dir = path;
+  while (!isFolder(dir) && dirname(dir) !== dir) dir = dirname(dir);
+  return dir;
+}
 
 /**
  * The path of a file in the checkout at `root`, as an anchor writes a path. null when the file is
@@ -51,7 +72,7 @@ export const realFile = (file: string) => join(real(dirname(file)), basename(fil
  */
 export function fileInRepo(store: Store, file: string): { scope: string; path: string } | null {
   if (!isAbsolute(file)) return null;
-  const repo = resolveRepo(real(dirname(file)), store, { record: false });
+  const repo = resolveRepo(existingFolder(real(dirname(file))), store, { record: false });
   if (!repo.scope || !repo.root) return null;
   const path = pathInRepo(repo.root, file);
   return path === null ? null : { scope: repo.scope, path };
@@ -59,7 +80,7 @@ export function fileInRepo(store: Store, file: string): { scope: string; path: s
 
 const seenRoot = (store: Store) => store.statePath("by-path");
 
-/** The folder that records what this reader got, one empty file per note id. null: no usable id, so nothing is recorded. */
+/** The folder that records what this reader got, one small file per record. null: no usable id, so nothing is recorded. */
 function seenDir(store: Store, reader: Reader): string | null {
   const { session_id: session, agent_id: agent } = reader;
   if (typeof session !== "string" || !SAFE.test(session)) return null;
@@ -90,15 +111,33 @@ export function forgetSeen(store: Store, session: unknown): void {
 /** "first": this call is the first to name the note, and that is recorded. "unrecorded": nothing could be recorded, so the note may come again. */
 export type Claim = "first" | "seen" | "unrecorded";
 
+export interface Seen {
+  has(id: string): boolean;
+  /** When the record was made, in milliseconds, or null when there is none. */
+  at(id: string): number | null;
+  claim(id: string): Claim;
+}
+
 /**
- * The record of what one reader got. `claim` records a note with a create that fails when the file
- * exists, so of two tool calls at the same time only one gives the note.
+ * The record of what one reader got. `claim` makes a record with a create that fails when the file
+ * exists, so of two tool calls at the same time only one gives the note. A record holds the time
+ * `now` of the call that made it.
  */
-export function seenBy(store: Store, reader: Reader, now = Date.now()): { has(id: string): boolean; claim(id: string): Claim } {
+export function seenBy(store: Store, reader: Reader, now = Date.now()): Seen {
   const dir = seenDir(store, reader);
   let ready = false;
   return {
     has: (id) => dir !== null && existsSync(join(dir, id)),
+    at(id) {
+      if (!dir) return null;
+      try {
+        const file = join(dir, id);
+        // A record that another call is writing this moment is still empty. The time of the file says the same.
+        return Number(readFileSync(file, "utf8")) || statSync(file).mtimeMs;
+      } catch {
+        return null;
+      }
+    },
     claim(id) {
       if (!dir) return "unrecorded";
       if (!ready) {
@@ -113,7 +152,7 @@ export function seenBy(store: Store, reader: Reader, now = Date.now()): { has(id
         }
       }
       try {
-        writeFileSync(join(dir, id), "", { flag: "wx" });
+        writeFileSync(join(dir, id), String(now), { flag: "wx" });
         return "first";
       } catch (error) {
         // Another call named it. Any other failure: name it, and it may come again.

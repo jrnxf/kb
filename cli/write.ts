@@ -2,7 +2,7 @@
 
 import { existsSync } from "node:fs";
 import { type WriteOp, logEvent, rollUp } from "./log.ts";
-import { KbError, type Note, serializeNote, validateNote } from "./note.ts";
+import { BODY_CHARS, KbError, type Note, serializeNote, validateNote } from "./note.ts";
 import { type RepoInfo, commitAt } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { clearStaleCache } from "./stale.ts";
@@ -87,9 +87,6 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
   return { id: note.id, path };
 }
 
-/** A body up to this length loads whole at a trigger, with room to spare. A longer one is worth a second look. */
-export const BODY_AIM = 700;
-
 /**
  * What a writer should look at again in a note that was saved. Never a refusal: the note is
  * stored. A gotcha or a how-to with no trigger and no anchor loads only at the session start, where
@@ -101,7 +98,7 @@ export function noteWarnings(note: Pick<Note, "kind" | "body" | "anchors" | "tri
     warnings.push(`a ${note.kind} with no trigger and no anchor loads only at the session start. Give it "triggers" (cmd:, stop: or err:) or "anchors", or say in your report why it has none.`);
   }
   const chars = note.body.trim().length;
-  if (chars > BODY_AIM) warnings.push(`the body has ${chars} characters. Aim for under ${BODY_AIM}: the fact, why it matters, how to apply it.`);
+  if (chars > BODY_CHARS) warnings.push(`the body has ${chars} characters. A trigger loads at most ${BODY_CHARS}, and cuts the rest. Keep the fact, why it matters, and how to apply it.`);
   return warnings;
 }
 

@@ -29,6 +29,9 @@ export interface Note {
 
 export class KbError extends Error {}
 
+/** A body up to this length loads whole at a trigger. A longer one is cut there, and `kb add` warns about it. */
+export const BODY_CHARS = 700;
+
 const SCOPE_RE = /^[a-z0-9._-]+(\/[a-z0-9._~-]+)*$/;
 
 export function isValidScope(scope: string): boolean {
@@ -78,7 +81,8 @@ export function validateNote(raw: Record<string, unknown>): Note {
   need(KINDS.includes(raw.kind as Kind), `kind: must be one of ${KINDS.join(", ")}`);
   need(CONFIDENCES.includes(raw.confidence as Confidence), `confidence: must be one of ${CONFIDENCES.join(", ")}`);
   need(raw.anchors === undefined || (Array.isArray(raw.anchors) && raw.anchors.every(isString)), "anchors: must be a list of paths");
-  // Only the shape is checked here. `kb add` checks each trigger, so a trigger that a later kb wrote does not hide the note.
+  // Only the shape is checked here. A write checks each trigger with requireTriggers. A read takes
+  // the list through storedTriggers first, so a trigger that a hand or a later kb wrote hides no note.
   need(raw.triggers === undefined || isStringArray(raw.triggers), "triggers: must be a list of texts");
   need(raw.supersedes === undefined || isStringArray(raw.supersedes), "supersedes: must be a list of ids");
   need(raw.promoted_to === undefined || isString(raw.promoted_to), "promoted_to: must be a file name");
@@ -117,12 +121,31 @@ export function validateNote(raw: Record<string, unknown>): Note {
   return note;
 }
 
+/**
+ * The triggers of a note file, as a hand may have written them. YAML reads `- cmd: zorp --wipe`
+ * with no quotes as a map with one key: that is the same trigger. An item of any other shape is
+ * left out. A broken trigger must cost only itself, never the note: a note that fails here is in
+ * no list, no search and no session, with no message.
+ */
+function storedTriggers(value: unknown): string[] {
+  const texts: string[] = [];
+  for (const item of Array.isArray(value) ? value : [value]) {
+    if (isString(item)) texts.push(item);
+    else if (item !== null && typeof item === "object" && !Array.isArray(item)) {
+      const entries = Object.entries(item);
+      const text = entries[0]?.[1];
+      if (entries.length === 1 && (isString(text) || typeof text === "number" || typeof text === "boolean")) texts.push(`${entries[0]![0]}: ${text}`);
+    }
+  }
+  return texts;
+}
+
 export function parseNote(text: string): Note {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
   if (!match) throw new KbError("invalid note: no frontmatter");
   const front = Bun.YAML.parse(match[1]!) as Record<string, unknown> | null;
   if (front === null || typeof front !== "object" || Array.isArray(front)) throw new KbError("invalid note: frontmatter is not a map");
-  return validateNote({ ...front, body: match[2] });
+  return validateNote({ ...front, ...("triggers" in front ? { triggers: storedTriggers(front.triggers) } : {}), body: match[2] });
 }
 
 /** Most recently trashed first. A note with no trashed_at goes by its last verification. */

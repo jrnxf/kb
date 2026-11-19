@@ -29,31 +29,42 @@ highest.
   anchors name that file or a folder above it. A gotcha comes whole, because a title that the agent
   does not open is lost. Another kind comes as one line: the id, the kind and the title. A Read
   gives at most five notes, and a change at most three. A shell command that names the path counts
-  too: `sed -n 1,40p src/pay.ts` loads the notes on `src/pay.ts`. So a note reaches the agent when
-  it works on the file, also when the note has no place in the index. Each note comes once per
-  session, and again after a compaction or a `/clear`. A subagent has its own context, so it gets
-  the notes too. A file the agent gets with `@` is not a Read, so it loads no notes.
+  too: `sed -n 1,40p src/pay.ts` loads the notes on `src/pay.ts`. A word of a command is a path only
+  when it holds a `/` or a `.`, and the command word never is one. So `bun test` loads no note on
+  the folder `test`. `ls test/` does. A Write into a folder that does not exist yet loads the notes
+  on the folders above it. So a note reaches the agent when it works on the file, also when the
+  note has no place in the index. Each note comes once per session, and again after a compaction
+  or a `/clear`. A note that came as a title still loads whole once, at its `cmd` or `err` trigger.
+  A subagent has its own context, so it gets the notes too. A file the agent gets with `@` is not a
+  Read, so it loads no notes.
 - **Notes load at their trigger.** A session start gives notes before the task is known, and most
   tool calls are shell commands. So a note can carry `triggers`, and a hook loads the note at the
   moment it applies:
   - `cmd: pkill -f` loads the note before a shell command that runs `pkill -f`. The command still runs.
-  - `stop: git push --force` refuses the command once, with the note as the reason. The second run
+  - `stop: git push --force` refuses the command once, with the note as the reason. The next run
     passes. It is for a command where one run does damage. It refuses the first run in a session
-    also when the session has the note from a file or an error.
+    also when the session has the note from a file or an error. An agent can send several calls
+    in one message, and they all run before it reads the refusal. So kb refuses every call that
+    matches the note in the 3 seconds after the first refusal. A call after that passes.
   - `err: address already in use` loads the note after a tool call that failed with that text in
     its error.
 
-  The agent gets the id, the kind, the title and the body. A body over 600 characters is cut, with
-  a pointer to `kb show`. At most three notes load for one tool call. Each note comes once per
-  session and subagent, and again after a compaction or a `/clear`. A repo note loads in its repo,
-  and a global note loads everywhere. A `cmd` or a `stop` trigger matches like this:
+  The agent gets the id, the kind, the title and the body. A body over 700 characters is cut, with
+  a pointer to `kb show`. `kb add` warns at the same length. At most three notes load for one tool
+  call. A refusal is the exception: it takes every `stop` note of the command, three whole and the
+  others as a title, so the next run passes. Each note comes once per session and subagent, and
+  again after a compaction or a `/clear`. A global note loads everywhere. A repo note loads for a
+  command that can run in its repo: the repo of the session, and the repo of each `cd` in the
+  command line that names a real folder. kb runs no shell, so a `cd` to a variable changes
+  nothing. A `cmd` or a `stop` trigger matches like this:
   - kb cuts the command line into simple commands at `;`, `&&`, `||`, `|`, `&`, a line break and `$( )`.
   - One simple command must hold the words of the trigger in order, as whole words. Other words
     may stand between them.
   - The first word must be the command word. So `cmd: pkill -f` matches `sudo pkill -9 -f x` and
     `a && pkill -f x`, and it does not match `echo "pkill -f"`.
   - After `sudo`, `env`, `xargs`, `timeout`, `ssh` and such, each later word can be the command
-    word. The quoted script of `bash -c`, `ssh` or `eval` is read as a command line.
+    word. The script of `bash -c`, `ssh`, `eval` or `watch` is read as a command line, only when
+    that shell is the command word. In `grep -rn 'rm -rf' bash`, the quoted text is data.
   - A quoted argument, a comment and the body of a heredoc are data. `-rf` and `-fr` are two words,
     so each form needs its own trigger.
 
@@ -207,6 +218,7 @@ Pass `--project <name>`. A wipe with no project takes ten minutes to rebuild.
 - `last_verified` and `verified_at_commit` say when somebody last checked the fact. A new title, body or anchor is a check. A new trigger is not.
 - `anchors` are repo-relative paths, or `path#symbol`. They let `kb stale` find a note that the code left behind, and they load the note by path.
 - `triggers` are optional: `cmd:`, `stop:` and `err:`, as "Notes load at their trigger" says. A path is an anchor, not a trigger.
+  kb writes each in quotes. A trigger that a hand wrote with no quotes (`- cmd: zorp --wipe`) reads as the same trigger. An item that is no trigger is left out, and the note still loads. `kb add` refuses a trigger that is not valid.
 
 kb also writes `promoted_to` (the instruction file a rule moved to), `supersedes` (the notes a merge
 took in) and `trashed_at`. `kb add` answers with `warnings`, and still saves the note, when a gotcha

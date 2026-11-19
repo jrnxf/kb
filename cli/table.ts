@@ -3,7 +3,7 @@
 // table is one small file in the per-machine state. It is built again when a note file changes.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, posix } from "node:path";
+import { join, posix, relative } from "node:path";
 import type { Kind } from "./note.ts";
 import { type Store, writeAtomic } from "./store.ts";
 import { readTriggers } from "./trigger.ts";
@@ -11,6 +11,11 @@ import { readTriggers } from "./trigger.ts";
 /** One note that has a trigger or an anchor. The title and the body stay in the note file, which is read when the note loads. */
 export interface TableNote {
   id: string;
+  /**
+   * The note file, from the folder of the store. It is the file that the store found, not a path
+   * made from the scope and the id: a file that a hand renamed still loads.
+   */
+  file: string;
   scope: string;
   kind: Kind;
   /** The words of each `cmd` and each `stop` trigger. */
@@ -29,7 +34,7 @@ export interface TriggerTable {
 }
 
 /** Changes when the format of the table changes, so a table of an older kb is built again. */
-const FORMAT = 1;
+const FORMAT = 2;
 
 const tablePath = (store: Store) => store.statePath("triggers.json");
 
@@ -80,6 +85,7 @@ function build(store: Store, sig: string): TriggerTable {
     const words = (kind: "cmd" | "stop") => triggers.filter((t) => t.kind === kind).map((t) => t.words);
     const entry: TableNote = {
       id: note.id,
+      file: relative(store.home, note.path),
       scope: note.scope,
       kind: note.kind,
       cmd: words("cmd"),

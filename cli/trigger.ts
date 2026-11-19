@@ -198,9 +198,11 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 export const WRAPPERS = ["sudo", "doas", "env", "command", "builtin", "exec", "nohup", "nice", "time", "timeout", "xargs", "watch", "ssh"];
 const WRAPPER = new Set(WRAPPERS);
 
-/** Commands that take a command line as one quoted argument. */
-export const SHELLS = ["sh", "bash", "zsh", "dash", "ksh", "eval", "ssh", "su", "watch"];
-const SHELL = new Set(SHELLS);
+/** Shells that run the argument after `-c` as a command line: `bash -c '...'`, `sh -ec '...'`. */
+const C_SHELL = new Set(["sh", "bash", "zsh", "dash", "ksh", "su"]);
+const C_FLAG = /^-[A-Za-z]*c[A-Za-z]*$/;
+/** Commands that run a quoted argument as a command line: `eval '...'`, `ssh host '...'`, `watch '...'`. */
+const RUNNER = new Set(["eval", "ssh", "watch"]);
 
 /** `find -exec <command>` and its forms run the word that follows. */
 const EXEC_FLAGS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
@@ -209,35 +211,58 @@ const baseName = (word: string) => word.slice(word.lastIndexOf("/") + 1);
 
 /**
  * The simple commands of a command line: it is cut at `;`, `&&`, `||`, `|`, `&`, a line break, and
- * the ends of `( )`, `$( )` and backticks. The body of a heredoc and a comment are left out. In a
- * command that names a shell (`bash -c '...'`, `ssh host '...'`, `eval`), a quoted argument is a
- * command line of its own, so its commands are in the list too.
+ * the ends of `( )`, `$( )` and backticks. The body of a heredoc and a comment are left out. The
+ * script of a shell (`bash -c '...'`, `ssh host '...'`, `eval '...'`) is a command line of its own,
+ * so its commands are in the list too.
  */
 export function simpleCommands(command: string): string[][] {
   const out: string[][] = [];
   read(command.length > MAX_COMMAND_CHARS ? command.slice(0, MAX_COMMAND_CHARS) : command, 0, null, out, 0);
   // The list grows while it is read: a script in a script is found the same way.
-  for (let i = 0, scripts = 0; i < out.length && scripts < 50; i++) {
-    const words = out[i]!;
-    if (!words.some((word) => SHELL.has(baseName(word)))) continue;
-    for (const word of words) {
-      if (!/\s/.test(word)) continue;
-      scripts++;
-      read(word, 0, null, out, 0);
+  for (let i = 0, count = 0; i < out.length && count < 50; i++) {
+    for (const script of scripts(out[i]!)) {
+      count++;
+      read(script, 0, null, out, 0);
     }
   }
   return out;
 }
 
-/** The places in a simple command where the command word can be. */
-function commandPlaces(words: string[]): number[] {
+/** The index of the command word of a simple command, after the words that only change how it runs. -1 when it has none. */
+export function commandAt(words: string[]): number {
   let first = 0;
   while (first < words.length && (RESERVED.has(words[first]!) || ASSIGNMENT.test(words[first]!))) first++;
-  if (first >= words.length) return [];
+  return first < words.length ? first : -1;
+}
+
+/** The places in a simple command where the command word can be. */
+function commandPlaces(words: string[]): number[] {
+  const first = commandAt(words);
+  if (first === -1) return [];
   if (WRAPPER.has(baseName(words[first]!))) return words.map((_, i) => i).slice(first);
   const places = [first];
   for (let i = first + 1; i < words.length - 1; i++) if (EXEC_FLAGS.has(words[i]!)) places.push(i + 1);
   return places;
+}
+
+/**
+ * The arguments of a simple command that are command lines of their own. An argument is a script
+ * only when the command word runs it. The name of a shell among the arguments makes nothing a
+ * script: in `grep -rn 'rm -rf' bash`, the quoted text is what grep looks for.
+ */
+function scripts(words: string[]): string[] {
+  const found = new Set<string>();
+  for (const place of commandPlaces(words)) {
+    const name = baseName(words[place]!);
+    if (RUNNER.has(name)) {
+      for (const word of words.slice(place + 1)) if (/\s/.test(word)) found.add(word);
+    } else if (C_SHELL.has(name)) {
+      // `bash -c <script> <name> <arguments>`: only the word after the flag is the script.
+      const flag = words.findIndex((word, i) => i > place && C_FLAG.test(word));
+      if (flag !== -1 && flag + 1 < words.length) found.add(words[flag + 1]!);
+    }
+  }
+  return [...found];
 }
 
 /** `/usr/bin/pkill` runs `pkill`, and `./scripts/up.sh` runs `scripts/up.sh`. */
@@ -273,7 +298,13 @@ export const errorText = (error: string) => collapse(error.length > MAX_COMMAND_
 /** True when the error holds the text of an `err` trigger. Case and the kind of whitespace do not count. */
 export const matchesError = (text: string, error: string) => errorText(error).includes(text);
 
-/** The words of a command line that can be paths: each word of each simple command, cut at spaces, `=`, `:` and `,`. */
+/**
+ * The words of a command line that can be paths. Each word of each simple command is cut at
+ * spaces, `=`, `:` and `,`. A part is a path only when it holds a `/` or a `.`, and the command
+ * word is never one: `bun test` names no folder `test`, and `echo web` no folder `web`. So a
+ * folder at the top of a repo needs its slash in the command: `ls test/`.
+ */
 export function pathWords(commands: string[][]): string[] {
-  return [...new Set(commands.flatMap((words) => words.flatMap((word) => word.split(/[\s=:,]+/))).filter(Boolean))];
+  const parts = commands.flatMap((words) => words.filter((_, i) => i !== commandAt(words)).flatMap((word) => word.split(/[\s=:,]+/)));
+  return [...new Set(parts.filter((part) => part.includes("/") || part.includes(".")))];
 }
