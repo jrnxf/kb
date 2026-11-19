@@ -120,11 +120,14 @@ kb refuses one word that is a common command (`git`, `ls`, `bun`): add a subcomm
 Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id> --check`, then update it or skip.
 A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor, or a body over 700 characters. The note is saved. Fix it with an update, or give the reason in the report.
 
-`neighbors` means that nothing was written: stored notes are close to the new note in their words. `shared` names the words both have. Read each neighbor with `kb show <id> --check`. Then write the file again and run the command again:
+`neighbors` means that nothing was written: stored notes are close to the new note in their words. `shared` names the words both have.
+`kb add` exits with code 2 for this answer, so the call shows as failed. It is an answer to read, not a failure of the tool. The note is not saved until you run the command again.
+Read each neighbor with `kb show <id> --check`. Then write the file again and run the command again:
 
 - A neighbor holds the same fact: update it. Pass its `id` and the full new body, and remove `scope` from the JSON. An update keeps the scope of the note. Skip it when it lacks nothing.
 - A neighbor says the opposite of the new fact: the two notes contradict. Update that note with what is true now. Do not add a second note.
 - Each neighbor holds a different fact: add `"new": true` to the JSON.
+- A neighbor is in another scope than the new fact, such as a `global` note for a fact about this repo: update it only when the fact holds in that scope too. For a global note, that means in every repo. Else add `"new": true`. Never put a fact about one repo into a global note.
 
 ## 4. Close finished work
 

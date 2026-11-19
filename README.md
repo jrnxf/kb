@@ -276,14 +276,17 @@ body. A word also finds its other forms: "retry" finds "retries" and "retrying",
 finds "migration". The stemmer knows the plural, the past and the -ing form, and no more: "migrate"
 does not find "migration". A form never widens a query to another word: "note" does not find
 "not", and "cors" does not find "cores". A stop word, such as "not", matches as text only. An
-accent makes no difference: "migracao" finds "migração". When no note has every word, it prints
-the closest notes and says so.
+accent makes no difference: "migracao" finds "migração", and "migração" finds "migracao". A word
+is a run of letters and digits of any script, so a note in Cyrillic has words too. Chinese writes
+no space between words, so a word there is the run between two punctuation marks. Only a word in
+ASCII letters has other forms. When no note has every word, it prints the closest notes and says
+so.
 Each note is one line with its scope, then the body lines that matched. The notes of the current
 repo come first, then global, then other repos. `kb show` accepts a part of an id when only one
 note has it.
 
 `kb add` reads one JSON object: `{"title", "kind", "body", "scope"?, "id"?, "anchors"?,
-"confidence"?, "supersedes"?, "new"?}`. It comes from the file of `--file <path>`, or from stdin. An agent
+"triggers"?, "confidence"?, "supersedes"?, "new"?}`. It comes from the file of `--file <path>`, or from stdin. An agent
 writes the file and passes `--file`, because Claude Code refuses a heredoc that has a brace and a
 quote. The result has a `status`:
 
@@ -297,7 +300,14 @@ quote. The result has a `status`:
   The writer reads the neighbors, then passes the `"id"` with no `"scope"` to update the note that
   holds the same fact, or `"new": true` when this is a different fact. With
   `"new": true` the note is written, and the result still lists the neighbors.
+  A neighbor can be in another scope than the new note: a global note for a repo fact. The `hint`
+  then says to update it only when the fact holds in that scope too, so for a global note in
+  every repo. Else the writer passes `"new": true`.
 - `newer`: with `--as-of`, the note was checked after that time. Nothing changed.
+
+`kb add` exits with code 2 for `neighbors`, because nothing was written and a second call must
+follow. The answer is on stdout as always. `created`, `updated`, `exists` and `newer` exit with 0,
+and an error with 1.
 
 The neighbor check finds a fact that a store holds in other words, which the title check and a
 search miss. It also finds a note that says the opposite, so the writer corrects that note and
@@ -306,9 +316,11 @@ global note is also compared with the notes of every repo: a close repo note doe
 write, and the result names it. The measure is plain text, with no server and no model: BM25 over
 the stems of the title and the body, as the share of one note that the other holds, in the larger
 of the two directions. A rare word weighs most. A note at 0.32 or more is a neighbor. An update by
-id skips the check. A note in the trash or in an instruction file is no neighbor, and no note
-that the new note names in `"supersedes"`. `kb stale` uses the same measure and the same line for
-its `duplicate` reason, so the audit and `kb add` agree on what a twin is. On the
+id skips the check. A note in the trash or in an instruction file is no neighbor. A note and a
+note that it names in `"supersedes"` are never neighbors. `kb stale` uses the same measure and the
+same line for its `duplicate` reason, so the audit and `kb add` agree on what a twin is.
+`kb stale` pairs only notes of one scope, because a merge has one scope: `kb add` catches a twin
+across scopes when the note is written. On the
 seeded store, 10 of 10 notes written again by hand in other words find their original, and 0 of
 10 new facts get a neighbor. Of the 134 seeded notes with no twin, 4 have a related note over the
 line: the writer reads it and passes `"new": true`. In a store of a few notes, a related note is

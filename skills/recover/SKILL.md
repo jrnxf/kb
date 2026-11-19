@@ -46,7 +46,9 @@ For each entry, oldest first, start one subagent with the Agent tool: `subagent_
 > Use `"medium"` only when the conversation shows that the fact was verified.
 > Write no instruction file. For a rule the user stated, write nothing: list it in the report under **Rules**, with the rule as one line and the words "not written".
 > The session is old. Later sessions can have saved the same facts or finished its work. Search before every write.
-> When `kb add` answers `neighbors`, do what step 3 says: read each neighbor, then update the one that holds the same fact, or pass `"new": true`.
+> When `kb add` answers `neighbors`, it exits with code 2 and the call shows as failed. It is an answer, not a failed command, and the note is not saved yet.
+> Do what step 3 says: read each neighbor, then update the one that holds the same fact, or pass `"new": true`.
+> Update a global neighbor only when the fact holds in every repo. Else pass `"new": true`.
 > A neighbor that says the opposite of the old session can be newer than it. Update it with the `--as-of` flag as always: `kb add` then answers `newer` when it is.
 > The file starts with the commits made since the session ended. Read them before you save open work.
 > Then it lists the notes that an earlier recovery of this session saved. Never add one of them again: update it when it lacks a fact.
@@ -59,7 +61,7 @@ For each entry, oldest first, start one subagent with the Agent tool: `subagent_
 > Never run `kb checkpointed`.
 > End with the step 7 report, and nothing after it. Its first line is not the step 7 verdict.
 > Write `**Recovered the session of <date of ended> in <cwd>** - <the counts>` as the first line.
-> When a `kb` command failed, write `**Not recovered: the session of <date of ended> in <cwd>** - <what failed>` instead.
+> When a `kb` command failed with an error, write `**Not recovered: the session of <date of ended> in <cwd>** - <what failed>` instead. A `neighbors` answer is no error.
 > Never write "Safe to clear". The report is about the old session, not about the session that reads it.
 
 ## 4. Report

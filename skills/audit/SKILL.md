@@ -32,7 +32,7 @@ kb budget --json
     - A card cannot change triggers or anchors. So propose keep, and name the new triggers or anchors in `why`. The user sends the note back, and you set them in step 4.
     - When the title is too wide, propose a rewrite with a narrower title, so a session knows from the index line when the note applies.
     - If the note loads in the right place, propose keep.
-  - `duplicate` - the note is close to another note in its words, by the measure that `kb add` uses. The detail names the other note and the words both have. Read both. Propose a merge when they say one fact, and keep when they say two.
+  - `duplicate` - the note is close to another note of this scope in its words, by the measure that `kb add` uses. The detail names the other note and the words both have. Read both. Propose a merge when they say one fact, and keep when they say two. A pair never has a note of another scope, so a merge always stays in the scope of the audit.
 - `kb budget` shows what a session of this scope loads. `notes` gives the size of each note and what a session gets of it, in rank order. In a repo, `index.capped` counts the global notes that stay out of its sessions on purpose, the lowest ranked. That is not a reason to change them here.
   - Bodies that did not fit (`context.dropped`) are normal: each of these notes still reaches the session as an index line. This alone is no reason to take a note out. The notes with the most `chars` are the bodies to shorten, so that more notes load whole.
   - `over` is true only when notes reach no session, because the index is full (`index.hidden`). Then `trim` lists the lowest ranked decisions and how-tos of this scope, the lowest first. Treat each one as a candidate too.
@@ -137,6 +137,8 @@ For each note sent back, read it and the code again, and rewrite it. Write this 
 ```bash
 kb add --json --file /full/path/of/the/file.json
 ```
+
+An update by `id` answers `updated` or an error. It never answers `neighbors`, the answer for which `kb add` exits with code 2.
 
 Never save a secret, token, password, key or credential in a note.
 
