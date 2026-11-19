@@ -307,10 +307,12 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
     // checked the note. A group kept in one key, or a card the user never opened, records nothing.
     // Keep both on a merge card only says the notes differ.
     const checked = pick.action === "keep" && !item.merge && (pick.checked === true || item.checked === true);
+    // The note that stays loads where each merged note loaded, so it takes the triggers of all of them.
+    const triggers = [...new Set([note, ...partners].flatMap((each) => each.triggers ?? []))];
     const fields: Partial<Note> | null =
       pick.action === "keep" ? (checked ? { last_verified: now, ...verifiedAt(note) } : null)
       : pick.action === "rewrite" ? { ...text, last_verified: now, ...verifiedAt(note) }
-      : pick.action === "merge" ? { ...text, last_verified: now, ...verifiedAt(note), supersedes: [...new Set([...(note.supersedes ?? []), ...item.merge!])] }
+      : pick.action === "merge" ? { ...text, last_verified: now, ...verifiedAt(note), ...(triggers.length > 0 ? { triggers } : {}), supersedes: [...new Set([...(note.supersedes ?? []), ...item.merge!])] }
       : null;
     const moving = pick.action === "promote" ? [note, ...partners] : [];
     const written = fields ? [next(note, fields, i)] : moving.map((each) => next(each, { promoted_to: promotedTo() }, i));

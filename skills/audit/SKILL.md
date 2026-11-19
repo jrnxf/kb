@@ -48,7 +48,7 @@ Read the note with `kb show <id> --check`, so the log records a check and not a 
 |---|---|
 | rewrite | The fact drifted. The note needs a new body, title or anchors. |
 | trash | The fact is obsolete, the work is done, or the user no longer needs the note. `kb restore` brings it back. The trash deletes it after 30 days. |
-| merge | Two or more notes cover one idea. One note keeps everything, the others go to the trash. |
+| merge | Two or more notes cover one idea. One note keeps everything, with the triggers of all of them. The others go to the trash. |
 | shorten | The note is true but long. Cut it to the fact, the reason and how to apply it. |
 | keep | The note is still true as written, or you cannot tell. Also a `duplicate` candidate that is in fact a different idea. |
 | promote | The note is a rule for how to work, which the user stated. It moves to the instruction file of the audit's scope, which every session loads whole. |

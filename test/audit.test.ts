@@ -129,7 +129,8 @@ describe("Apply", () => {
     expect(store.find("keepme")!.verified_at_commit).toBeUndefined();
     // A rewrite, a merge and a keep with a check write the note again. Each keeps its triggers.
     expect(store.find("r")).toMatchObject({ body: "the new body", triggers: ["cmd: zorp r"] });
-    expect(store.find("m")).toMatchObject({ body: "merged body", supersedes: ["m2"], triggers: ["cmd: zorp m"] });
+    // The note that a merge keeps loads where each merged note loaded: it has the triggers of both.
+    expect(store.find("m")).toMatchObject({ body: "merged body", supersedes: ["m2"], triggers: ["cmd: zorp m", "cmd: zorp m2"] });
     expect(store.find("v")!.triggers).toEqual(["cmd: zorp v"]);
     expect(store.notes().map((n) => n.id)).not.toContain("m2");
     expect(store.notes().map((n) => n.id)).not.toContain("t");
