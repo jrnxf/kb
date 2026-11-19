@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyAudit, proposeAudit } from "../cli/audit.ts";
 import type { RepoInfo } from "../cli/scope.ts";
-import { LINE_LEFT_OUT, findSecret, maskSecrets } from "../cli/secrets.ts";
+import { LINE_LEFT_OUT, findSecret, maskSecrets, maskToolText } from "../cli/secrets.ts";
 import { updateNote } from "../cli/write.ts";
 import { kb, putNote, sh, tempStore } from "./helpers.ts";
 
@@ -132,7 +132,9 @@ describe("maskSecrets", () => {
       expect(findSecret(masked)).toBeNull();
       expect(masked).toContain(kind === "a password in a URL" ? "<masked: a password>" : `<masked: ${kind}>`);
       expect(masked).toStartWith("before\nthe command was: ");
-      expect(masked).toEndWith(" --verbose\nafter");
+      // The first line of a key with no last line: the key was cut, so all that follows goes.
+      if (kind === "a private key") expect(masked).toBe("before\nthe command was: <masked: a private key>");
+      else expect(masked).toEndWith(" --verbose\nafter");
     });
   }
 
@@ -148,10 +150,29 @@ describe("maskSecrets", () => {
     const body = [rand(64), rand(64), `${rand(10)}==`];
     expect(maskSecrets(`cat key.pem\n${head}\n${body.join("\n")}\n${tail}\nexit 0`)).toBe("cat key.pem\n<masked: a private key>\nexit 0");
     expect(maskSecrets(`"private_key": "${head}\\n${body.join("\\n")}\\n${tail}\\n", "id": 7`)).toBe('"private_key": "<masked: a private key>\\n", "id": 7');
-    // A key that the output cut short has no last line. The lines of the key still go.
-    expect(maskSecrets(`${head}\n${body[0]}\n${body[1]}`)).toBe("<masked: a private key>");
-    // A sentence that only names the first line keeps its words.
-    expect(maskSecrets(`The file starts with ${head} and then the key follows.`)).toBe("The file starts with <masked: a private key> and then the key follows.");
+    // Two keys in one text: each goes, and the text between them stays.
+    expect(maskSecrets(`${head}\n${body[0]}\n${tail}\nand the second:\n${head}\n${body[1]}\n${tail}\ndone`)).toBe("<masked: a private key>\nand the second:\n<masked: a private key>\ndone");
+  });
+
+  // The lines of a key have no shape of their own, and the headers in front of them have another shape again.
+  test("masks a key with armor headers whole, and a key with no last line to the end of the text", () => {
+    const head = `-----BEGIN ${"RSA"} PRIVATE KEY-----`;
+    const tail = `-----END ${"RSA"} PRIVATE KEY-----`;
+    const body = [rand(64), rand(64), `${rand(10)}==`];
+    const encrypted = `${head}\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,${"0123456789ABCDEF".repeat(2)}\n\n${body.join("\n")}\n${tail}`;
+    expect(maskSecrets(`cat key.pem\n${encrypted}\nexit 0`)).toBe("cat key.pem\n<masked: a private key>\nexit 0");
+    // As one line, as a failed tool call gives it.
+    expect(maskSecrets(`cat key.pem ${encrypted.replace(/\s+/g, " ")} exit 0`)).toBe("cat key.pem <masked: a private key> exit 0");
+
+    const pgp = (end: boolean) => `-----BEGIN ${"PGP"} PRIVATE KEY BLOCK-----\nVersion: GnuPG v2\nComment: the key of the deploy bot\n\n${body.join("\n")}\n=${rand(4)}${end ? `\n-----END ${"PGP"} PRIVATE KEY BLOCK-----` : ""}`;
+    expect(maskSecrets(`gpg --export-secret-keys\n${pgp(true)}\nexit 0`)).toBe("gpg --export-secret-keys\n<masked: a private key>\nexit 0");
+    // A key that the output cut short has no last line. All that follows its first line goes.
+    for (const cut of [pgp(false), `${head}\nProc-Type: 4,ENCRYPTED\n\n${body[0]}`, `${head}\n${body[0]}\n${body[1]}`]) {
+      const masked = maskSecrets(`the output was:\n${cut}\nmore lines of the key, or of what came after it`);
+      expect(masked).toBe("the output was:\n<masked: a private key>");
+      expect(findSecret(masked)).toBeNull();
+    }
+    for (const left of ["Proc-Type", "DEK-Info", "GnuPG", "deploy bot", body[0]!]) expect(maskSecrets(`${encrypted}\n${pgp(true)}\n${pgp(false)}`)).not.toContain(left);
   });
 
   test("leaves text with no secret as it is, also a text that names a format", () => {
@@ -165,5 +186,47 @@ describe("maskSecrets", () => {
     const once = maskSecrets(Object.values(FAKES).join("\n"));
     expect(maskSecrets(once)).toBe(once);
     expect(once).not.toContain(LINE_LEFT_OUT);
+  });
+});
+
+// A tool call and its output are not text that somebody wrote for a reader. A short value there
+// is a secret as often as a long random one, so these masks are wider than the scan of a note.
+describe("maskToolText", () => {
+  test("masks the value of an authorization header and of a Bearer or Basic scheme, of any length", () => {
+    expect(maskToolText('curl -H "Authorization: Bearer abc" https://api.example.com')).toBe('curl -H "Authorization: Bearer <masked: a credential>" https://api.example.com');
+    expect(maskToolText("Authorization: Basic dXNlcjpw")).toBe("Authorization: Basic <masked: a credential>");
+    expect(maskToolText("authorization=tok123 was refused")).toBe("authorization=<masked: a credential> was refused");
+    expect(maskToolText('{"Authorization": "Token 9f8e7d"}')).toBe('{"Authorization": "Token <masked: a credential>"}');
+    expect(maskToolText("the proxy sent bearer a1b2c3d4 and Basic dXNlcjpwYXNz on")).toBe("the proxy sent bearer <masked: a credential> and Basic <masked: a credential> on");
+  });
+
+  test("masks the value given to a name that says secret, token, password, key or credential", () => {
+    const cases: [string, string][] = [
+      ["DB_PASSWORD=hunter2 npm start", "DB_PASSWORD=<masked: a secret value> npm start"],
+      ['{"client_secret":"s3","access_token": "t"}', '{"client_secret":"<masked: a secret value>","access_token": "<masked: a secret value>"}'],
+      ["apiKey: 'a b c'", "apiKey: '<masked: a secret value>'"],
+      ["--api-key=k1 --passwd=p1 pwd=p2", "--api-key=<masked: a secret value> --passwd=<masked: a secret value> pwd=<masked: a secret value>"],
+      ["https://example.com/cb?token=abc&state=1", "https://example.com/cb?token=<masked: a secret value>&state=1"],
+      ["aws.credentials = xyz; ssh.key: id9", "aws.credentials = <masked: a secret value>; ssh.key: <masked: a secret value>"],
+    ];
+    for (const [text, masked] of cases) expect(maskToolText(text)).toBe(masked);
+  });
+
+  test("keeps a variable, a placeholder, and a word that only holds the letters of key or token", () => {
+    for (const text of ["Authorization: Bearer $TOKEN", "API_KEY=${API_KEY} TOKEN=$1", "password: <password>", "token = process.env.GH_TOKEN", "KeyError: 'name'", "max_tokens=4096 monkey=1 keyboard: us", "Basic authentication failed", "password="]) expect(maskToolText(text)).toBe(text);
+  });
+
+  test("does all that maskSecrets does, and its result is stable", () => {
+    for (const fake of Object.values(FAKES)) expect(findSecret(maskToolText(`ran: ${fake} --verbose`))).toBeNull();
+    const once = maskToolText(`TOKEN=abc ${FAKES["a GitHub token"]} Authorization: Bearer xyz`);
+    expect(once).toBe("TOKEN=<masked: a secret value> export GH_TOKEN=<masked: a GitHub token> Authorization: Bearer <masked: a credential>");
+    expect(maskToolText(once)).toBe(once);
+  });
+
+  test("a long text with no secret is fast", () => {
+    const text = `${"a.b-c_d".repeat(5000)} ${"x".repeat(20_000)} ${"key ".repeat(5000)}`;
+    const started = performance.now();
+    expect(maskToolText(text)).toBe(text);
+    expect(performance.now() - started).toBeLessThan(200);
   });
 });

@@ -56,11 +56,13 @@ export function findSecret(text: string): { kind: string; line: number } | null 
 }
 
 /**
- * A private key from its first line to its last. `findSecret` sees the first line only, and the
- * lines of the key itself have no shape of their own. The key can come as lines, or as one line
- * with `\n` written out, as in a JSON file.
+ * A private key from its BEGIN line to its END line, whatever is between them. `findSecret` sees
+ * the first line only, and the rest has no shape of its own: a key can start with armor headers
+ * (`Proc-Type`, `DEK-Info`, the `Version` and `Comment` of a PGP block), and it can come as lines
+ * or as one line with `\n` written out, as in a JSON file. A key with no END line was cut, so it
+ * is masked to the end of the text.
  */
-const KEY_BLOCK = /-----BEGIN ((?:[A-Z]+ )*PRIVATE KEY(?: BLOCK)?)-----(?:(?:\s|\\n)*[A-Za-z0-9+/=]{20,})*(?:(?:\s|\\n)*[A-Za-z0-9+/=]*(?:\s|\\n)*-----END \1-----)?/g;
+const KEY_BLOCK = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?)-----[\s\S]*?(?:-----END \1-----|$)/g;
 
 const masked = (kind: string) => `<masked: ${kind}>`;
 /** What stands in for a line that still holds a secret after the masks. */
@@ -85,6 +87,56 @@ function maskLine(line: string): string {
  */
 export function maskSecrets(text: string): string {
   return text.replace(KEY_BLOCK, masked("a private key")).split("\n").map(maskLine).join("\n");
+}
+
+/**
+ * Text of a tool call and of its output is not text that a person wrote for a reader, so a short
+ * or plain value there is a secret as often as a long random one. These masks are wider than the
+ * scan: a note may say `token: abc`, and a command line that says it shows a real token.
+ */
+const AUTH_HEADER = /\b(authorization["']?\s*[:=]\s*["']?)((?:(?:bearer|basic|token|digest|negotiate|apikey|bot)[ \t]+)?)([^\s"',;]+)/gi;
+const AUTH_SCHEME = /\b(bearer|basic)([ \t]+)([A-Za-z0-9._~+/=_-]{6,})/gi;
+/**
+ * A name, then `=` or `:`. The name is taken whole and from its first character, so a long run of
+ * letters costs one pass. The value comes after it: bare, or in quotes.
+ */
+const NAME = /(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(["']?\s*[:=]\s*)/g;
+const VALUE = /"([^"]*)"|'([^']*)'|([^\s"'`,;&|)<>]+)/y;
+/** A name that says its value is a secret: it ends with the word. `KeyError`, `max_tokens` and `monkey` do not. */
+const saysSecret = (name: string) => /(?:secret|token|passw(?:or)?d|pwd|credentials?|api[_-]?key|(?:^|[_.-])key)$/i.test(name) || /[a-z0-9]Key$/.test(name);
+
+/** A value that names a secret and holds none: a variable, a placeholder, or a mask that is there already. */
+const reference = (value: string) => value === "" || /^[$<{%]/.test(value) || /^(?:process\.env|import\.meta\.env|os\.environ)\b/.test(value);
+/** One plain word, as in "basic authentication". */
+const plainWord = (value: string) => /^[A-Z]?[a-z]+$/.test(value);
+
+/**
+ * `maskSecrets`, and then the wider masks for a tool call and its output: the value of an
+ * authorization header or of a Bearer or Basic scheme, and the value given to a name that says
+ * secret, token, password, key or credential, of any length.
+ */
+export function maskToolText(text: string): string {
+  const headers = maskSecrets(text)
+    .replace(AUTH_HEADER, (match, head: string, scheme: string, value: string) => (reference(value) ? match : `${head}${scheme}${masked("a credential")}`))
+    .replace(AUTH_SCHEME, (match, scheme: string, gap: string, value: string) => (plainWord(value) ? match : `${scheme}${gap}${masked("a credential")}`));
+  return maskNamed(headers);
+}
+
+/** Mask the value given to each name that says it is a secret. A value of any length counts. */
+function maskNamed(text: string): string {
+  let out = "";
+  let done = 0;
+  for (const match of text.matchAll(NAME)) {
+    const [whole, name, sign] = match as unknown as [string, string, string];
+    if (match.index < done || !saysSecret(name)) continue;
+    VALUE.lastIndex = match.index + whole.length;
+    const value = VALUE.exec(text);
+    if (!value || reference(value[1] ?? value[2] ?? value[3] ?? "")) continue;
+    const quote = value[1] !== undefined ? '"' : value[2] !== undefined ? "'" : "";
+    out += `${text.slice(done, match.index)}${name}${sign}${quote}${masked("a secret value")}${quote}`;
+    done = VALUE.lastIndex;
+  }
+  return out + text.slice(done);
 }
 
 /**
