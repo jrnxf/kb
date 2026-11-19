@@ -77,11 +77,12 @@ function base(rest: string): string {
  * "retried" and "retrying" give "retry". "cache", "caches", "cached" and "caching" give "cache".
  * A stem keeps its final e, so "note" is not "not" and "core" is not "cors". It leaves derived
  * words alone ("migrate" and "migration" stay apart), so it joins few words that differ in
- * meaning. A short word, and a word with a digit, stays as it is.
+ * meaning. A short word, a word with a digit and a word that is not in ASCII letters stay as they are.
  */
 export function stem(word: string): string {
   let w = word.toLowerCase();
-  if (w.length < 4 || /\d/.test(w) || AS_IS.has(w)) return w;
+  // The rules are those of English, so a word with a letter of another alphabet stays as it is.
+  if (w.length < 4 || /[^a-z]/.test(w) || AS_IS.has(w)) return w;
   // The plural first, so "retries" goes on as "retry" does.
   w = IRREGULAR[w] ?? singular(w);
   if (AS_IS.has(w)) return w;
@@ -94,9 +95,18 @@ export function stem(word: string): string {
   return w.endsWith("ll") && syllables(w) > 1 ? w.slice(0, -1) : w;
 }
 
-/** The words of a text: runs of letters and digits, in lowercase. An accent goes, so "migração" is one word. */
+/** A text as its words are compared: in lowercase, with no accent. "Migração" gives "migracao". */
+export function fold(text: string): string {
+  return text.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "");
+}
+
+/**
+ * The words of a text: runs of letters and digits of any script, in lowercase. An accent goes, so
+ * "migração" is one word, as "søk", "straße" and "миграция" are. A script that writes no space
+ * between words gives one word per run.
+ */
 export function words(text: string): string[] {
-  return text.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "").match(/[a-z0-9]+/g) ?? [];
+  return fold(text).match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 
 /** The words that carry meaning: no stop word, and no single character. */

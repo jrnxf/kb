@@ -4,7 +4,7 @@
 
 import { readFileSync } from "node:fs";
 import type { Store, StoredNote } from "./store.ts";
-import { STOP_WORDS, meaningWords, stem } from "./words.ts";
+import { STOP_WORDS, fold, meaningWords, stem } from "./words.ts";
 
 export interface Hit {
   id: string;
@@ -34,10 +34,12 @@ const MIN_STEM = 3;
 /**
  * The stem that a query word matches by. Only a plain word has one: a query such as
  * "express.raw()" matches as text only. A stop word has none, so it never matches by its form.
+ * The word loses its accent first, as the words of a note do: "migração" matches "migracao".
  */
 export function queryStem(word: string): string | undefined {
-  if (!/^[a-z0-9]+$/.test(word) || STOP_WORDS.has(word)) return undefined;
-  const found = stem(word);
+  const plain = fold(word);
+  if (!/^[\p{L}\p{N}]+$/u.test(plain) || STOP_WORDS.has(plain)) return undefined;
+  const found = stem(plain);
   return found.length >= MIN_STEM ? found : undefined;
 }
 
@@ -70,7 +72,9 @@ export function searchNotes(store: Store, query: string, options: SearchOptions 
       if (i < bodyStart && !text.startsWith("title:")) return;
       const lower = text.toLowerCase();
       let stems: Set<string> | undefined;
-      const sameStem = (word: string) => stemOf.has(word) && (stems ??= new Set(meaningWords(lower).map(stem))).has(stemOf.get(word)!);
+      // The key of the title line is no word of the note: "titles" must not find every note by it.
+      const said = () => (i < bodyStart ? lower.slice("title:".length) : lower);
+      const sameStem = (word: string) => stemOf.has(word) && (stems ??= new Set(meaningWords(said()).map(stem))).has(stemOf.get(word)!);
       const here = words.filter((word) => lower.includes(word) || sameStem(word));
       if (here.length === 0) return;
       for (const word of here) matched.add(word);

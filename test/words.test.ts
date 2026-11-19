@@ -65,6 +65,13 @@ describe("the stemmer", () => {
   test("an accented word is one word", () => {
     expect(words("A migração falhou, naïve café")).toEqual(["a", "migracao", "falhou", "naive", "cafe"]);
   });
+
+  // words kept [a-z0-9] only. A note in Cyrillic or in Chinese then had no word, and "søk" was "s" and "k".
+  test("a word is a run of letters and digits of any script, and only a word in ASCII letters gets a stem", () => {
+    expect(words("Søk i Straße 7: миграция упала, 数据库迁移失败。")).toEqual(["søk", "i", "straße", "7", "миграция", "упала", "数据库迁移失败"]);
+    expect(stems("Миграции упали on the søkes pages")).toEqual(["миграции", "упали", "søkes", "page"]);
+    for (const word of ["søkes", "straßes", "миграции", "naïves"]) expect(stem(word)).toBe(word);
+  });
 });
 
 describe("kb search and the forms of a word", () => {
@@ -96,7 +103,6 @@ describe("kb search and the forms of a word", () => {
   test("a stem of fewer than 3 letters matches nothing, and a query that is no plain word has no stem", () => {
     expect(queryStem("ci")).toBeUndefined();
     expect(queryStem("express.raw()")).toBeUndefined();
-    expect(queryStem("migração")).toBeUndefined();
     expect(queryStem("notes")).toBe("note");
     expect(queryStem("ids")).toBe("ids");
   });
@@ -106,6 +112,44 @@ describe("kb search and the forms of a word", () => {
     putNote(store, { id: "pt", title: "A migração falhou em produção", body: "Corre de novo." });
     expect(ids(store, "migracao")).toEqual(["pt"]);
     expect(ids(store, "migração")).toEqual(["pt"]);
+  });
+
+  // The query word had no stem when it had an accent, so it matched as text only.
+  test("a word with an accent finds the word with no accent, and its other forms", () => {
+    const store = tempStore();
+    putNote(store, { id: "plain", title: "A migracao falhou em producao", body: "Corre de novo." });
+    putNote(store, { id: "cafes", title: "The cafes close at six", body: "Go before." });
+    expect(queryStem("migração")).toBe("migracao");
+    expect(ids(store, "migração")).toEqual(["plain"]);
+    expect(ids(store, "MIGRAÇÃO produção")).toEqual(["plain"]);
+    expect(ids(store, "café")).toEqual(["cafes"]);
+  });
+
+  test("a note in another script is found by its own words", () => {
+    const store = tempStore();
+    putNote(store, { id: "ru", title: "Миграция падает на общей базе", body: "Запускай миграции только на локальной копии." });
+    putNote(store, { id: "zh", title: "数据库迁移在共享环境失败", body: "只在本地副本上运行迁移。" });
+    putNote(store, { id: "no", title: "Søk i loggen før du spør", body: "Feilen står ofte der." });
+    expect(ids(store, "миграция")).toEqual(["ru"]);
+    expect(ids(store, "ОБЩЕЙ базе")).toEqual(["ru"]);
+    // Chinese writes no space between words. A part of a line matches as text.
+    expect(ids(store, "数据库")).toEqual(["zh"]);
+    expect(ids(store, "共享环境 本地副本")).toEqual(["zh"]);
+    expect(ids(store, "预览链接")).toEqual([]);
+    expect(ids(store, "søk")).toEqual(["no"]);
+    // "sok" is another word in a language that has the letter ø.
+    expect(ids(store, "sok")).toEqual([]);
+  });
+
+  // The stem match read the frontmatter key of the title line as a word of the note.
+  test("the key of the title line is no word: titles finds only a note that says title", () => {
+    const store = tempStore();
+    putNote(store, { id: "page", title: "Set the title of the page in the layout", body: "The router does not." });
+    putNote(store, { id: "ports", title: "The dev server needs port 4100 free", body: "It fails when the port is taken." });
+    expect(ids(store, "titles")).toEqual(["page"]);
+    expect(ids(store, "titled")).toEqual(["page"]);
+    // The text match is as it was: the line starts with "title:".
+    expect(ids(store, "title")).toEqual(["page", "ports"]);
   });
 
   // main matched a word as text only. The forms must add the lines of the same word and no line of another word.
@@ -127,5 +171,10 @@ describe("kb search and the forms of a word", () => {
     expect(lines.filter((line) => line.includes("cors"))).toEqual([]);
     expect(search(store, "cors")).toEqual([]);
     expect(search(store, "core").filter((hit) => !/core/i.test(hit.text))).toEqual([]);
+
+    // No seeded note says "titles" or "titled", and none has "title" outside the key of its title line.
+    expect(lines.filter((line) => line.replace(/^title:/, "").includes("title"))).toEqual([]);
+    expect(search(store, "titles")).toEqual([]);
+    expect(search(store, "titled")).toEqual([]);
   });
 });
