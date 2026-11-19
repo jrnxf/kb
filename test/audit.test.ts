@@ -3,7 +3,7 @@ import { type Browser, chromium } from "playwright";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyAudit, auditData, openAudits, proposeAudit, readAudit } from "../cli/audit.ts";
-import { AGENT_ENV, auditPrompt, runState, startRun, waitRun } from "../cli/audit-run.ts";
+import { AGENT_ENV, AGENT_TOOLS, auditPrompt, runState, startRun, waitRun } from "../cli/audit-run.ts";
 import { buildContext, contextFor } from "../cli/context.ts";
 import { auditableScopes, rememberRepo, repoRoot } from "../cli/repos.ts";
 import type { RepoInfo } from "../cli/scope.ts";
@@ -487,6 +487,16 @@ describe("kb audit starts an agent", () => {
     expect(prompt).not.toContain("disable-model-invocation");
     expect(prompt).toContain("kb audit status");
     expect(prompt).toContain("kb audit propose");
+  });
+
+  // A real headless run saved its cards this way. A file anywhere else needs the Write tool, which
+  // the agent does not get, and a heredoc with the JSON is refused.
+  test("the headless agent writes its proposal to the scratchpad directory and passes --file, so it needs no Write permission", () => {
+    expect(AGENT_TOOLS).toEqual(["Bash(kb *)", "Read", "Grep", "Glob"]);
+    const prompt = auditPrompt();
+    expect(prompt).toContain("to a file in your scratchpad directory with the Write tool");
+    expect(prompt).toContain("kb audit propose --file /full/path/of/the/file.json");
+    expect(prompt).not.toMatch(/kb audit propose <<|\| kb audit propose/);
   });
 });
 

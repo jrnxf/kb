@@ -86,14 +86,21 @@ export function auditPrompt(): string {
   ].join("\n");
 }
 
-/** The agent command. `claude -p` with only what the skill needs: kb, and reading the code. */
+/**
+ * What the headless agent may do with no question: kb, and reading the code. The skill has it
+ * write the proposal to a file in its scratchpad directory. A write there needs no permission, so
+ * no Write is allowed here: the agent can change no file of the repo.
+ */
+export const AGENT_TOOLS = ["Bash(kb *)", "Read", "Grep", "Glob"];
+
+/** The agent command. `claude -p` with only what the skill needs. */
 function agentCommand(prompt: string): string[] {
   const fake = process.env[AGENT_ENV];
   if (fake) return [fake, prompt];
   const claude = Bun.which("claude");
   if (!claude) throw new KbError("kb audit starts the audit with the claude CLI, and it is not on PATH. Run /kb:audit in a Claude Code session instead.");
   // A repo's own hooks can hang a headless run, so the agent loads the user's settings only.
-  return [claude, "-p", prompt, "--model", "opus", "--setting-sources", "user", "--allowedTools", "Bash(kb *)", "Read", "Grep", "Glob"];
+  return [claude, "-p", prompt, "--model", "opus", "--setting-sources", "user", "--allowedTools", ...AGENT_TOOLS];
 }
 
 /**
