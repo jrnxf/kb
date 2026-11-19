@@ -8,7 +8,7 @@ import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
-import { type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
+import { type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
 import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
@@ -44,7 +44,9 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          brings that move back. delete --scope removes the project's
                                          notes for good, and empty-trash --scope only its trash. Each
                                          takes the exact repo id, never "global". Only when the user asks
-  kb stale [--repo .]                    notes that may no longer be true, each with a reason
+  kb stale [--repo .]                    notes that may no longer be true, each with a reason: a changed
+                                         or missing anchor, no use, an old check, a close title, or
+                                         the verdicts wrong and not-needed of sessions on any machine
   kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
   kb budget [--repo .]                   what a session loads, and what reaches no session
   kb audit [--repo .] [--no-wait]        start an agent that audits this repo's notes, and print the
@@ -57,7 +59,7 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb checkpointed <session-id>           record that this session saved its knowledge
   kb log [--session id] [--since days]   what the log of this machine says of each note: how often a
                                          session got it, opened it and judged it. With --session, the
-                                         events of one session in time order
+                                         events of one session in time order. The log keeps 12 months
   kb scope [--repo .]                    print the scope id of a directory
   kb serve [--port n] [--no-open]        the store as a local page: read, edit and trash notes
                                          kb alone in a terminal does the same. Behind a proxy, name it in
@@ -67,6 +69,7 @@ const USAGE = `kb - a personal knowledge store for coding agents
 Every command accepts --json. The store is ~/.kb, or KB_HOME.
 A read, a write and a verdict each add one line to a log on this machine. The line names the
 session: --session <id>, or KB_SESSION, or the id that Claude Code sets for the command.
+The log stays on its machine. A small roll-up of it syncs with the store, at most once per day.
 
 kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence"?, "supersedes"?}
   scope: "repo" (the default inside a git repo), "global", or the id of a repo that has notes
@@ -171,9 +174,9 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     confidence: "medium",
     anchors: [],
     ...input,
-    // An id with counters on any machine, or with activity in the log of this machine, belongs to a
-    // deleted note: a new note must not inherit its history.
-    id: uniqueId(slug, new Set([...active, ...trashed].map((n) => n.id).concat([...store.usage().keys()], [...lastActivity(store).keys()]))),
+    // An id with a history on any machine belongs to a deleted note, or to a note that has not
+    // synced here yet: a new note must not inherit its history.
+    id: uniqueId(slug, new Set([...[...active, ...trashed].map((n) => n.id), ...idsWithHistory(store)])),
     scope,
     created: now,
     last_verified: now,
@@ -233,8 +236,9 @@ function cmdShow(store: Store, args: Args): Output {
   // Ids are long. A part of one is enough to read a note, when only one note has it.
   const close = store.find(given) ? [] : closeIds(store, given);
   const note = requireNote(store, close.length === 1 ? close[0]! : given);
-  // A read changes nothing in the store. The log on this machine records it.
-  logEvent(store, { ev: "show", note: note.id, why: whyOf(args) });
+  // A read changes nothing in the store. The log on this machine records it. A look into the
+  // trash is marked, so it never counts as activity of the note.
+  logEvent(store, { ev: "show", note: note.id, why: whyOf(args), ...(note.trashed ? { trashed: true as const } : {}) });
   return { json: note, text: `# ${relative(store.home, note.path)}\n${readFileSync(note.path, "utf8").trimEnd()}` };
 }
 
@@ -244,7 +248,9 @@ function cmdSearch(store: Store, args: Args): Output {
   const scope = scopeFilter(store, args);
   const first = resolveRepo(String(args.flags.get("repo") ?? "."), store).scope ?? undefined;
   const { hits, complete } = searchNotes(store, query, { scope, trash: inTrash(args), first });
-  logEvent(store, { ev: "search", query, hits: new Set(hits.map((h) => h.id)).size, why: whyOf(args) });
+  // `hits` counts the notes with every word. The closest notes are not hits, so they have their own field.
+  const found = new Set(hits.map((h) => h.id)).size;
+  logEvent(store, { ev: "search", query, ...(complete ? { hits: found, complete } : { hits: 0, complete, closest: found }), why: whyOf(args) });
   // One line per note. The body lines that matched follow it, because the title is already there.
   const rows: string[] = [];
   let last = "";
@@ -425,8 +431,9 @@ function eventText(event: Logged): string {
     switch (e.ev) {
       case "start": return `${e.source}: ${count(e.bodies.length, "body", "bodies")}, ${count(e.index.length, "index line", "index lines")}, ${e.hidden.length} hidden, ${e.chars.total} characters`;
       case "fire": return `${e.note} (${e.tool} of ${e.match})`;
-      case "show": return `${e.note} (${e.why})`;
-      case "search": return `${JSON.stringify(e.query)}: ${count(e.hits, "note", "notes")} (${e.why})`;
+      case "show": return `${e.note} (${e.why}${e.trashed ? ", in the trash" : ""})`;
+      // A line of an older kb has no `complete`: its `hits` may count the closest notes.
+      case "search": return `${JSON.stringify(e.query)}: ${e.complete === false ? `no note has every word, ${count(e.closest ?? 0, "closest note", "closest notes")}` : count(e.hits, "note", "notes")} (${e.why})`;
       case "write": return `${e.op} ${e.note}`;
       case "verdict": return `${e.verdict} ${e.note}`;
       case "unsaved": return e.reason ? `after ${e.reason}` : "";
@@ -472,7 +479,7 @@ function cmdLog(store: Store, args: Args): Output {
     const got = (n: (typeof notes)[number]) => [n.body > 0 ? "body" : "", n.opened.task > 0 ? "opened" : "", n.fired > 0 ? "fired" : ""].filter(Boolean);
     const judged = (n: (typeof notes)[number]) => VERDICTS.some((v) => n.verdicts[v] > 0);
     const unjudged = notes.filter((n) => n.state !== "gone" && got(n).length > 0 && !judged(n));
-    const scope = events.find((e) => e.scope)?.scope ?? null;
+    const scope = events.find((e) => typeof e.scope === "string" && e.scope)?.scope ?? null;
     const lines = [`session ${session} | ${scope ?? "scope unknown"} | ${period} | ${count(events.length, "event", "events")}`, ...events.map(eventText)];
     if (unjudged.length > 0) lines.push("no verdict yet:", ...unjudged.map((n) => `- ${n.id} | ${got(n).join(", ")} | ${(active.get(n.id) ?? trashed.get(n.id))!.title}`));
     return { json: { session, scope, ...head, notes, unjudged: unjudged.map((n) => n.id), timeline: events }, text: lines.join("\n") };

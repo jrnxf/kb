@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { lastActivity } from "../cli/log.ts";
 import { parseNote } from "../cli/note.ts";
 import { search } from "../cli/search.ts";
 import { Store } from "../cli/store.ts";
-import { ROOT, daysAgo, kb, legacyUsage, logAt, logged, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { ROOT, daysAgo, kb, legacyUsage, logAt, logged, otherMachine, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const add = (store: Store | string, note: object, cwd?: string) => kb(store, ["add", "--json"], { stdin: JSON.stringify(note), cwd });
 
@@ -140,6 +141,37 @@ describe("a read is not a write", () => {
     expect(logged(store).map((e) => e.ev)).toEqual(["write", "show", "show", "search", "verdict", "verdict"]);
   });
 
+  test("a read writes no roll-up. The next write takes it into its own commit, at most once per day", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    add(store, { title: "First", kind: "gotcha", body: "the body", scope: "global" });
+    add(store, { title: "Second", kind: "gotcha", body: "the body", scope: "global" });
+    const commits = () => sh(store.home, "git", "log", "--format=%s").split("\n");
+    const files = () => sh(store.home, "git", "show", "--name-only", "--format=", "HEAD").split("\n");
+    expect(commits()).toHaveLength(2);
+    // Activity, and then reads of every kind: nothing in the store changes.
+    for (const args of [["show", "first"], ["verdict", "helped", "first"], ["search", "body"], ["list"], ["log"], ["stale"], ["budget"], ["context"]]) expect(kb(store, args).code).toBe(0);
+    expect(commits()).toHaveLength(2);
+    expect(sh(store.home, "git", "status", "--porcelain")).toBe("");
+    expect(existsSync(join(store.home, "activity"))).toBe(false);
+    // The daily check of this day ran with the second add, before there was activity. On the next
+    // day, the first write takes the roll-up into its commit.
+    writeFileSync(join(store.home, ".state", "log", "rolled-up"), "2000-01-01\n");
+    expect(add(store, { id: "second", body: "a new body" }).json.status).toBe("updated");
+    expect(commits()).toHaveLength(3);
+    expect(commits()[0]).toBe("kb: update second");
+    const machine = store.local().machine;
+    expect(files().sort()).toEqual([`activity/${machine}.json`, "notes/global/second.md"]);
+    const rolled = JSON.parse(readFileSync(join(store.home, "activity", `${machine}.json`), "utf8"));
+    expect(Object.keys(rolled.notes)).toEqual(["first"]);
+    expect(rolled.notes.first.last).toBe(rolled.notes.first.helped);
+    // A second write on the same day leaves the roll-up alone.
+    kb(store, ["show", "second"]);
+    expect(add(store, { id: "first", body: "a new body" }).json.status).toBe("updated");
+    expect(files()).toEqual(["notes/global/first.md"]);
+    expect(sh(store.home, "git", "status", "--porcelain")).toBe("");
+  });
+
   test("show and list print no use count, also when an older kb left counters", () => {
     const store = tempStore();
     putNote(store, { id: "a" });
@@ -173,10 +205,48 @@ describe("the event log from the CLI", () => {
       { ev: "show", session: "s1", scope, note: "ledger-rows", why: "task" },
       { ev: "show", session: "s1", scope, note: "ledger-rows", why: "check" },
       { ev: "show", session: "s1", scope, note: "ledger-rows", why: "check" },
-      { ev: "show", session: "s2", scope: "global", note: "old", why: "task" },
-      { ev: "search", session: "s1", scope, query: "append-only rows", hits: 1, why: "task" },
-      { ev: "search", scope, query: "nothing here", hits: 0, why: "check" },
+      // A show of a note in the trash says so.
+      { ev: "show", session: "s2", scope: "global", note: "old", why: "task", trashed: true },
+      { ev: "search", session: "s1", scope, query: "append-only rows", hits: 1, complete: true, why: "task" },
+      { ev: "search", scope, query: "nothing here", hits: 0, complete: true, why: "check" },
     ]);
+  });
+
+  test("a show of a note in the trash is logged, and it is never activity of the note", () => {
+    const store = tempStore();
+    putNote(store, { id: "live" });
+    putNote(store, { id: "gone" }, true);
+    const env = { KB_SESSION: "s1" };
+    expect(kb(store, ["show", "gone"], { env }).code).toBe(0);
+    expect(kb(store, ["show", "live"], { env }).code).toBe(0);
+    expect(logged(store).map((e) => [e.note, e.trashed])).toEqual([["gone", true], ["live", undefined]]);
+    expect([...lastActivity(store).keys()]).toEqual(["live"]);
+    expect(kb(store, ["log", "--json"]).json.notes.find((n: any) => n.id === "gone")).toMatchObject({ state: "trash", last_activity: null });
+    expect(kb(store, ["log", "--session", "s1"]).stdout).toMatch(/  show +gone \(task, in the trash\)\n.*  show +live \(task\)$/m);
+    // After a restore the note is live, and a show counts again.
+    kb(store, ["restore", "gone"], { env });
+    kb(store, ["show", "gone"], { env });
+    expect(lastActivity(store).has("gone")).toBe(true);
+  });
+
+  test("a search with no note that has every word logs no hit, and the count of the closest notes apart", () => {
+    const store = tempStore();
+    putNote(store, { id: "one", body: "alpha beta" });
+    putNote(store, { id: "two", body: "alpha beta delta" });
+    putNote(store, { id: "three", body: "alpha" });
+    const env = { KB_SESSION: "s1" };
+    expect(kb(store, ["search", "alpha", "beta", "gamma"], { env }).stdout).toStartWith("no note has every word. Closest:\none |");
+    kb(store, ["search", "alpha", "beta"], { env });
+    kb(store, ["search", "gamma", "omega"], { env });
+    expect(logged(store)).toEqual([
+      { ev: "search", session: "s1", scope: "global", query: "alpha beta gamma", hits: 0, complete: false, closest: 2, why: "task" },
+      { ev: "search", session: "s1", scope: "global", query: "alpha beta", hits: 2, complete: true, why: "task" },
+      { ev: "search", session: "s1", scope: "global", query: "gamma omega", hits: 0, complete: true, why: "task" },
+    ]);
+    const text = kb(store, ["log", "--session", "s1"]).stdout;
+    expect(text).toMatch(/  search +"alpha beta gamma": no note has every word, 2 closest notes \(task\)$/m);
+    expect(text).toMatch(/  search +"alpha beta": 2 notes \(task\)$/m);
+    expect(text).toMatch(/  search +"gamma omega": 0 notes \(task\)$/m);
   });
 
   test("the session is the --session flag, else KB_SESSION, else the id that Claude Code sets for the command", () => {
@@ -425,6 +495,10 @@ describe("kb trash, delete, list", () => {
     // Nor the counters that an older kb recorded for "old", on any machine.
     legacyUsage(store, "othermachine", { old: { uses: 9 } });
     expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Old", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("old-2");
+    // Nor the activity or a verdict that another machine rolled up, also for a note that never was here.
+    otherMachine(store, "machine-b", { elsewhere: { last: "2026-01-01T00:00:00Z" }, "judged-elsewhere": { wrong: "2026-01-01T00:00:00Z" } });
+    expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Elsewhere", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("elsewhere-2");
+    expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Judged elsewhere", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("judged-elsewhere-2");
     // An id with no history is free again.
     expect(kb(store, ["delete", "keep"]).code).toBe(0);
     expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Keep", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("keep");
