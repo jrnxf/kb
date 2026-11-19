@@ -404,6 +404,42 @@ describe("the roll-up of the log", () => {
     expect(months()).toContain("2024-01.jsonl");
   });
 
+  test("a roll-up that fails leaves the day open: the next write tries again, and no month goes before it", () => {
+    const store = tempStore();
+    logAt(store, "2025-01-10T00:00:00Z", { ev: "show", note: "old", why: "task" });
+    logAt(store, "2026-03-01T00:00:00Z", { ev: "show", note: "a", why: "task" });
+    const mark = join(logDir(store), "rolled-up");
+    // The folder of the roll-ups cannot be made: a file has its name.
+    writeFileSync(join(store.home, "activity"), "");
+    expect(rollUp(store, day("2026-03-02"))).toBe(false);
+    expect(existsSync(mark)).toBe(false);
+    expect(readdirSync(logDir(store))).toContain("2025-01.jsonl");
+    // The same day, with the fault gone: the roll-up is written, then the old month goes.
+    rmSync(join(store.home, "activity"));
+    expect(rollUp(store, day("2026-03-02"))).toBe(true);
+    expect(readFileSync(mark, "utf8")).toBe("2026-03-02\n");
+    expect(readFileSync(rolled(store), "utf8")).toContain('"old": {"last":"2025-01-10T00:00:00Z"}');
+    expect(readdirSync(logDir(store))).not.toContain("2025-01.jsonl");
+    expect(rollUp(store, day("2026-03-02"))).toBe(false);
+  });
+
+  test("an id has a history after any event in this log, so kb add never gives it to a new note", () => {
+    const store = tempStore();
+    const at = "2026-03-01T00:00:00Z";
+    logAt(store, at, { ev: "verdict", session: "s1", note: "judged-wrong", verdict: "wrong" });
+    logAt(store, at, { ev: "verdict", session: "s1", note: "judged-idle", verdict: "not-needed" });
+    logAt(store, at, { ev: "show", note: "checked", why: "check" });
+    logAt(store, at, { ev: "show", note: "seen-in-trash", why: "task", trashed: true });
+    logAt(store, at, { ev: "write", note: "written", op: "delete" });
+    logAt(store, at, { ev: "start", source: "startup", bodies: ["as-body"], index: ["as-line"], hidden: ["as-hidden"], chars: { fixed: 1, index: 1, bodies: 1, total: 3 } });
+    logAt(store, at, { ev: "search", query: "no note", hits: 0, why: "task" });
+    // None of them is activity, and no roll-up names them yet.
+    expect(lastActivity(store).size).toBe(0);
+    expect([...idsWithHistory(store)].sort()).toEqual(["as-body", "as-hidden", "as-line", "checked", "judged-idle", "judged-wrong", "seen-in-trash", "written"]);
+    const add = (title: string) => kb(store, ["add", "--json"], { stdin: JSON.stringify({ title, kind: "gotcha", body: "x", scope: "global" }) }).json.id;
+    expect([add("Judged wrong"), add("As line"), add("Checked"), add("Never seen")]).toEqual(["judged-wrong-2", "as-line-2", "checked-2", "never-seen"]);
+  });
+
   test("last activity is the newest over the roll-ups of all machines, this log and the counters of an older kb", () => {
     const store = tempStore();
     logAt(store, "2026-03-05T00:00:00Z", { ev: "show", note: "here-newer", why: "task" });

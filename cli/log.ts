@@ -558,7 +558,6 @@ export function rollUp(store: Store, now: Date = new Date()): boolean {
     } catch {
       // no mark yet
     }
-    writeAtomic(mark, `${day}\n`);
 
     let changed = false;
     const machine = store.machine();
@@ -578,10 +577,18 @@ export function rollUp(store: Store, now: Date = new Date()): boolean {
         changed = true;
       }
     }
+    // The day is done only now. A roll-up that failed above left no mark, so the next write tries
+    // again, and no month is removed before its last activity is in the roll-up.
+    writeAtomic(mark, `${day}\n`);
 
-    // The roll-up is written first, so the last activity in a month that goes now is kept.
+    // The roll-up is written first, so the last activity in a month that goes now is kept. A file
+    // that cannot be removed waits for the next day: the roll-up of this day still counts.
     const oldest = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - LOG_MONTHS, 1)).toISOString().slice(0, 7);
-    for (const name of logFiles(store)) if (name.slice(0, 7) < oldest) rmSync(join(logDir(store), name), { force: true });
+    try {
+      for (const name of logFiles(store)) if (name.slice(0, 7) < oldest) rmSync(join(logDir(store), name), { force: true });
+    } catch {
+      // the next day removes it
+    }
     return changed;
   } catch {
     return false;
@@ -612,12 +619,24 @@ export function lastActivity(store: Store): Map<string, string> {
 }
 
 /**
- * The ids that have a history on any machine: activity or a verdict in a roll-up, activity in the
- * log of this machine, or counters of an older kb. `kb add` gives none of them to a new note, so
- * a new note never takes the history of a deleted one.
+ * The ids that have a history on any machine: an event of any kind in the log of this machine,
+ * activity or a verdict in a roll-up, or counters of an older kb. A verdict "wrong", a check and a
+ * session start are a history too, and none of them is in the roll-up of this machine before the
+ * next day. `kb add` gives none of these ids to a new note, so a new note never takes the history
+ * of a deleted one.
  */
 export function idsWithHistory(store: Store): Set<string> {
   const ids = new Set<string>([...store.usage().keys(), ...lastActivity(store).keys()]);
   for (const { notes } of rollUps(store)) for (const id of notes.keys()) ids.add(id);
+  try {
+    for (const event of scanLog(store, "") as Raw[]) {
+      const note = text(event.note);
+      if (note) ids.add(note);
+      // A session start names its notes by the form the session got.
+      for (const form of ["bodies", "index", "hidden", "briefs"]) for (const id of texts(event[form])) ids.add(id);
+    }
+  } catch {
+    // a log that cannot be read leaves the ids that the roll-ups name
+  }
   return ids;
 }

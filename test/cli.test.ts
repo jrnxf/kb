@@ -499,9 +499,9 @@ describe("kb trash, delete, list", () => {
     otherMachine(store, "machine-b", { elsewhere: { last: "2026-01-01T00:00:00Z" }, "judged-elsewhere": { wrong: "2026-01-01T00:00:00Z" } });
     expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Elsewhere", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("elsewhere-2");
     expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Judged elsewhere", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("judged-elsewhere-2");
-    // An id with no history is free again.
+    // The delete is an event in the log of this machine, so the id of a deleted note stays taken here.
     expect(kb(store, ["delete", "keep"]).code).toBe(0);
-    expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Keep", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("keep");
+    expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Keep", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("keep-2");
   });
 
   test("trash --scope moves a whole project in one commit, and restore --scope brings back only that move", () => {
