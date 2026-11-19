@@ -160,7 +160,9 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
       if (paired.has(pair)) continue;
       paired.add(pair);
       const other = others.find((n) => n.id === close.id)!;
-      const [older, newer] = other.scope !== note.scope || other.created <= note.created ? [other, note] : [note, other];
+      // Two notes of one time go by id, so the answer does not depend on the order of the store.
+      const otherFirst = other.scope !== note.scope || other.created < note.created || (other.created === note.created && other.id < note.id);
+      const [older, newer] = otherFirst ? [other, note] : [note, other];
       add(newer, "duplicate", `close to ${older.id}: both have ${close.shared.join(", ")}`);
     }
   }

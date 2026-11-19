@@ -250,6 +250,12 @@ describe("kb stale", () => {
       expect(found.every((c) => c.reason === "duplicate")).toBe(true);
       expect(found.map((c) => `${c.id}>${c.detail.split(":")[0]!.replace("close to ", "")}`).sort()).toEqual(["b>a", "c>a", "c>b"]);
     });
+
+    test("two notes of the same time go by id", () => {
+      const { repo, store } = fixture();
+      for (const [id, text] of [["zulu", first], ["alpha", second]] as const) putNote(store, { id, scope: SCOPE, ...text, last_verified: FRESH });
+      expect(findStale(store, repo, NOW).candidates.map((c) => `${c.id}>${c.detail.split(":")[0]}`)).toEqual(["zulu>close to alpha"]);
+    });
   });
 
   test("it checks one scope: the repo's notes in a repo, the global notes outside any repo", () => {
