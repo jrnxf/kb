@@ -24,8 +24,10 @@ kb budget --json
   - `anchor-changed` - an anchored file changed since the note was verified.
   - `anchor-missing` - an anchored path is gone, or the symbol is no longer in the file.
   - `commit-unknown` - the verified commit is not in the history (a rebase or a shallow clone).
-  - `expired` - the note had no activity on this machine and nobody checked it for `expireDays` (90). Activity is a `kb show` for a task, a Read that named the note, or a verdict `helped`. Propose trash, also for a gotcha or a convention, but not for open work that is not done. If the note still holds, the user picks keep on the card, and the keep records a check that resets the clock.
+  - `judged-wrong` - a session gave the note the verdict `wrong` after its last check. Read the note and the code. Then propose a rewrite, or trash when the fact is gone. When a session corrected the note already and it is true now, propose keep with `checked`.
+  - `expired` - the note had no activity on any machine and nobody checked it for `expireDays` (90). Activity is a `kb show` for a task, a Read that named the note, or a verdict `helped`. Propose trash, also for a gotcha or a convention, but not for open work that is not done. If the note still holds, the user picks keep on the card, and the keep records a check that resets the clock.
   - `decayed` - the note has not expired, but nobody verified it within the decay window.
+  - `not-needed` - at least 3 sessions got the note and judged it `not-needed` after its last check, and none judged it `helped`. The note loads where it has no bearing. Propose a rewrite with a narrower title, so a session knows from the index line when it applies. For narrower `anchors`, propose keep and name the anchors in `why`: a card cannot change anchors, so the user sends the note back and you set them in step 4. If the note loads in the right place, propose keep.
   - `duplicate` - the title is close to the title of another note.
 - `kb budget` shows what a session of this scope loads. `notes` gives the size of each note and what a session gets of it, in rank order. In a repo, `index.capped` counts the global notes that stay out of its sessions on purpose, the lowest ranked. That is not a reason to change them here.
   - Bodies that did not fit (`context.dropped`) are normal: each of these notes still reaches the session as an index line. This alone is no reason to take a note out. The notes with the most `chars` are the bodies to shorten, so that more notes load whole.
@@ -51,7 +53,7 @@ Rules:
 
 - Check a note against the code or a source before you say that it is still true. When you checked it, set `"checked": true` on the keep, and kb records the check. If you cannot tell, propose `keep` without `checked` and say what is unknown.
 - When `over` is true, make room with merge and trash. Shortening a `trim` note frees nothing, because it ranks low. Propose trash for a `trim` note only when it is obsolete or adds nothing. Never trash `open-work` that is not done.
-- Never propose trash for a `gotcha` or a `convention` only because it ranks low or no session opened it: a rule that works leaves no trace in the log. Propose `keep`, and the user decides. The one exception is an `expired` note: then nobody checked it either, so propose trash.
+- Never propose trash for a `gotcha` or a `convention` only because it ranks low or no session opened it: a rule that works leaves no trace in the log. Propose `keep`, and the user decides. The one exception is an `expired` note: then nobody checked it either, so propose trash. A `not-needed` reason alone is no reason to trash a rule.
 - For a rewrite, a merge or a shorten, write the new text now, so the user sees it on the card.
 
 ### Move rules to the instruction file
@@ -116,7 +118,7 @@ KB_AUDIT
 
 When the user says it is applied, run `kb audit status`. It lists what the page did, and the notes the user sent back with what is wrong with each.
 
-For each note sent back, read it and the code again, and rewrite it with `kb add --json`:
+For each note sent back, read it and the code again, and rewrite it with `kb add --json`. Add `"anchors"` when the request is for narrower anchors:
 
 ```bash
 kb add --json <<'KB_NOTE'

@@ -113,11 +113,13 @@ No such list means there is nothing to judge: go to step 6.
 
 Give a verdict only for a note you can judge:
 
-- `kb verdict helped <id>...` - the note changed what you did.
-- `kb verdict wrong <id>...` - the note was false or misleading.
-- `kb verdict not-needed <id>...` - a hook loaded the note (`body` or `fired`), and it had no bearing on the work.
+- `kb verdict helped <id>... --session ${CLAUDE_SESSION_ID}` - the note changed what you did.
+- `kb verdict wrong <id>... --session ${CLAUDE_SESSION_ID}` - the note was false or misleading.
+- `kb verdict not-needed <id>... --session ${CLAUDE_SESSION_ID}` - a hook loaded the note (`body` or `fired`), and it had no bearing on the work.
 
+Pass `--session ${CLAUDE_SESSION_ID}` on each verdict, so the verdict belongs to the session that the list above read.
 Skip a note when you cannot tell. An index line gets no verdict.
+A verdict `wrong` sends the note to the next audit, also when you corrected the note in step 3.
 
 ## 6. Record the checkpoint
 

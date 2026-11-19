@@ -34,7 +34,7 @@ highest.
 - **Context stays small.** Budgets in `kb.config.json`: `indexLines` (60), `globalIndexLines`
   (20) and `contextChars` (8000, clamped under the 10,000 character hook cap, with the save rule
   on top). The repo's own notes rank first, by kind (open-work, gotcha, convention, decision,
-  how-to), then last activity on this machine, then last verified. Global notes come after them:
+  how-to), then last activity on any machine, then last verified. Global notes come after them:
   open work first, then by kind, then last verified. No count of reads is in the order. In a repo,
   global notes take at most `globalIndexLines` places, so they never crowd out the repo's notes. Whole bodies drop from the bottom, and only a note without a body
   takes an index line. The store can grow for years and a session loads the same amount.
@@ -44,7 +44,15 @@ highest.
   each checkpoint. A read writes nothing to the store, so it makes no commit and no sync. A check
   (an audit, a look before an update) passes `--check`. At the checkpoint the agent gives a
   verdict on the notes it got: `kb verdict helped`, `not-needed` or `wrong`. `kb log` sums the
-  log per note, for the next audit. The log never leaves the machine.
+  log per note, for the next audit. The log never leaves the machine, and it keeps 12 months: a
+  monthly file older than that is removed.
+- **A roll-up of the log syncs.** Each machine writes one small file, `activity/<machine>.json`:
+  per note, the last activity and the times of the newest verdicts. It writes the file at most
+  once per day, and only when something changed. A read never writes it. The file goes into the
+  next commit that the store makes: a write of a note, or a sync. Each machine writes only its own
+  file, so two machines never conflict. So a note that one machine opens every week does not
+  expire on another, and a fresh clone knows what is active. The last activity stays in the
+  roll-up after its month left the log.
 - **A rule goes to an instruction file when the user states it.** The agent starts `/kb:note` on
   its own when the user says "always", "never", "from now on" or corrects it. `kb instructions`
   names the files. A global rule goes into the global file, which `globalInstructions` in
@@ -66,8 +74,12 @@ highest.
   anchored file changed since the note was verified, an anchor is gone, the verified commit left
   the history, the note had no activity and nobody checked it for `expireDays` (90), nobody
   verified it for `decayDays` (180), or two titles are close. Activity is a `kb show` for a task,
-  a Read that named the note, or a verdict `helped`, on this machine. An expired note goes to the audit
-  as trash, and you decide: kb never deletes a note on its own. A session start also checks the
+  a Read that named the note, or a verdict `helped`, on any machine. An expired note goes to the audit
+  as trash, and you decide: kb never deletes a note on its own. Two reasons come from the verdicts
+  of all machines. `judged-wrong`: a session gave the note the verdict `wrong` after its last
+  check. `not-needed`: at least 3 sessions judged it `not-needed` after its last check, and none
+  judged it `helped`. A new verification clears both: `kb verify`, or an update of the title, the
+  body or the anchors. A session start also checks the
   anchors of the repo's notes on disk, and tells the agent which notes name a file or a symbol that
   is gone.
   `kb stale` and `/kb:audit` cover one scope: the repo's notes in a repo, the global notes outside
@@ -97,15 +109,17 @@ highest.
   keep, and the next start says once that no checkpoint ran.
 - **Sync.** If the store has a git remote, each write starts a background pull and push, and
   each session start does the same at most once per 5 minutes. The event log stays on its
-  machine. The `usage/` files of an older kb stay in the store as history: kb reads the last use
-  in them, and writes them no more.
+  machine, and its roll-up in `activity/` syncs. The `usage/` files of an older kb stay in the
+  store as history: kb reads the last use in them, and writes them no more. `kb add` never gives a
+  new note an id that has a history on any machine.
 
 ```
 ~/.kb/
   notes/<scope>/<id>.md     trash/<scope>/<id>.md
   kb.config.json            usage/<machine>.json    # counters of an older kb, read only
+  activity/<machine>.json                       # the roll-up of each machine's log, synced
   INDEX.md  local.json  .state/                 # generated or per-machine, not committed
-  .state/log/<YYYY-MM>.jsonl                    # the event log of this machine
+  .state/log/<YYYY-MM>.jsonl                    # the event log of this machine, 12 months
 ```
 
 ## Commands
@@ -160,7 +174,10 @@ user states to an instruction file, and the agent starts it on its own.
 `kb log` prints one row per note: how often a session got it as a body, as an index line or not at
 all, how often an agent opened it (for a task, and as a check), how often a Read named it, and its
 verdicts. `--since <days>` takes the last days only. `--session <id>` prints the events of one
-session in time order, and the notes that session got and has not judged yet.
+session in time order, and the notes that session got and has not judged yet. The rows count the
+events of this machine. `last_activity` is the newest over all machines. A session that gives a
+verdict twice judged the note once: its last verdict counts. A verdict with no session counts once
+per note, verdict and day.
 
 Every command accepts `--json`. The CLI knows nothing about Claude Code: only `hooks/` and `skills/` do.
 There is one exception. A command names its session in the log with `--session <id>`, or else
