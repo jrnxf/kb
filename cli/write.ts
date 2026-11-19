@@ -25,9 +25,13 @@ export function afterWrite(store: Store, message: string): void {
   if (store.commit(message)) kickSync(store);
 }
 
-/** Record a write of each note in the event log. The session comes from the command that runs. */
-export function logWrites(store: Store, op: WriteOp, ids: string[], from?: string): void {
-  logEvent(store, ids.map((note) => ({ ev: "write" as const, note, op, ...(from ? { from } : {}) })));
+/**
+ * Record a write of each note in the event log. The session comes from the command that runs.
+ * `neighbors` are the close notes that `kb add` showed with the write. `from` is the unsaved
+ * session that a recovery read.
+ */
+export function logWrites(store: Store, op: WriteOp, ids: string[], neighbors: string[] = [], from?: string): void {
+  logEvent(store, ids.map((note) => ({ ev: "write" as const, note, op, ...(from ? { from } : {}), ...(neighbors.length > 0 ? { neighbors } : {}) })));
 }
 
 /** Ids that contain the given text. For a caller who remembers a part of an id. */
@@ -84,7 +88,7 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
   const note = validateNote(merged);
   const path = store.writeNote(note);
   afterWrite(store, `kb: update ${note.id}`);
-  logWrites(store, "update", [note.id], from);
+  logWrites(store, "update", [note.id], [], from);
   return { id: note.id, path };
 }
 

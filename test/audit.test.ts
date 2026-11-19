@@ -3,7 +3,7 @@ import { type Browser, chromium } from "playwright";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyAudit, auditData, openAudits, proposeAudit, readAudit } from "../cli/audit.ts";
-import { AGENT_ENV, auditPrompt, runState, startRun, waitRun } from "../cli/audit-run.ts";
+import { AGENT_ENV, AGENT_TOOLS, auditPrompt, runState, startRun, waitRun } from "../cli/audit-run.ts";
 import { buildContext, contextFor } from "../cli/context.ts";
 import { auditableScopes, rememberRepo, repoRoot } from "../cli/repos.ts";
 import type { RepoInfo } from "../cli/scope.ts";
@@ -69,7 +69,7 @@ describe("kb audit propose", () => {
     expect(readAudit(store, SCOPE)).toBeUndefined();
   });
 
-  test("the command reads stdin, prints the page link, and kb audit shows what is open", () => {
+  test("the command reads stdin or the file of --file, prints the page link, and kb audit shows what is open", () => {
     const store = setup();
     const dir = tempRepo({ remote: "https://example.com/team/app.git" });
     const env = { ...process.env, KB_HOME: store.home };
@@ -78,6 +78,10 @@ describe("kb audit propose", () => {
     expect(proposed.stderr.toString()).toBe("");
     expect(JSON.parse(proposed.stdout.toString())).toMatchObject({ scope: SCOPE, cards: 1, url: expect.stringContaining(`#audit=${encodeURIComponent(SCOPE)}`) });
     expect(run(["audit"]).stdout.toString()).toContain(`#audit=${encodeURIComponent(SCOPE)}`);
+    // A shell can refuse a heredoc with a brace and a quote. A file always passes.
+    writeFileSync(join(dir, "proposal.json"), JSON.stringify({ items: [ITEMS[0], ITEMS[3]] }));
+    expect(JSON.parse(run(["audit", "propose", "--json", "--file", "proposal.json"]).stdout.toString())).toMatchObject({ scope: SCOPE, cards: 2 });
+    expect(run(["audit", "propose", "--file", "none.json"]).stderr.toString().trim()).toBe("cannot read --file none.json: no such file");
   });
 });
 
@@ -486,6 +490,16 @@ describe("kb audit starts an agent", () => {
     expect(prompt).not.toContain("disable-model-invocation");
     expect(prompt).toContain("kb audit status");
     expect(prompt).toContain("kb audit propose");
+  });
+
+  // A real headless run saved its cards this way. A file anywhere else needs the Write tool, which
+  // the agent does not get, and a heredoc with the JSON is refused.
+  test("the headless agent writes its proposal to the scratchpad directory and passes --file, so it needs no Write permission", () => {
+    expect(AGENT_TOOLS).toEqual(["Bash(kb *)", "Read", "Grep", "Glob"]);
+    const prompt = auditPrompt();
+    expect(prompt).toContain("to a file in your scratchpad directory with the Write tool");
+    expect(prompt).toContain("kb audit propose --file /full/path/of/the/file.json");
+    expect(prompt).not.toMatch(/kb audit propose <<|\| kb audit propose/);
   });
 });
 

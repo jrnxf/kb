@@ -628,7 +628,8 @@ describe("kb-transcript", () => {
     const ended = "2020-01-01T00:00:00.500Z";
     lost(store, "s1", dir, ended);
     lost(store, "s2", dir, ended);
-    const add = (flags: string[], note: object) => kb(store, ["add", "--json", ...flags], { stdin: JSON.stringify({ kind: "gotcha", body: "x", scope: "global", ...note }), cwd: dir });
+    // The titles here share most of their words. "new" says that each note is its own fact.
+    const add = (flags: string[], note: object) => kb(store, ["add", "--json", ...flags], { stdin: JSON.stringify({ kind: "gotcha", body: "x", scope: "global", new: true, ...note }), cwd: dir });
     const from = (session: string, note: object) => add(["--as-of", ended, "--recovered-from", session], note);
     const retries = from("s1", { title: "The provider retries a webhook for 3 days" }).json.id;
     const retired = from("s1", { title: "The old queue drops a job" }).json.id;

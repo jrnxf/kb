@@ -4,7 +4,7 @@
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { NOT_NEEDED_SESSIONS, judgments, lastActivity } from "./log.ts";
-import { normalizeTitle } from "./note.ts";
+import { neighborCheck } from "./neighbors.ts";
 import { resolveRepo } from "./scope.ts";
 import { git, type Store, type StoredNote, writeAtomic } from "./store.ts";
 
@@ -25,20 +25,6 @@ export interface StaleResult {
   /** Number of distinct notes with a candidate. */
   notes: number;
   candidates: StaleCandidate[];
-}
-
-const STOP_WORDS = new Set(["a", "an", "the", "is", "are", "be", "to", "of", "in", "on", "at", "for", "and", "or", "with", "by", "it", "its", "this", "that", "not", "no", "do", "does", "use", "uses", "when", "from", "as"]);
-const DUPLICATE_THRESHOLD = 0.6;
-
-function titleWords(title: string): Set<string> {
-  return new Set(normalizeTitle(title).split("-").filter((word) => word && !STOP_WORDS.has(word)));
-}
-
-function similarity(a: Set<string>, b: Set<string>): number {
-  let shared = 0;
-  for (const word of a) if (b.has(word)) shared++;
-  if (shared < 2) return 0;
-  return shared / (a.size + b.size - shared);
 }
 
 /** An anchor's path, and its symbol after "#" or "". */
@@ -122,7 +108,9 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
 
   // Promoted notes live in an instruction file now, so that file owns them. Like the audit, the
   // check covers one scope: the repo's notes in a repo, the global notes outside any repo.
-  const notes = store.notes().filter((n) => !n.promoted_to && n.scope === (repo.scope ?? "global"));
+  const scope = repo.scope ?? "global";
+  const all = store.notes();
+  const notes = all.filter((n) => !n.promoted_to && n.scope === scope);
   const add = (note: StoredNote, reason: StaleReason, detail: string) => result.candidates.push({ id: note.id, title: note.title, scope: note.scope, reason, detail });
 
   // One git call per distinct commit, not one per anchor.
@@ -163,13 +151,24 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
     if (notNeeded >= NOT_NEEDED_SESSIONS && !since(verdicts.helped)) add(note, "not-needed", `at least ${notNeeded} sessions judged it not needed since the last check, and none said it helped`);
   }
 
-  // Possible duplicates: titles that share most of their words. The newer note is the candidate.
-  const words = notes.map((note) => titleWords(note.title));
-  for (let i = 0; i < notes.length; i++) {
-    for (let j = i + 1; j < notes.length; j++) {
-      if (similarity(words[i]!, words[j]!) < DUPLICATE_THRESHOLD) continue;
-      const [older, newer] = notes[i]!.created <= notes[j]!.created ? [notes[i]!, notes[j]!] : [notes[j]!, notes[i]!];
-      add(newer, "duplicate", `the title is close to ${older.id}`);
+  // Possible duplicates, by the measure of `kb add`: two notes of the scope that are close in
+  // their words. The newer one is the candidate. A pair has one scope, because a merge has one:
+  // `kb add` catches a repo note that is close to a global note, when the note is written. In a
+  // repo the global notes still give word weights, as they do for `kb add`. The check is built
+  // once, and each note of the scope asks it.
+  const near = neighborCheck(all.filter((n) => n.scope === scope || n.scope === "global"), scope);
+  const byId = new Map(notes.map((n) => [n.id, n]));
+  const paired = new Set<string>();
+  for (const note of notes) {
+    for (const close of near(note)) {
+      const other = byId.get(close.id);
+      const pair = [note.id, close.id].sort().join("\n");
+      if (!other || paired.has(pair)) continue;
+      paired.add(pair);
+      // Two notes of one time go by id, so the answer does not depend on the order of the store.
+      const otherFirst = other.created < note.created || (other.created === note.created && other.id < note.id);
+      const [older, newer] = otherFirst ? [other, note] : [note, other];
+      add(newer, "duplicate", `close to ${older.id}: both have ${close.shared.join(", ")}`);
     }
   }
 
