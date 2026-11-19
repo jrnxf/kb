@@ -2,7 +2,7 @@
 // which of them are worth a recovery. Kept out of session-start.ts, so that file only gathers the notices.
 
 import { statSync } from "node:fs";
-import { type SessionSize, type UnsavedSession, allUnsaved, endedHere, firstToday, forgetUnsaved, recordSize } from "../cli/session.ts";
+import { type SessionSize, type UnsavedSession, allUnsaved, claimedToday, endedHere, firstToday, forgetUnsaved, recordWorth } from "../cli/session.ts";
 import type { Store } from "../cli/store.ts";
 import { worthRecovering } from "./transcript.ts";
 
@@ -29,23 +29,32 @@ export const ELSEWHERE_FLOOR = 5;
 /** The name under which the line about other directories is claimed, once per day on this machine. */
 const ELSEWHERE = "kb: sessions in other directories";
 
-/** If a session is worth recovering, or null when this start cannot say. */
+/**
+ * If a session is worth recovering, or null when this start cannot say. The first time a session
+ * is found worth it, the log gets its `unsaved` line.
+ */
 function worthIt(store: Store, entry: UnsavedSession, inTime: () => boolean): boolean | null {
-  // Measured once, then kept in the mark.
-  if (entry.size) return worth(entry.size);
+  // Measured once, then kept in the mark. A mark that an older kb measured has no line in the log yet.
+  if (entry.size) {
+    if (worth(entry.size) && !entry.logged) recordWorth(store, entry.session);
+    return worth(entry.size);
+  }
   let bytes: number;
   try {
     bytes = statSync(entry.transcript).size;
   } catch {
     return null;
   }
-  if (bytes > PARSE_LIMIT) return true;
+  if (bytes > PARSE_LIMIT) {
+    if (!entry.logged) recordWorth(store, entry.session);
+    return true;
+  }
   // Out of time: the mark stays as it is, and a later start measures it.
   if (!inTime()) return null;
   const size = worthRecovering(entry.transcript);
   // The transcript is there and this read failed. Keep the mark: a later start measures it.
   if (!size) return null;
-  if (worth(size)) recordSize(store, entry.session, size);
+  if (worth(size)) recordWorth(store, entry.session, size);
   return worth(size);
 }
 
@@ -60,12 +69,24 @@ export function settle(store: Store, entries: UnsavedSession[], inTime: () => bo
       const known = worthIt(store, entry, inTime);
       if (known) result.worth++;
       // A short session is forgotten: it has nothing to save.
-      else if (known === false && forgetUnsaved(store, entry.session)) result.forgotten++;
+      else if (known === false && forgetUnsaved(store, entry.session, "short")) result.forgotten++;
     } catch {
       // one mark that cannot be handled does not stop the others
     }
   }
   return result;
+}
+
+/** What a session start knows of itself. The clock and the day are there for the tests. */
+export interface Start {
+  /** The id of the session that starts. It is live, so it is never one of the sessions to recover. */
+  session?: string;
+  /** A person reads the first reply. False for a headless run, where a sentence for the user reaches nobody. */
+  attended?: boolean;
+  /** A new session, not a /clear in a session that runs. Only a new session gets the line about other directories. */
+  startup?: boolean;
+  now?: () => number;
+  today?: Date;
 }
 
 /**
@@ -76,32 +97,40 @@ export function settle(store: Store, entries: UnsavedSession[], inTime: () => bo
  * the agent to tell the user once per day and checkout: a script or a second window that starts
  * many sessions must not get the same sentence in each.
  *
- * The second comes at most once per day on this machine, only when `attended` says that a person
- * reads the first reply, and only from `ELSEWHERE_FLOOR` sessions on.
+ * The second comes at most once per day on this machine, only at the start of a new session, and
+ * only from `ELSEWHERE_FLOOR` sessions on.
+ *
+ * A line asks the agent to speak only when `attended` says that a person reads the first reply.
+ * A start with nobody there gets the short line for the agent, and takes no claim of the day, so
+ * the next start with a person still tells them.
  *
  * Never throws, and never takes much longer than `BUDGET_MS`. The sessions here are measured
- * first, and the others get the time that is left. The clock and the day are arguments for the tests.
+ * first, and the others get the time that is left. The sessions of other directories are measured
+ * only when their line can come: at a start that is not attended, or later on a day that has its
+ * line, no transcript of another directory is read.
  */
-export function unsavedNotice(store: Store, cwd: string, root: string | null, now: () => number = () => performance.now(), today = new Date(), attended = false): string | null {
+export function unsavedNotice(store: Store, cwd: string, root: string | null, { session, attended = true, startup = attended, now = () => performance.now(), today = new Date() }: Start = {}): string | null {
   try {
     const start = now();
     const inTime = () => now() - start < BUDGET_MS;
-    const all = allUnsaved(store);
+    const all = allUnsaved(store).filter((entry) => entry.session !== session);
     const here = endedHere(cwd, root);
     const lost = settle(store, all.filter(here), inTime).worth;
-    const elsewhere = settle(store, all.filter((entry) => !here(entry)), inTime).worth;
     const lines: string[] = [];
     if (lost > 0) {
       const one = lost === 1;
       const what = one ? "An earlier session here" : `${lost} earlier sessions here`;
       lines.push(
-        firstToday(store, root ?? cwd, today)
+        attended && firstToday(store, root ?? cwd, today)
           ? `${what} ended with no /kb:checkpoint. Tell the user in one line, in your first reply, that /kb:recover saves ${one ? "its" : "their"} knowledge or forgets ${one ? "it" : "them"}.`
           : `${what} ${one ? "has" : "have"} unsaved knowledge. The user can run /kb:recover.`,
       );
     }
-    if (attended && elsewhere >= ELSEWHERE_FLOOR && firstToday(store, ELSEWHERE, today)) {
-      lines.push(`${elsewhere} sessions in other directories ended with no /kb:checkpoint. Tell the user in one line, in your first reply, that /kb:recover all saves their knowledge.`);
+    if (attended && startup && !claimedToday(store, ELSEWHERE, today)) {
+      const elsewhere = settle(store, all.filter((entry) => !here(entry)), inTime).worth;
+      if (elsewhere >= ELSEWHERE_FLOOR && firstToday(store, ELSEWHERE, today)) {
+        lines.push(`${elsewhere} sessions in other directories ended with no /kb:checkpoint. Tell the user in one line, in your first reply, that /kb:recover all saves their knowledge.`);
+      }
     }
     return lines.length > 0 ? lines.join("\n") : null;
   } catch {

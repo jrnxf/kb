@@ -2,8 +2,9 @@
 // Per-machine state in .state/, never committed. One small file per session, so sessions never race.
 
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, fstatSync, ftruncateSync, futimesSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, ftruncateSync, futimesSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
+import { type ForgetWhy, type LogEvent, logEvent } from "./log.ts";
 import { type Store, writeAtomic } from "./store.ts";
 
 const KEEP_MS = 7 * 86_400_000;
@@ -31,8 +32,15 @@ export interface UnsavedSession {
   scope?: string | null;
   /** The root of the checkout around `cwd` at that time, or null outside any repo. */
   root?: string | null;
+  /**
+   * The main checkout of that repo. For a session in a linked worktree it is another folder than
+   * `root`, and it is still there when the worktree of a finished run is deleted.
+   */
+  main?: string | null;
   /** Measured once by a later session start. */
   size?: SessionSize;
+  /** The log has the `unsaved` line of this session: a measure found it worth a recovery. */
+  logged?: true;
   /** The notes that a recovery of this session wrote: `kb add --recovered-from`. */
   notes?: string[];
 }
@@ -54,10 +62,23 @@ export function writeRecoverFile(store: Store, session: string, text: string): s
   return path;
 }
 
+const markPath = (store: Store, session: string) => store.statePath(`unsaved-${safe(session)}.json`);
+/** The mark of a session that ended and runs again. It is no unsaved session while it runs. */
+const livePath = (store: Store, session: string) => store.statePath(`live-${safe(session)}.json`);
+
+function readMark(path: string): UnsavedSession | null {
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as UnsavedSession;
+  } catch {
+    return null;
+  }
+}
+
 export function markSaved(store: Store, session: string): void {
   store.ensure(); // keeps .state/ out of git in a store made by an older version
   writeAtomic(store.statePath(`saved-${safe(session)}`), `${new Date().toISOString()}\n`);
-  rmSync(store.statePath(`unsaved-${safe(session)}.json`), { force: true });
+  rmSync(markPath(store, session), { force: true });
+  rmSync(livePath(store, session), { force: true });
   rmSync(recoverPath(store, session), { force: true });
 }
 
@@ -68,21 +89,41 @@ export function isSaved(store: Store, session: string): boolean {
 /**
  * Record a session that ended with no checkpoint. A session can end twice: it ends, the user
  * resumes it, and it ends again. The new mark keeps the notes that a recovery wrote in between,
- * and loses the size, which is measured again.
+ * and the word that the log has its `unsaved` line. It loses the size, which is measured again.
  */
 export function recordUnsaved(store: Store, entry: UnsavedSession): void {
   store.ensure();
-  const notes = entry.notes ?? unsavedSession(store, entry.session)?.notes;
-  writeAtomic(store.statePath(`unsaved-${safe(entry.session)}.json`), JSON.stringify(notes ? { ...entry, notes } : entry));
+  const before = unsavedSession(store, entry.session) ?? readMark(livePath(store, entry.session));
+  const notes = entry.notes ?? before?.notes;
+  const logged = entry.logged ?? before?.logged;
+  writeAtomic(markPath(store, entry.session), JSON.stringify({ ...entry, ...(notes ? { notes } : {}), ...(logged ? { logged } : {}) }));
+  rmSync(livePath(store, entry.session), { force: true });
 }
 
 /** The mark of one unsaved session, or null. */
 export function unsavedSession(store: Store, session: string): UnsavedSession | null {
+  return readMark(markPath(store, session));
+}
+
+/**
+ * A session that ended with no checkpoint runs again: the user resumed it. Its mark is set aside,
+ * so no other session recovers it while it works. Its next end makes a new mark from it. Returns
+ * true when there was a mark. Never throws.
+ */
+export function reopenSession(store: Store, session: string): boolean {
   try {
-    return JSON.parse(readFileSync(store.statePath(`unsaved-${safe(session)}.json`), "utf8")) as UnsavedSession;
+    // What a recovery read is older than what the session says from now on.
+    rmSync(recoverPath(store, session), { force: true });
+    renameSync(markPath(store, session), livePath(store, session));
+    return true;
   } catch {
-    return null;
+    return false; // no mark, or the store is read-only
   }
+}
+
+/** True for a session that ended with no checkpoint and runs again now. */
+export function isLive(store: Store, session: string): boolean {
+  return existsSync(livePath(store, session));
 }
 
 /**
@@ -95,7 +136,7 @@ function changeMark(store: Store, session: string, change: (mark: UnsavedSession
   if (isSaved(store, session)) return false;
   let file: number;
   try {
-    file = openSync(store.statePath(`unsaved-${safe(session)}.json`), "r+");
+    file = openSync(markPath(store, session), "r+");
   } catch {
     return false; // gone, or the store is read-only
   }
@@ -116,11 +157,24 @@ function changeMark(store: Store, session: string, change: (mark: UnsavedSession
   }
 }
 
-/** Keep the measured size of an unsaved session in its mark, so no later start reads the transcript again. */
-export function recordSize(store: Store, session: string, size: SessionSize): boolean {
-  return changeMark(store, session, (mark) => {
-    mark.size = size;
+/** The scope of a mark for the log. A mark with no scope names none. */
+const scopeOf = (mark: UnsavedSession) => (mark.scope !== undefined ? { scope: mark.scope ?? "global" } : {});
+
+/**
+ * Record in its mark that a measure found the session worth a recovery, with the size when it was
+ * measured, so no later start reads the transcript again. Says if the mark was written.
+ * The log gets one `unsaved` line per session: the first time only, and only when the mark took
+ * the word, so a store that cannot be written does not log the session at every start.
+ */
+export function recordWorth(store: Store, session: string, size?: SessionSize): boolean {
+  let line: LogEvent | null = null;
+  const written = changeMark(store, session, (mark) => {
+    if (size) mark.size = size;
+    if (!mark.logged) line = { ev: "unsaved", session, ...scopeOf(mark), ...(mark.reason ? { reason: mark.reason } : {}), ...(size ? { prompts: size.prompts, failed: size.failed ?? 0 } : {}) };
+    mark.logged = true;
   });
+  if (written && line) logEvent(store, line);
+  return written;
 }
 
 /** Record that a recovery of this session wrote a note, so a second recovery does not add it again. */
@@ -130,20 +184,30 @@ export function recordRecovered(store: Store, session: string, id: string): bool
   });
 }
 
+/** The file that claims one day (local time) for a directory or a fixed name, on this machine. */
+function claimPath(store: Store, dir: string, now: Date): string {
+  const two = (n: number) => String(n).padStart(2, "0");
+  const day = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
+  const key = createHash("sha256").update(real(dir)).digest("hex").slice(0, 16);
+  return store.statePath(`told-${key}-${day}`);
+}
+
 /**
  * True once per day (local time) for a directory or a fixed name, on this machine. The claim is a file made with
  * "wx", so of two sessions that start together only one gets it. False when it cannot be recorded.
  */
 export function firstToday(store: Store, dir: string, now = new Date()): boolean {
-  const two = (n: number) => String(n).padStart(2, "0");
-  const day = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
-  const key = createHash("sha256").update(real(dir)).digest("hex").slice(0, 16);
   try {
-    writeFileSync(store.statePath(`told-${key}-${day}`), "", { flag: "wx" });
+    writeFileSync(claimPath(store, dir, now), "", { flag: "wx" });
     return true;
   } catch {
     return false;
   }
+}
+
+/** True when `firstToday` gave the day away already. It takes nothing, so a caller can look before it does work. */
+export function claimedToday(store: Store, dir: string, now = new Date()): boolean {
+  return existsSync(claimPath(store, dir, now));
 }
 
 function real(path: string): string {
@@ -165,26 +229,38 @@ function gone(path: string): boolean {
   }
 }
 
+/** True for a file that is older than the marks live, and for one that is gone. */
+function old(path: string): boolean {
+  try {
+    return Date.now() - statSync(path).mtimeMs > KEEP_MS;
+  } catch {
+    return true;
+  }
+}
+
 /** Remove a file that is older than the marks live, and say if it is gone. */
 function dropOld(path: string): boolean {
-  try {
-    if (Date.now() - statSync(path).mtimeMs <= KEEP_MS) return false;
-    rmSync(path, { force: true });
-  } catch {
-    // gone already
-  }
+  if (!old(path)) return false;
+  rmSync(path, { force: true });
   return true;
 }
 
 /** The files that hold state of a session or of a day, which lose their value with age. */
-const AGES = /^(unsaved|saved|told)-/;
+const AGES = /^(unsaved|live|saved|told)-/;
 
-/** Stop reporting an unsaved session: it holds nothing worth a note. */
-export function forgetUnsaved(store: Store, session: string): boolean {
+/**
+ * Drop the mark of an unsaved session, and say in the log why: it is short, the user said so, it
+ * aged out, or its transcript is gone. `by` is the session that asked. The line says if the
+ * session was worth a recovery, so an audit can count what was lost. False when there was no mark.
+ */
+export function forgetUnsaved(store: Store, session: string, why: ForgetWhy, by?: string): boolean {
   rmSync(recoverPath(store, session), { force: true });
-  const path = store.statePath(`unsaved-${safe(session)}.json`);
+  const path = markPath(store, session);
   if (!existsSync(path)) return false;
+  // A broken mark is dropped too. Its line has the session and the reason only.
+  const mark = readMark(path);
   rmSync(path, { force: true });
+  logEvent(store, { ev: "forgotten", session, ...(mark ? scopeOf(mark) : {}), why, ...(mark?.logged ? { worth: true as const } : {}), ...(by ? { by } : {}) });
   return true;
 }
 
@@ -222,15 +298,21 @@ export function allUnsaved(store: Store): UnsavedSession[] {
   for (const name of names) {
     const path = join(dir, name);
     try {
-      // Old marks have no value: the transcript is gone or nobody will ask for it.
-      if (AGES.test(name) && dropOld(path)) continue;
-      if (!name.startsWith("unsaved-")) continue;
-      const entry = JSON.parse(readFileSync(path, "utf8")) as UnsavedSession;
-      if (gone(entry.transcript)) {
-        rmSync(path, { force: true });
-        rmSync(recoverPath(store, entry.session), { force: true });
+      if (!name.startsWith("unsaved-")) {
+        if (AGES.test(name)) dropOld(path);
+        continue;
       }
-      else found.push(entry);
+      const entry = readMark(path);
+      // A broken mark names no session. It only ages out.
+      if (!entry) {
+        dropOld(path);
+        continue;
+      }
+      // An old mark has no value: nobody will ask for it. With no transcript, nothing can recover it.
+      const why = old(path) ? "aged" : gone(entry.transcript) ? "gone" : null;
+      if (!why) found.push(entry);
+      // A mark under a name that its session does not give is removed with no line.
+      else if (!forgetUnsaved(store, entry.session, why)) rmSync(path, { force: true });
     } catch {
       // a broken mark is not worth a failure
     }

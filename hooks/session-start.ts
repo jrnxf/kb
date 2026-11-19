@@ -7,7 +7,7 @@ import { forgetSeen } from "../cli/by-path.ts";
 import { SAVE_RULE, buildContext } from "../cli/context.ts";
 import { hookWho, logEvent } from "../cli/log.ts";
 import { resolveRepo } from "../cli/scope.ts";
-import { isSaved } from "../cli/session.ts";
+import { isSaved, reopenSession } from "../cli/session.ts";
 import { cachedStaleCount } from "../cli/stale.ts";
 import { Store } from "../cli/store.ts";
 import { detached, kickSync } from "../cli/sync.ts";
@@ -51,10 +51,14 @@ try {
 
   if (store.exists()) {
     const repo = resolveRepo(cwd, store);
+    const session = typeof input.session_id === "string" && !input.agent_id ? input.session_id : undefined;
+    // A session that ended with no checkpoint and starts again is live: the user resumed it. Its
+    // record goes, so no other session recovers it while it works. Its next end records it again.
+    if (session) reopenSession(store, session);
     // Sessions of this directory or checkout that ended with no checkpoint, and from 5 on those of
     // other directories. A resume or a compaction is the same session, which already had the line.
     // The step never throws and has its own time budget, so no transcript can cost the session its notes.
-    const lost = input.source === "startup" || input.source === "clear" ? unsavedNotice(store, cwd, repo.root, undefined, undefined, input.source === "startup" && attended()) : null;
+    const lost = input.source === "startup" || input.source === "clear" ? unsavedNotice(store, cwd, repo.root, { session, attended: attended(), startup: input.source === "startup" }) : null;
     if (lost) notices.push(lost);
 
     if (input.source === "compact" && typeof input.session_id === "string" && !isSaved(store, input.session_id)) {

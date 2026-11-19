@@ -1,6 +1,7 @@
 // Where each repo is checked out, so the page can start an audit for a repo with no session open.
 
 import { existsSync, readFileSync } from "node:fs";
+import { mainCheckout } from "./scope.ts";
 import { type Store, writeAtomic } from "./store.ts";
 
 const REPOS = "repos.json";
@@ -15,13 +16,20 @@ function read(store: Store): Record<string, string> {
 
 /**
  * Remember where each repo is checked out, so the page can start an audit for a repo that has no
- * session open. Every session start calls this. It writes only when the path changes.
+ * session open, and a recovery can write the notes of a session whose folder is gone. Every
+ * session start calls this. It writes only when the path changes.
+ *
+ * A start in a linked worktree remembers the main checkout of the repo, while that is on disk:
+ * the worktree of a finished run is often deleted, and the main checkout stays.
  */
 export function rememberRepo(store: Store, scope: string, root: string): void {
   const repos = read(store);
   if (repos[scope] === root) return;
+  const main = mainCheckout(root);
+  const place = main !== root && existsSync(main) ? main : root;
+  if (repos[scope] === place) return;
   try {
-    writeAtomic(store.statePath(REPOS), `${JSON.stringify({ ...repos, [scope]: root }, null, 2)}\n`);
+    writeAtomic(store.statePath(REPOS), `${JSON.stringify({ ...repos, [scope]: place }, null, 2)}\n`);
   } catch {
     // the page only offers no Audit button for this repo
   }

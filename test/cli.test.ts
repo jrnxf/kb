@@ -489,7 +489,7 @@ describe("kb log", () => {
     logAt(store, "2026-06-01T10:07:00Z", { ev: "verdict", ...s1, note: "a", verdict: "helped" });
     logAt(store, "2026-06-01T10:08:00Z", { ev: "checkpoint", ...s1 });
     logAt(store, "2026-07-01T09:00:00Z", { ev: "start", session: "s2", scope: SCOPE, source: "clear", bodies: ["a", "b"], index: [], hidden: ["c"], chars });
-    logAt(store, "2026-07-01T09:30:00Z", { ev: "unsaved", session: "s2", reason: "other" });
+    logAt(store, "2026-07-01T09:30:00Z", { ev: "ended", session: "s2", reason: "other", checkpoint: false });
     return store;
   }
   const zero = { body: 0, index: 0, hidden: 0, opened: { task: 0, check: 0 }, fired: 0, verdicts: { helped: 0, "not-needed": 0, wrong: 0 } };
@@ -506,8 +506,10 @@ describe("kb log", () => {
       starts: 2,
       searches: { task: 0, check: 1 },
       checkpoints: 1,
-      unsaved: 1,
+      ended: { all: 1, checkpointed: 0 },
+      unsaved: 0,
       recovered: 0,
+      forgotten: { short: 0, user: 0, aged: 0, gone: 0, worth: 0 },
       notes: [
         { id: "a", scope: SCOPE, kind: "gotcha", state: "active", ...zero, body: 2, verdicts: { helped: 1, "not-needed": 0, wrong: 0 }, last_activity: "2026-06-01T10:07:00Z" },
         { id: "b", scope: SCOPE, kind: "decision", state: "active", ...zero, body: 1, index: 1, opened: { task: 1, check: 1 }, last_activity: "2026-06-01T10:02:00Z" },
@@ -520,7 +522,7 @@ describe("kb log", () => {
       ],
     });
     const text = kb(store, ["log"]).stdout;
-    expect(text).toContain("2 sessions, 2 starts, 1 checkpoint, 1 unsaved, 0 recovered | searches: 0 for a task, 1 as a check");
+    expect(text).toContain("2 sessions, 2 starts, 1 checkpoint | searches: 0 for a task, 1 as a check\nends 1 ended, 0 with a checkpoint | 0 worth a recovery, 0 recovered, 0 forgotten\n");
     expect(text).toMatch(/^id +body +index +hidden +opened +checked +fired +helped +not-needed +wrong$/m);
     expect(text).toMatch(/^b +1 +1 +0 +1 +1 +0 +0 +0 +0$/m);
     expect(text).not.toMatch(/^quiet/m);
@@ -531,7 +533,7 @@ describe("kb log", () => {
     const store = fixture();
     const days = (iso: string) => String(Math.ceil((Date.now() - Date.parse(iso)) / 86_400_000));
     const json = kb(store, ["log", "--since", days("2026-06-15T00:00:00Z"), "--json"]).json;
-    expect(json).toMatchObject({ from: "2026-07-01T09:00:00Z", events: 2, sessions: 1, starts: 1, checkpoints: 0, unsaved: 1 });
+    expect(json).toMatchObject({ from: "2026-07-01T09:00:00Z", events: 2, sessions: 1, starts: 1, checkpoints: 0, ended: { all: 1, checkpointed: 0 } });
     expect(json.since > "2026-06-01" && json.since < "2026-07-01").toBe(true);
     expect(json.notes.find((n: any) => n.id === "a")).toMatchObject({ body: 1, verdicts: { helped: 0 } });
     for (const bad of ["0", "-3", "soon"]) expect(kb(store, ["log", "--since", bad]).code).toBe(1);
@@ -556,9 +558,47 @@ describe("kb log", () => {
     // A session with no event, and a store with no log.
     expect(kb(store, ["log", "--session", "nobody", "--json"]).json).toMatchObject({ session: "nobody", scope: null, events: 0, notes: [], unjudged: [], timeline: [] });
     expect(kb(tempStore(), ["log", "--json"]).json).toMatchObject({ from: null, events: 0, notes: [] });
-    // A session that ended with no checkpoint says why it ended.
-    expect(kb(store, ["log", "--session", "s2"]).stdout).toMatch(/  unsaved +after other$/m);
-    expect(kb(join(tempDir(), "missing"), ["log"]).stdout).toBe("log  no events | 0 sessions, 0 starts, 0 checkpoints, 0 unsaved, 0 recovered | searches: 0 for a task, 0 as a check\n");
+    // The end of a session says why it ended, and if a checkpoint had run.
+    expect(kb(store, ["log", "--session", "s2"]).stdout).toMatch(/  ended +after other, no checkpoint$/m);
+    expect(kb(join(tempDir(), "missing"), ["log"]).stdout).toBe("log  no events | 0 sessions, 0 starts, 0 checkpoints | searches: 0 for a task, 0 as a check\nends 0 ended, 0 with a checkpoint | 0 worth a recovery, 0 recovered, 0 forgotten\n");
+  });
+
+  // An audit asks what came of the knowledge of the sessions that ended. The sum answers from the events.
+  test("sums the ends: ended, with a checkpoint, worth a recovery once per session, recovered, and forgotten by why", () => {
+    const store = tempStore();
+    const at = (minute: number) => `2026-08-01T10:${String(minute).padStart(2, "0")}:00Z`;
+    logAt(store, at(0), { ev: "checkpoint", session: "saved", scope: SCOPE });
+    logAt(store, at(1), { ev: "ended", session: "saved", scope: SCOPE, reason: "clear", checkpoint: true });
+    for (const [i, session] of ["kept", "dropped", "empty", "lost"].entries()) logAt(store, at(2 + i), { ev: "ended", session, scope: SCOPE, reason: "other", checkpoint: false });
+    // Two starts measured "kept" at the same moment, and it was resumed and ended again: it is one session.
+    logAt(store, at(10), { ev: "unsaved", session: "kept", scope: SCOPE, reason: "other", prompts: 1, failed: 4 });
+    logAt(store, at(10), { ev: "unsaved", session: "kept", scope: SCOPE, reason: "other", prompts: 1, failed: 4 });
+    logAt(store, at(11), { ev: "ended", session: "kept", scope: SCOPE, reason: "prompt_input_exit", checkpoint: false });
+    // A transcript too large to measure at a start has no counts.
+    logAt(store, at(12), { ev: "unsaved", session: "dropped", scope: SCOPE, reason: "other" });
+    logAt(store, at(13), { ev: "forgotten", session: "empty", scope: SCOPE, why: "short" });
+    logAt(store, at(14), { ev: "forgotten", session: "lost", scope: SCOPE, why: "gone" });
+    logAt(store, at(15), { ev: "forgotten", session: "dropped", scope: SCOPE, why: "user", worth: true, by: "now" });
+    logAt(store, at(16), { ev: "forgotten", session: "old", scope: SCOPE, why: "aged", worth: true });
+    logAt(store, at(17), { ev: "recover", session: "kept", scope: SCOPE, by: "now", notes: ["a"], reason: "prompt_input_exit" });
+    // A why that a later kb writes is not counted under a name of this one.
+    logAt(store, at(18), { ev: "forgotten", session: "later", why: "merged" } as never);
+
+    expect(kb(store, ["log", "--json"]).json).toMatchObject({ checkpoints: 1, ended: { all: 6, checkpointed: 1 }, unsaved: 2, recovered: 1, forgotten: { short: 1, user: 1, aged: 1, gone: 1, worth: 2 } });
+    expect(kb(store, ["log"]).stdout).toContain("\nends 6 ended, 1 with a checkpoint | 2 worth a recovery, 1 recovered, 4 forgotten (1 too short, 1 by the user, 1 aged out, 1 no transcript), 2 of them worth a recovery\n");
+    const lines = (session: string) => kb(store, ["log", "--session", session]).stdout;
+    expect(lines("saved")).toMatch(/  ended +after clear, with a checkpoint$/m);
+    expect(lines("kept")).toMatch(/  unsaved +worth a recovery: 1 prompt, 4 failed tool calls, ended after other$/m);
+    expect(lines("kept")).toMatch(/  recover +1 note, by session now$/m);
+    expect(lines("dropped")).toMatch(/  unsaved +worth a recovery, ended after other$/m);
+    expect(lines("dropped")).toMatch(/  forgotten +the user said so, was worth a recovery, by session now$/m);
+    expect(lines("empty")).toMatch(/  forgotten +too short to recover$/m);
+    expect(lines("lost")).toMatch(/  forgotten +its transcript is gone$/m);
+    expect(lines("old")).toMatch(/  forgotten +aged out after 7 days, was worth a recovery$/m);
+    expect(lines("later")).toMatch(/  forgotten +merged$/m);
+    // The help names the events, so an audit knows what to count.
+    const help = kb(store, ["help"]).stdout;
+    for (const ev of ["ended", "unsaved", "recover", "forgotten"]) expect(help).toMatch(new RegExp(`^  ${ev} +\\S`, "m"));
   });
 });
 
@@ -595,7 +635,7 @@ describe("the log of a recovery", () => {
     const text = kb(store, ["log", "--session", "old"]).stdout;
     expect(text).toMatch(/  recover +2 notes, by session now$/m);
     expect(kb(store, ["log", "--session", "now"]).stdout).toMatch(/  write +add the-queue-drops-a-job-after-3-tries \(recovered from old\)$/m);
-    expect(kb(store, ["log"]).stdout).toContain("0 checkpoints, 0 unsaved, 1 recovered");
+    expect(kb(store, ["log"]).stdout).toContain("0 worth a recovery, 1 recovered, 0 forgotten");
   });
 
   // A session that ended, was resumed and then ran /kb:checkpoint saved itself.

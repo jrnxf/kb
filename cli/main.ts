@@ -8,14 +8,14 @@ import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
-import { type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
+import { FORGET_WHYS, type ForgetWhy, type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
 import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { commitAt, resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
 import { DEFAULT_PORT, isKbServer, runningPort, serve } from "./serve.ts";
 import { resultGroups } from "./wire.ts";
-import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
+import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, isLive, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
@@ -65,7 +65,8 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb log [--session id] [--since days]   what the log of this machine says of each note: how often a
                                          session got it, opened it and judged it. With --session, the
                                          events of one session in time order. The log keeps 12 months
-  kb unsaved [--repo .]                  sessions here that ended with no checkpoint, and their transcripts
+  kb unsaved [--repo .]                  sessions here that ended with no checkpoint, and their transcripts.
+                                         Never the session that asks
   kb unsaved --all                       those of every directory, newest first, with the count per
                                          project. Each has its scope, its directory, and if that is gone
   kb unsaved --forget <session-id>       stop reporting one of them, as it holds nothing to save
@@ -79,6 +80,12 @@ Every command accepts --json. The store is ~/.kb, or KB_HOME.
 A read, a write and a verdict each add one line to a log on this machine. The line names the
 session: --session <id>, or KB_SESSION, or the id that Claude Code sets for the command.
 The log stays on its machine. A small roll-up of it syncs with the store, at most once per day.
+
+The events of the log: start, fire, show, search, write, verdict, checkpoint, and for the end of a session:
+  ended      a session ended: the reason, and if a checkpoint had run in it
+  unsaved    a session that ended with no checkpoint is worth a recovery. Once per session
+  recover    another session saved its knowledge: the notes it wrote
+  forgotten  its record was dropped with no recovery: short, user, aged (7 days) or gone (no transcript)
 
 kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence"?, "supersedes"?}
   scope: "repo" (the default inside a git repo), "global", or the id of a repo that has notes
@@ -458,6 +465,11 @@ function cmdCheckpointed(store: Store, args: Args): Output {
   // session that was resumed and saves itself is checkpointed, as any session is.
   const mark = store.exists() ? unsavedSession(store, session) : null;
   const by = sessionOf(args.flags.get("session"));
+  // The session was resumed while another session recovered it. What it learns from now on is
+  // not in the notes of that recovery, so only the session itself can say that it is saved.
+  if (mark === null && by !== undefined && by !== session && store.exists() && isLive(store, session)) {
+    throw new KbError(`session ${session} runs again: the user resumed it. Nothing was recorded. It gets a new record when it ends.`);
+  }
   const recovered = mark !== null && by !== session;
   if (store.exists()) markSaved(store, session);
   // The event has the scope of the old session, so the audit can count the recoveries of a project.
@@ -476,6 +488,12 @@ function localTime(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+/** Why a record was dropped, in words. */
+const FORGOTTEN: Record<ForgetWhy, string> = { short: "too short to recover", user: "the user said so", aged: "aged out after 7 days", gone: "its transcript is gone" };
+
+/** The same in the sum of `kb log`, after a count. */
+const FORGOTTEN_AS: Record<ForgetWhy, string> = { short: "too short", user: "by the user", aged: "aged out", gone: "no transcript" };
+
 /** One event of a session as text. An event that a later kb wrote prints its name and its note. */
 function eventText(event: Logged): string {
   const e = event as Logged & Record<string, any>;
@@ -488,8 +506,11 @@ function eventText(event: Logged): string {
       case "search": return `${JSON.stringify(e.query)}: ${e.complete === false ? `no note has every word, ${count(e.closest ?? 0, "closest note", "closest notes")}` : count(e.hits, "note", "notes")} (${e.why})`;
       case "write": return `${e.op} ${e.note}${e.from ? ` (recovered from ${e.from})` : ""}`;
       case "verdict": return `${e.verdict} ${e.note}`;
-      case "unsaved": return e.reason ? `after ${e.reason}` : "";
+      case "ended": return `after ${e.reason}, ${e.checkpoint ? "with a checkpoint" : "no checkpoint"}`;
+      // A line of an older kb has the reason only: it says that a session ended with no checkpoint.
+      case "unsaved": return [typeof e.prompts === "number" ? `worth a recovery: ${count(e.prompts, "prompt", "prompts")}, ${count(e.failed ?? 0, "failed tool call", "failed tool calls")}` : "worth a recovery", e.reason ? `ended after ${e.reason}` : ""].filter(Boolean).join(", ");
       case "recover": return `${count(e.notes.length, "note", "notes")}${e.by ? `, by session ${e.by}` : ""}`;
+      case "forgotten": return `${FORGOTTEN[e.why as ForgetWhy] ?? e.why}${e.worth ? ", was worth a recovery" : ""}${e.by ? `, by session ${e.by}` : ""}`;
       default: return typeof e.note === "string" ? e.note : "";
     }
   };
@@ -524,6 +545,9 @@ function cmdLog(store: Store, args: Args): Output {
     return { id, scope: note?.scope ?? null, kind: note?.kind ?? null, state: active.has(id) ? "active" : trashed.has(id) ? "trash" : "gone", ...counts, last_activity: lastActive.get(id) ?? null };
   };
   const head = { since: since ? nowIso(since) : null, ...totals };
+  // The records that were dropped with no recovery, by why, and how many of them held something.
+  const dropped = FORGET_WHYS.map((why) => [FORGOTTEN_AS[why], totals.forgotten[why]] as const).filter(([, n]) => n > 0);
+  const forgotten = `${dropped.reduce((sum, [, n]) => sum + n, 0)} forgotten${dropped.length > 0 ? ` (${dropped.map(([as, n]) => `${n} ${as}`).join(", ")})` : ""}${totals.forgotten.worth > 0 ? `, ${totals.forgotten.worth} of them worth a recovery` : ""}`;
   const period = totals.from ? `${localTime(totals.from)} to ${localTime(totals.to!)}` : "no events";
 
   if (typeof session === "string") {
@@ -547,7 +571,9 @@ function cmdLog(store: Store, args: Args): Output {
   const wId = Math.max(2, ...logged.map((n) => n.id.length));
   const table = (id: string, values: (string | number)[]) => `${id.padEnd(wId)}  ${values.map((v, i) => String(v).padStart(columns[i]!.length)).join("  ")}`;
   const lines = [
-    `log  ${period} | ${count(totals.sessions, "session", "sessions")}, ${count(totals.starts, "start", "starts")}, ${count(totals.checkpoints, "checkpoint", "checkpoints")}, ${totals.unsaved} unsaved, ${totals.recovered} recovered | searches: ${totals.searches.task} for a task, ${totals.searches.check} as a check`,
+    `log  ${period} | ${count(totals.sessions, "session", "sessions")}, ${count(totals.starts, "start", "starts")}, ${count(totals.checkpoints, "checkpoint", "checkpoints")} | searches: ${totals.searches.task} for a task, ${totals.searches.check} as a check`,
+    // What an audit needs of the ends: how many sessions ended, and what came of their knowledge.
+    `ends ${totals.ended.all} ended, ${totals.ended.checkpointed} with a checkpoint | ${totals.unsaved} worth a recovery, ${totals.recovered} recovered, ${forgotten}`,
   ];
   if (logged.length > 0) lines.push(table("id", columns), ...notes.filter((n) => named.has(n.id)).map((n) => table(n.id, cells(n))));
   if (quiet.length > 0) lines.push(`${count(quiet.length, "active note has", "active notes have")} no event${since ? " in this time" : ""}.`);
@@ -556,8 +582,11 @@ function cmdLog(store: Store, args: Args): Output {
 
 function cmdUnsaved(store: Store, args: Args): Output {
   const forget = args.flags.get("forget");
+  // The session that asks is live. It is never in the list, also when its own mark is still there.
+  const self = sessionOf(args.flags.get("session"));
+  const others = (sessions: UnsavedSession[]) => sessions.filter((s) => s.session !== self);
   if (typeof forget === "string") {
-    const forgotten = store.exists() && forgetUnsaved(store, forget);
+    const forgotten = store.exists() && forgetUnsaved(store, forget, "user", self);
     return { json: { session: forget, forgotten }, text: forgotten ? `forgot ${forget}` : `no unsaved session ${forget}` };
   }
   const all = args.flags.has("all");
@@ -565,7 +594,7 @@ function cmdUnsaved(store: Store, args: Args): Output {
   const known = new Set(knownScopes(store));
   if (all) {
     // The newest first: the user sees what just ended. The count per project comes before the list.
-    const sessions = allUnsaved(store).reverse().map((s) => ({ ...s, ...placeOf(store, s, known) }));
+    const sessions = others(allUnsaved(store)).reverse().map((s) => ({ ...s, ...placeOf(store, s, known) }));
     if (sessions.length === 0) return { json: [], text: "no unsaved session" };
     const projects = new Map<string, number>();
     for (const s of sessions) projects.set(s.scope ?? "not known", (projects.get(s.scope ?? "not known") ?? 0) + 1);
@@ -578,7 +607,7 @@ function cmdUnsaved(store: Store, args: Args): Output {
     return { json: sessions, text: lines.join("\n") };
   }
   const dir = String(args.flags.get("repo") ?? ".");
-  const sessions = unsavedSessions(store, resolve(dir), resolveRepo(dir, store).root).map((s) => ({ ...s, ...placeOf(store, s, known) }));
+  const sessions = others(unsavedSessions(store, resolve(dir), resolveRepo(dir, store).root)).map((s) => ({ ...s, ...placeOf(store, s, known) }));
   const text = sessions.map((s) => `${s.session} | ended ${s.ended} | ${s.transcript}`).join("\n") || "no unsaved session here";
   return { json: sessions, text };
 }
@@ -587,8 +616,9 @@ function cmdUnsaved(store: Store, args: Args): Output {
  * Where the notes of an unsaved session go, for the session that recovers it.
  * `scope`: the repo id, "global" for a session outside any repo, or null when nobody knows it.
  * `exists`: the directory the session ran in is still there.
- * `dir`: a checkout to pass as --repo: that directory, the root around it, or the checkout of the
- * same repo that kb saw last. Null when none is on disk.
+ * `dir`: a checkout to pass as --repo: that directory, the root around it, the main checkout of
+ * its repo, or the checkout of the same repo that kb saw last. Null when none is on disk. The
+ * worktree of a finished run is often deleted, and the main checkout stays.
  * `recoverable`: false when no note can be written: the scope is not known, or the repo has no
  * note yet and no checkout, so `kb add` cannot start its notes.
  */
@@ -596,7 +626,7 @@ function placeOf(store: Store, session: UnsavedSession, known: Set<string>): { s
   const own = [session.cwd, session.root].find(isDir) ?? null;
   // A mark of an older kb has no scope. The directory still says it, while it is there.
   const scope = session.scope !== undefined ? (session.scope ?? "global") : own ? (resolveRepo(own, store, { record: false }).scope ?? "global") : null;
-  const dir = own ?? (scope && scope !== "global" ? (repoRoot(store, scope) ?? null) : null);
+  const dir = own ?? (isDir(session.main) ? session.main : scope && scope !== "global" ? (repoRoot(store, scope) ?? null) : null);
   return { scope, exists: isDir(session.cwd), dir, recoverable: scope !== null && (scope === "global" || dir !== null || known.has(scope)) };
 }
 

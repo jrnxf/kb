@@ -13,13 +13,18 @@ import { settle } from "./unsaved-notice.ts";
 /** The user waits for this command, so it has more time than a session start. Marks left over wait for the next run. */
 const MEASURE_MS = 10_000;
 
-/** The commits a later session made, newest first. /kb:recover reads them to see what work is finished. */
+/**
+ * The commits made since the session ended, newest first, under a line that says where.
+ * /kb:recover reads them to see what work is finished. The directory of a finished run is often
+ * gone: the main checkout of its repo then says what landed there. With neither, they are not known.
+ */
 function commitsSince(mark: UnsavedSession): string {
-  // The directory of a finished run is often gone. Its commits are then not known here.
-  const dir = [mark.cwd, mark.root].find(isDir);
-  if (!dir) return "not known: the directory is gone";
+  const own = [mark.cwd, mark.root].find(isDir);
+  const dir = own ?? (isDir(mark.main) ? mark.main : undefined);
+  if (!dir) return "Commits in that directory since it ended:\nnot known: the directory is gone";
   const log = git(dir, "log", "--oneline", "-30", `--since=${mark.ended}`);
-  return log.ok && log.out ? log.out : "none";
+  const where = own ? "in that directory" : `in the main checkout of its repo (${dir}), as the directory is gone,`;
+  return `Commits ${where} since it ended:\n${log.ok && log.out ? log.out : "none"}`;
 }
 
 /**
@@ -58,7 +63,7 @@ function write(store: Store, session: string): void {
     const head = maskSecrets(
       [
         `# Session that ended ${mark.ended} in ${mark.cwd}\n`,
-        `Commits in that directory since it ended:\n${commitsSince(mark)}\n`,
+        `${commitsSince(mark)}\n`,
         `Notes that an earlier /kb:recover of this session saved:\n${savedBefore(store, mark.notes)}\n`,
       ].join("\n"),
     );
