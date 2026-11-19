@@ -18,11 +18,13 @@ highest.
 - **At session start** a hook injects `kb context` for `global` and the current repo: full
   bodies for the top-ranked notes, one index line for each note whose body did not fit, and a
   pointer to `kb show` and `kb search`. It also says how to write: a rule, a preference or a
-  correction the user states goes to an instruction file in that turn, what the agent learns goes
-  to `kb add`, and nothing goes to Claude Code's auto memory. An index line is the id of the note, which is its title
+  correction the user states goes to an instruction file in that turn, and what the agent learns
+  goes to `kb add`. While Claude Code's auto memory is on, it also says that nothing goes there.
+  An index line is the id of the note, which is its title
   in short form, and after `...` the words of the title that the id cut. So a title that states
   the rule in full reaches every session, also when the body does not. It runs at startup,
-  resume, `/clear`, compaction and fork.
+  resume, `/clear`, compaction and fork. With auto memory off, the fixed text is three lines:
+  the scope, one line on how to read the notes, and the save rule.
 - **Notes load by path.** When the agent reads a file, a hook names the repo notes whose anchors
   name that file or a folder above it: the id, the kind and the title, at most five at a time. So
   a note reaches the agent when it works on the file, also when the note has no place in the
@@ -172,7 +174,7 @@ tells the agent to save preferences there. In `~/.claude/settings.json`:
 { "autoMemoryEnabled": false }
 ```
 
-While it is on, the first start of each session asks the agent to tell you. `/kb:checkpoint` empties it: rules go to instruction files, and facts go to kb.
+While it is on, the first start of each session asks the agent to tell you, and every session start tells the agent to save nothing there. With it off, that rule is not sent. `/kb:checkpoint` empties it: rules go to instruction files, and facts go to kb.
 
 With auto-update on for the marketplace, each machine follows the default branch. The plugin
 sets no `version`, so every commit is a release.

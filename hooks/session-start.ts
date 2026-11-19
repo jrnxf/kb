@@ -14,8 +14,14 @@ import { MEMORY_ON_NOTICE, MEMORY_RULE, autoMemoryOn } from "./auto-memory.ts";
 const STALE_NOTICE_ABOVE = 5;
 /** Claude Code shows SessionStart output above 10,000 characters as a file preview. */
 const OUTPUT_LIMIT = 9900;
+/**
+ * The rules for saving. The auto memory rule is there only while auto memory is on: with it off,
+ * no system prompt tells the agent to save there. Until the settings are read the rule stays in,
+ * because a rule too many costs less than a fact in the wrong store.
+ */
+let rules = `${SAVE_RULE}\n${MEMORY_RULE}`;
 /** What a session gets when there is no note to show: no store yet, or a broken one. */
-const RULES_ONLY = `# kb\n${SAVE_RULE}\n${MEMORY_RULE}\n`;
+const rulesOnly = () => `# kb\n${rules}\n`;
 
 try {
   let cwd = process.cwd();
@@ -26,6 +32,8 @@ try {
   } catch {
     // no stdin or not JSON: use the process directory
   }
+  const memoryOn = autoMemoryOn(process.env, process.env.CLAUDE_PROJECT_DIR || cwd);
+  if (!memoryOn) rules = SAVE_RULE;
   const store = new Store();
   // The notes a Read named before a compaction or a /clear are gone from the context, so a Read may name them again.
   if (input.source === "compact" || input.source === "clear") forgetSeen(store, input.session_id);
@@ -54,10 +62,11 @@ try {
   }
 
   // Once per session: a /clear, a resume or a compaction is the same session to the user.
-  if (input.source === "startup" && autoMemoryOn(process.env, process.env.CLAUDE_PROJECT_DIR || cwd)) notices.push(MEMORY_ON_NOTICE);
+  if (input.source === "startup" && memoryOn) notices.push(MEMORY_ON_NOTICE);
 
   // The auto memory rule goes right under the save rule, so the two read as one instruction.
-  const head = text ? text.replace(SAVE_RULE, `${SAVE_RULE}\n${MEMORY_RULE}`) : RULES_ONLY;
+  // It comes at every start, also after a compaction, because it must hold for the whole session.
+  const head = text ? text.replace(SAVE_RULE, rules) : rulesOnly();
   // Output over the limit becomes a file preview. A notice that does not fit is left out.
   const shown: string[] = [];
   let length = head.length + 1;
@@ -71,6 +80,6 @@ try {
   kickSync(store, 5 * 60_000);
 } catch {
   // The rules for saving reach every session, also one with a broken store: `kb add` says what is wrong.
-  process.stdout.write(RULES_ONLY);
+  process.stdout.write(rulesOnly());
 }
 process.exit(0);
