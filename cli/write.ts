@@ -3,6 +3,7 @@
 import { existsSync } from "node:fs";
 import { KbError, serializeNote, validateNote } from "./note.ts";
 import type { RepoInfo } from "./scope.ts";
+import { rejectSecrets } from "./secrets.ts";
 import { clearStaleCache } from "./stale.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import { kickSync } from "./sync.ts";
@@ -38,6 +39,7 @@ export function requireNote(store: Store, id: string): StoredNote {
 export function updateNote(store: Store, input: Record<string, unknown> & { id: string }, repo: Pick<RepoInfo, "scope" | "head">): { id: string; path: string } {
   const existing = store.notes().find((n) => n.id === input.id);
   if (!existing) throw new KbError(`no active note with id "${input.id}"`);
+  rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors }, `the new text of ${existing.id}`);
   const { path: _path, trashed: _trashed, ...stored } = existing;
   const merged: Record<string, unknown> = { ...stored, ...input, scope: existing.scope, created: existing.created };
   // Only a change of content says that somebody looked at the fact again.

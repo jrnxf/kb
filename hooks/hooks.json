@@ -1,5 +1,5 @@
 {
-  "description": "Inject saved kb notes at every session start, protect them through compaction, and record a /clear with no checkpoint.",
+  "description": "Inject saved kb notes at every session start, name the notes on a file when the agent reads it, protect them through compaction, and record a /clear with no checkpoint.",
   "hooks": {
     "SessionStart": [
       {
@@ -32,6 +32,18 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/pre-compact.sh",
             "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/post-read.sh",
+            "timeout": 3
           }
         ]
       }

@@ -15,7 +15,6 @@ export interface Note {
   verified_at_commit?: string;
   anchors: string[];
   confidence: Confidence;
-  indexed: boolean;
   promoted_to?: string;
   supersedes?: string[];
   /** When the note moved to trash/. A note in the trash for longer than `trashDays` is deleted. */
@@ -73,7 +72,6 @@ export function validateNote(raw: Record<string, unknown>): Note {
   need(isString(raw.scope) && isValidScope(raw.scope), "scope: must be \"global\" or a repo id");
   need(KINDS.includes(raw.kind as Kind), `kind: must be one of ${KINDS.join(", ")}`);
   need(CONFIDENCES.includes(raw.confidence as Confidence), `confidence: must be one of ${CONFIDENCES.join(", ")}`);
-  need(typeof raw.indexed === "boolean", "indexed: must be true or false");
   need(raw.anchors === undefined || (Array.isArray(raw.anchors) && raw.anchors.every(isString)), "anchors: must be a list of paths");
   need(raw.supersedes === undefined || isStringArray(raw.supersedes), "supersedes: must be a list of ids");
   need(raw.promoted_to === undefined || isString(raw.promoted_to), "promoted_to: must be a file name");
@@ -102,7 +100,6 @@ export function validateNote(raw: Record<string, unknown>): Note {
     last_verified: lastVerified,
     anchors: (raw.anchors as string[] | undefined) ?? [],
     confidence: raw.confidence as Confidence,
-    indexed: raw.indexed as boolean,
     body: (raw.body as string).trim(),
   };
   if (raw.verified_at_commit !== undefined) note.verified_at_commit = raw.verified_at_commit as string;
@@ -138,7 +135,6 @@ export function serializeNote(note: Note): string {
   if (note.verified_at_commit) front.verified_at_commit = note.verified_at_commit;
   front.anchors = note.anchors;
   front.confidence = note.confidence;
-  front.indexed = note.indexed;
   if (note.promoted_to) front.promoted_to = note.promoted_to;
   if (note.supersedes?.length) front.supersedes = note.supersedes;
   if (note.trashed_at) front.trashed_at = note.trashed_at;

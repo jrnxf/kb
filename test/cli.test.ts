@@ -8,6 +8,27 @@ import { daysAgo, kb, putNote, sh, tempDir, tempRepo, tempStore } from "./helper
 
 const add = (store: Store | string, note: object, cwd?: string) => kb(store, ["add", "--json"], { stdin: JSON.stringify(note), cwd });
 
+describe("KB_HOME", () => {
+  test("a relative KB_HOME is the folder under the directory kb runs in", () => {
+    const dir = tempDir();
+    expect(add("./kb", { title: "A note", kind: "gotcha", body: "b", scope: "global" }, dir).code).toBe(0);
+    expect(existsSync(join(dir, "kb/notes/global/a-note.md"))).toBe(true);
+  });
+});
+
+describe("kb instructions", () => {
+  test("names the file at the end of the links, and says which link points there only when one does", () => {
+    const store = tempStore();
+    const dir = tempDir();
+    writeFileSync(join(dir, "AGENTS.md"), "# Rules\n");
+    sh(dir, "ln", "-s", "AGENTS.md", "CLAUDE.md");
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(dir, "CLAUDE.md") }));
+    expect(kb(store, ["instructions"]).stdout).toContain(`AGENTS.md (${join(dir, "CLAUDE.md")} links here)`);
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(dir, "AGENTS.md") }));
+    expect(kb(store, ["instructions"]).stdout).not.toContain("links here");
+  });
+});
+
 describe("kb add", () => {
   test("creates the store on first run and writes a valid note", () => {
     const home = join(tempDir(), "fresh");
@@ -15,7 +36,7 @@ describe("kb add", () => {
     expect(result.code).toBe(0);
     expect(result.json).toMatchObject({ status: "created", id: "stripe-needs-the-raw-body" });
     const note = parseNote(readFileSync(join(home, "notes/global/stripe-needs-the-raw-body.md"), "utf8"));
-    expect(note).toMatchObject({ kind: "gotcha", confidence: "medium", indexed: true, anchors: [], body: "Mount express.raw() first." });
+    expect(note).toMatchObject({ kind: "gotcha", confidence: "medium", anchors: [], body: "Mount express.raw() first." });
     expect(readFileSync(join(home, "INDEX.md"), "utf8")).toContain("[stripe-needs-the-raw-body](notes/global/stripe-needs-the-raw-body.md) [gotcha]");
   });
 
@@ -108,11 +129,22 @@ describe("kb use, trash, show, list", () => {
     kb(store, ["use", "a"]);
     kb(store, ["use", "a", "ghost"]);
     Bun.write(join(store.home, "usage", "othermachine.json"), JSON.stringify({ a: { uses: 5, last_used: "2020-01-01T00:00:00Z" } }));
-    const shown = kb(store, ["show", "a", "--json"]).json;
+    const shown = kb(store, ["show", "a", "--no-use", "--json"]).json;
     expect(shown.uses).toBe(7);
     expect(shown.last_used > "2026").toBe(true);
     expect(readFileSync(store.find("a")!.path, "utf8")).toBe(before);
     expect(kb(store, ["use", "ghost"]).code).toBe(1);
+  });
+
+  test("show counts a use, since an agent reads a note when it needs it, and --no-use only looks", () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    expect(kb(store, ["show", "a", "--json"]).json.uses).toBe(1);
+    expect(kb(store, ["show", "a", "--json"]).json.uses).toBe(2);
+    expect(kb(store, ["show", "a", "--no-use", "--json"]).json.uses).toBe(2);
+    putNote(store, { id: "gone" }, true);
+    kb(store, ["show", "gone"]);
+    expect(store.usage().get("gone")).toBeUndefined();
   });
 
   test("trash moves the file and restore moves it back", () => {
@@ -250,7 +282,7 @@ describe("kb use, trash, show, list", () => {
   test("every command gives JSON with --json, also on an error", () => {
     const store = tempStore();
     putNote(store, { id: "a" });
-    for (const args of [["context"], ["scope"], ["show", "a"], ["search", "body"], ["list"], ["use", "a"], ["trash", "a"], ["restore", "a"], ["empty-trash"], ["html"], ["sync"], ["stale"], ["verify", "a"], ["budget"], ["promote", "a", "--to", "CLAUDE.md"], ["checkpointed", "s"], ["unsaved"], ["unsaved", "--forget", "s"], ["show", "zzz"], ["bogus"]]) {
+    for (const args of [["context"], ["scope"], ["show", "a"], ["search", "body"], ["list"], ["use", "a"], ["trash", "a"], ["restore", "a"], ["empty-trash"], ["html"], ["sync"], ["stale"], ["verify", "a"], ["budget"], ["checkpointed", "s"], ["unsaved"], ["unsaved", "--forget", "s"], ["show", "zzz"], ["bogus"]]) {
       const result = kb(store, [...args, "--json"]);
       expect(result.json, args.join(" ")).toBeDefined();
     }
@@ -319,12 +351,12 @@ describe("kb search", () => {
     expect(kb(store, ["search", "cents"], { cwd: repo }).stdout.trimEnd().split("\n")).toEqual([
       "web-cents | github.com/acme/web | Amounts are integer cents",
       "global-cents | global | Print cents with two digits",
-      "  12: cents 1",
-      "  13: cents 2",
-      "  14: cents 3",
+      "  11: cents 1",
+      "  12: cents 2",
+      "  13: cents 3",
       "  ...",
       "api-cents | github.com/acme/api | Amounts are integer cents",
-      "  12: No cents as floats.",
+      "  11: No cents as floats.",
     ]);
   });
 
@@ -336,11 +368,11 @@ describe("kb search", () => {
     putNote(store, { id: "old", body: "signature rotation, trashed" }, true);
 
     const hits = search(store, "signature");
-    expect(hits).toEqual([{ id: "raw-body", title: "Stripe needs the raw body", scope: "global", trashed: false, line: 13, text: "The JSON parser breaks the Signature." }]);
+    expect(hits).toEqual([{ id: "raw-body", title: "Stripe needs the raw body", scope: "global", trashed: false, line: 12, text: "The JSON parser breaks the Signature." }]);
     expect(search(store, "signature", { trash: true }).map((h) => h.id)).toEqual(["raw-body", "old"]);
     expect(search(store, "nothing", { scope: "global" })).toEqual([]);
     // A title match counts once. The id line does not double it.
-    expect(search(store, "raw").map((h) => h.line)).toEqual([3, 12]);
+    expect(search(store, "raw").map((h) => h.line)).toEqual([3, 11]);
   });
 
   // The checkpoint skill searches with two or three key words before it writes. A phrase match

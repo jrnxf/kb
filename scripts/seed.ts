@@ -78,7 +78,6 @@ function put(scope: string, head: string | undefined, s: Seed): void {
     last_verified: daysAgo(age),
     anchors: s.anchors ?? [],
     confidence: s.confidence ?? "medium",
-    indexed: true,
     body: s.body,
   };
   if (head && scope !== "global") note.verified_at_commit = head;

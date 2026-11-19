@@ -113,8 +113,10 @@ describe("plugin files", () => {
   test("hooks.json registers SessionStart for all five sources", () => {
     const hooks = JSON.parse(readFileSync(join(ROOT, "hooks", "hooks.json"), "utf8"));
     const entry = hooks.hooks.SessionStart[0];
-    expect(Object.keys(hooks.hooks).sort()).toEqual(["PreCompact", "SessionEnd", "SessionStart"]);
+    expect(Object.keys(hooks.hooks).sort()).toEqual(["PostToolUse", "PreCompact", "SessionEnd", "SessionStart"]);
     expect(hooks.hooks.SessionEnd[0].matcher).toBe("clear");
+    // An exact name, so the hook never runs for an MCP tool with "Read" in its name.
+    expect(hooks.hooks.PostToolUse[0]).toMatchObject({ matcher: "Read", hooks: [{ command: '"${CLAUDE_PLUGIN_ROOT}"/hooks/post-read.sh', timeout: 3 }] });
     expect(entry.matcher.split("|").sort()).toEqual(["clear", "compact", "fork", "resume", "startup"]);
     expect(entry.hooks[0].command).toBe('"${CLAUDE_PLUGIN_ROOT}"/hooks/session-start.sh');
   });

@@ -3,6 +3,11 @@
 A personal, repo-agnostic knowledge store for coding agents. It lets you `/clear` at any time
 without losing durable knowledge: gotchas, decisions, conventions, procedures and unfinished work.
 
+kb splits knowledge by source. A rule you state ("always", "never", a correction) goes to an
+instruction file, such as `~/.claude/CLAUDE.md`, which every session loads whole. What the agent
+learns (a gotcha, a decision, a how-to, open work) goes to kb, which loads the notes that rank
+highest.
+
 ## The model
 
 - **Notes** are plain markdown with YAML frontmatter in `~/.kb` (override with `KB_HOME`).
@@ -13,21 +18,36 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 - **At session start** a hook injects `kb context` for `global` and the current repo: full
   bodies for the top-ranked notes, one index line for each note whose body did not fit, and a
   pointer to `kb show` and `kb search`. It also says how to write: a rule, a preference or a
-  correction the user states is saved in that turn with `kb add`, and never in Claude Code's auto
-  memory. An index line is the id of the note, which is its title
+  correction the user states goes to an instruction file in that turn, what the agent learns goes
+  to `kb add`, and nothing goes to Claude Code's auto memory. An index line is the id of the note, which is its title
   in short form, and after `...` the words of the title that the id cut. So a title that states
   the rule in full reaches every session, also when the body does not. It runs at startup,
   resume, `/clear`, compaction and fork.
-- **Context stays small.** Two budgets in `kb.config.json`: `indexLines` (60) and
-  `contextChars` (8000, clamped under the 10,000 character hook cap, with the one-line save rule on top). Rank is open-work, gotcha,
-  convention, decision, how-to, then repo before global, then last used, then last verified.
-  Whole bodies drop from the bottom, and only a note without a body takes an index line.
-  The store can grow for years and a session loads the same amount.
-- **A rule is saved when the user states it.** The agent starts `/kb:note` on its own when the user
-  says "always", "never", "from now on" or corrects it, and saves the rule with `kb add` in that turn.
+- **Notes load by path.** When the agent reads a file, a hook names the repo notes whose anchors
+  name that file or a folder above it: the id, the kind and the title, at most five at a time. So
+  a note reaches the agent when it works on the file, also when the note has no place in the
+  index. Each note comes once per session, and again after a compaction or a `/clear`. A subagent
+  has its own context, so it gets the notes too. A file the agent gets
+  with `@` is not a Read, so it names no notes.
+- **Context stays small.** Budgets in `kb.config.json`: `indexLines` (60), `globalIndexLines`
+  (20) and `contextChars` (8000, clamped under the 10,000 character hook cap, with the save rule
+  on top). The repo's own notes rank first, by kind (open-work, gotcha, convention, decision,
+  how-to), then last used, then last verified. Global notes come after them, open work first, then
+  the most used. In a repo, global notes take at most `globalIndexLines` places, so they never
+  crowd out the repo's notes. Whole bodies drop from the bottom, and only a note without a body
+  takes an index line. The store can grow for years and a session loads the same amount.
+- **A use is a read that helped.** `kb show` counts a use, because an agent reads a note when it
+  needs it. `kb use` counts the injected notes that changed what the agent did. A check (an
+  audit, a search before a write) passes `--no-use`. The use count ranks global notes.
+- **A rule goes to an instruction file when the user states it.** The agent starts `/kb:note` on
+  its own when the user says "always", "never", "from now on" or corrects it. `kb instructions`
+  names the files. A global rule goes into the global file, which `globalInstructions` in
+  `kb.config.json` names (`~/.claude/CLAUDE.md`). kb writes the file at the end of its links, so
+  a dotfiles repo that links it gets the change. A repo rule goes into the repo's `CLAUDE.md` or
+  `AGENTS.md` after you say yes. Nothing is committed for you.
 - **Before `/clear`** you run `/kb:checkpoint`. The agent saves what the session learned,
-  updates notes instead of duplicating them, trashes finished open work, moves Claude Code's auto
-  memory into kb, and records which notes helped with `kb use`.
+  updates notes instead of duplicating them, writes stated rules to instruction files, trashes
+  finished open work, empties Claude Code's auto memory, and records which notes helped with `kb use`.
 - **A trash that clears itself.** `kb trash` moves a note to `trash/`, and `kb restore` brings it
   back. A note in the trash for more than `trashDays` (30) is deleted for good, before the next
   command. `kb delete` removes a note now, and `kb empty-trash` removes the whole trash. If the
@@ -38,17 +58,31 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
   trash. Each takes the exact repo id, and none touches `global`.
 - **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: an
   anchored file changed since the note was verified, an anchor is gone, the verified commit left
-  the history, nobody verified the note for `decayDays` (180), or two titles are close.
-  `/kb:audit` reads the code for each candidate, checks both budgets, proposes verify, rewrite,
-  merge, shorten, demote, trash or delete, and applies what you accept. `kb budget` asks for a
-  demotion only when the index is full and a note reaches no session. A body that became an
-  index line is the normal state. It names decisions and how-tos to demote, and leaves gotchas and
-  conventions for you to name, because a rule that works leaves no use count. It also lists the
-  demoted notes, which no session loads. A session start says so in one
+  the history, no session used the note and nobody checked it for `expireDays` (90), nobody
+  verified it for `decayDays` (180), or two titles are close. An expired note goes to the audit
+  as trash, and you decide: kb never deletes a note on its own. A session start also checks the
+  anchors of the repo's notes on disk, and tells the agent which notes name a file or a symbol that
+  is gone.
+  `kb stale` and `/kb:audit` cover one scope: the repo's notes in a repo, the global notes outside
+  any repo. `/kb:audit` reads the code for each candidate, checks both budgets, and proposes keep, rewrite,
+  merge, shorten or trash with `kb audit propose`. Each audit also moves rules to the
+  instruction file of its scope: the agent merges the conventions into a few short rules, and each card
+  shows the lines that Apply adds to the file. Apply writes them and does not commit the file. You decide in the `kb serve` page, one
+  card per note: each card shows the note, the new text struck against the old, and the agent's
+  pick with its reason. `a` accepts the agent's pick, `k` keeps the note as is and records that
+  you checked it, `t` trashes it, a meter counts the notes that still reach no session, and Apply makes
+  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. In a repo it audits that repo. Outside any repo it audits the global notes, in an empty folder that no repo reaches. The Audit button in the page does the same for the global notes, and for any repo a session has opened once. `kb budget` asks for
+  room only when the index is full and a note reaches no session. A body that became an
+  index line is the normal state. It names decisions and how-tos to trash or merge, and
+  leaves gotchas and conventions for you to name, because a rule that works leaves no use count.
+  A session start says so in one
   line when more than 5 notes are candidates.
-- **Proven notes move to the repo.** `/kb:promote` proposes notes with high confidence and many
-  uses for the repo's `CLAUDE.md` or `AGENTS.md`, shows the exact text, and writes after you
-  confirm. This is the only write `kb` makes inside a repo. A promoted note is no longer injected.
+- **Rules move to an instruction file.** A rule you stated belongs where every session loads it
+  whole. The audit card offers to move it: a repo audit moves a repo rule to the repo's `CLAUDE.md`
+  (or `.claude/CLAUDE.md`, then `AGENTS.md`, when the repo keeps its rules there, and it creates
+  `CLAUDE.md` when the repo has none), and the global audit moves a global rule to the global file. The card shows the lines it
+  adds. Apply writes the file and does not commit it. This is the only write `kb` makes inside a
+  repo. A moved note is no longer injected.
 - **A missed checkpoint can be recovered.** Nothing can run before `/clear`, but `/clear` keeps the
   transcript on disk. So a session that ends with `/clear` and no checkpoint is recorded, and each
   new session in that checkout says in one line that `/kb:recover` saves it. `/kb:recover` hands
@@ -73,15 +107,16 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 ```
 kb context [--repo .]        what a session gets at start
 kb add [--repo .]            create or update a note from JSON on stdin
-kb show <id>                 kb search <words> [--scope s] [--trash]
+kb show <id> [--no-use]      kb search <words> [--scope s] [--trash]
 kb list [--scope s] [--trash]  kb use <id>...
 kb trash <id>...             kb restore <id>...
 kb delete <id>...            kb empty-trash
 kb trash|restore|delete|empty-trash --scope <repo id>   a whole project
 kb stale [--repo .]          kb verify <id>...
-kb budget [--repo .]         kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run]
+kb budget [--repo .]
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
-kb sync                      kb checkpointed <session-id>
+kb audit [--no-wait]         kb audit propose   kb audit status   (an agent audits the scope)
+kb instructions [--repo .]   kb sync      kb checkpointed <session-id>
 kb unsaved [--forget <session-id>]   sessions here that ended with no checkpoint
 ```
 
@@ -108,8 +143,13 @@ global, then other repos. `kb show` accepts a part of an id when only one note h
 has no notes is an error in `kb add`, `kb search` and `kb list`, so a typing error cannot put a
 note where no session loads it. The first note of a repo is written from inside that repo, or with `--repo`.
 
-Skills: `/kb:checkpoint`, `/kb:recover`, `/kb:audit`, `/kb:promote`. Only you can start them. `/kb:note` saves a rule the
-user states, and the agent starts it on its own.
+kb syncs every note to git, so it refuses new text that holds a secret: `kb add`, an edit on the page,
+and the text or rule of an audit Apply. It knows the shape of common tokens and keys (GitHub, AWS,
+Anthropic, Slack and more), a password in a URL, and a long random value given to a name such as
+`API_KEY`. The error names the kind and the place, never the secret. Write a placeholder instead.
+
+Skills: `/kb:checkpoint`, `/kb:recover`, `/kb:audit`. Only you can start them. `/kb:note` writes a rule the
+user states to an instruction file, and the agent starts it on its own.
 
 Every command accepts `--json`. The CLI knows nothing about Claude Code: only `hooks/` and `skills/` do.
 
@@ -137,7 +177,7 @@ tells the agent to save preferences there. In `~/.claude/settings.json`:
 { "autoMemoryEnabled": false }
 ```
 
-While it is on, the first start of each session asks the agent to tell you. `/kb:checkpoint` moves what it holds into kb.
+While it is on, the first start of each session asks the agent to tell you. `/kb:checkpoint` empties it: rules go to instruction files, and facts go to kb.
 
 With auto-update on for the marketplace, each machine follows the default branch. The plugin
 sets no `version`, so every commit is a release.

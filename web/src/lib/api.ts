@@ -1,4 +1,4 @@
-import type { NoteEdit, PageData } from "../../../cli/wire.ts";
+import type { AuditData, AuditPick, AuditResult, AuditRunState, NoteEdit, PageData } from "../../../cli/wire.ts";
 
 let token = "";
 
@@ -31,3 +31,12 @@ export const emptyTrash = (scope?: string) => call<{ deleted: string[] }>("POST"
 export const trashProject = (scope: string) => call<{ trashed: string[] }>("POST", "/api/projects/trash", { scope });
 export const restoreProject = (scope: string) => call<{ restored: string[] }>("POST", "/api/projects/restore", { scope });
 export const restoreNote = (id: string) => call("POST", `/api/notes/${id}/restore`);
+
+export async function loadAudit(scope: string): Promise<AuditData> {
+  const data = await call<AuditData>("GET", `/api/audit?scope=${encodeURIComponent(scope)}`);
+  token = data.token;
+  return data;
+}
+/** One agent audits the repo in its checkout. The page data says when its cards are ready. */
+export const startAudit = (scope: string) => call<AuditRunState>("POST", "/api/audit/start", { scope });
+export const applyAudit = (scope: string, picks: AuditPick[]) => call<AuditResult>("POST", "/api/audit/apply", { scope, picks });

@@ -1,7 +1,8 @@
 // Reads the SessionStart JSON on stdin and prints `kb context` for the session's directory,
-// the rule to save new facts with `kb add`, and at most four one-line notices. With the other
+// the rule for where rules and facts go, and at most four one-line notices. With the other
 // files in hooks/ and the skills, this is the only code that knows about Claude Code.
 
+import { forgetSeen } from "../cli/by-path.ts";
 import { SAVE_RULE, buildContext } from "../cli/context.ts";
 import { resolveRepo } from "../cli/scope.ts";
 import { forgetUnsaved, isSaved, recordUnsaved, unsavedSessions } from "../cli/session.ts";
@@ -30,6 +31,8 @@ try {
     // no stdin or not JSON: use the process directory
   }
   const store = new Store();
+  // The notes a Read named before a compaction or a /clear are gone from the context, so a Read may name them again.
+  if (input.source === "compact" || input.source === "clear") forgetSeen(store, input.session_id);
   const { text, hiddenIndexLines } = buildContext(store, cwd);
   const notices: string[] = [];
 

@@ -19,8 +19,8 @@ interface Props {
   empty: { text: string; action?: { label: string; run: () => void } };
   /** The list shows the trash: it says how long a note stays, and offers to empty it. */
   trash?: { days: number; onEmpty: () => void };
-  /** The list shows one project: it offers to move the whole project to the trash. */
-  project?: { onTrash: () => void };
+  /** The list shows one project: it offers to move the whole project to the trash, and to audit it. */
+  project?: { onTrash?: () => void; audit?: { state: "start" | "running" | "open"; run: () => void } };
 }
 
 export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, trash, project }: Props) {
@@ -76,8 +76,21 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, tra
                 Empty trash
               </Button>
             )}
-            {project && (
-              <Button variant="outline" size="xs" className="-my-px ml-auto text-muted-foreground hover:text-foreground" onClick={project.onTrash}>
+            {project?.audit && (
+              <Button
+                variant="outline"
+                size="xs"
+                data-audit-start={project.audit.state}
+                disabled={project.audit.state === "running"}
+                title={project.audit.state === "start" ? "An agent checks the stale notes here and proposes cards" : undefined}
+                className="-my-px ml-auto text-muted-foreground hover:text-foreground"
+                onClick={project.audit.run}
+              >
+                {project.audit.state === "running" ? "Auditing…" : project.audit.state === "open" ? "Open audit" : "Audit"}
+              </Button>
+            )}
+            {project?.onTrash && (
+              <Button variant="outline" size="xs" className={cn("-my-px text-muted-foreground hover:text-foreground", !project.audit && "ml-auto")} onClick={project.onTrash}>
                 Trash project
               </Button>
             )}

@@ -44,6 +44,31 @@ describe("kb stale", () => {
     expect(findStale(store, repo, NOW).candidates[1]!.detail).toBe(`changed since ${head}: src/ledger.ts`);
   });
 
+  test("a gone symbol does not hide a change to another anchor, also on the same file", () => {
+    const { repo, store, head } = fixture();
+    mkdirSync(join(repo, "b"));
+    writeFileSync(join(repo, "b/x.ts"), "x\n");
+    commit(repo, "add b");
+    const base = sh(repo, "git", "rev-parse", "--short", "HEAD");
+    putNote(store, { id: "same-file", scope: SCOPE, verified_at_commit: base, anchors: ["src/ledger.ts#gone", "src/ledger.ts#append"], last_verified: FRESH });
+    putNote(store, { id: "same-word", scope: SCOPE, verified_at_commit: base, anchors: ["src/rates.ts#b", "b"], last_verified: FRESH });
+    writeFileSync(join(repo, "src/ledger.ts"), "export function append() { return 1; }\n");
+    writeFileSync(join(repo, "b/x.ts"), "y\n");
+    commit(repo, "change both");
+    expect(reasons(store, repo)).toEqual(["same-file:anchor-changed", "same-file:anchor-missing", "same-word:anchor-changed", "same-word:anchor-missing"]);
+    expect(head).not.toBe(base);
+  });
+
+  test("a symbol check reads only a regular file of a sane size, so a pipe never blocks it", () => {
+    const { repo, store } = fixture();
+    sh(repo, "mkfifo", "pipe");
+    writeFileSync(join(repo, "huge.txt"), "x".repeat(2_000_001));
+    putNote(store, { id: "pipe", scope: SCOPE, anchors: ["pipe#x"], last_verified: FRESH });
+    putNote(store, { id: "huge", scope: SCOPE, anchors: ["huge.txt#nothing"], last_verified: FRESH });
+    putNote(store, { id: "dir", scope: SCOPE, anchors: ["src#nothing"], last_verified: FRESH });
+    expect(reasons(store, repo)).toEqual([]);
+  });
+
   test("anchor-missing: the path is gone, or the symbol left the file", () => {
     const { repo, store, head } = fixture();
     putNote(store, { id: "path", scope: SCOPE, verified_at_commit: head, anchors: ["src/gone.ts"], last_verified: FRESH });
@@ -66,34 +91,55 @@ describe("kb stale", () => {
     expect(reasons(store, repo)).toEqual(["never:commit-unknown", "rebased:commit-unknown"]);
   });
 
-  test("decayed: last_verified is older than the decay window", () => {
+  test("expired: no use and no check for expireDays. decayed: used, but not verified for decayDays", () => {
     const { repo, store } = fixture();
+    putNote(store, { id: "unused", scope: SCOPE, last_verified: "2025-11-01T00:00:00Z" });
+    putNote(store, { id: "used", scope: SCOPE, last_verified: "2025-08-01T00:00:00Z" });
+    putNote(store, { id: "checked", scope: SCOPE, last_verified: "2026-01-01T00:00:00Z" });
     putNote(store, { id: "old-global", last_verified: "2025-08-01T00:00:00Z" });
-    putNote(store, { id: "old-repo", scope: SCOPE, last_verified: "2025-08-01T00:00:00Z" });
-    putNote(store, { id: "new", last_verified: FRESH });
-    expect(reasons(store, repo)).toEqual(["old-global:decayed", "old-repo:decayed"]);
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ decayDays: 365 }));
-    expect(reasons(store, repo)).toEqual([]);
+    store.bumpUsage(["used"], "2026-02-01T00:00:00Z");
+    // A note gets one of the two: expired says more.
+    expect(findStale(store, repo, NOW).candidates.map((c) => `${c.id}: ${c.detail}`)).toEqual(["unused: no use and no check for 120 days", "used: last verified 212 days ago"]);
+    expect(reasons(store, repo)).toEqual(["unused:expired", "used:decayed"]);
+    // A use within expireDays keeps a note from expiring, and the config sets both windows.
+    store.bumpUsage(["unused"], "2026-02-01T00:00:00Z");
+    expect(reasons(store, repo)).toEqual(["used:decayed"]);
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ decayDays: 365, expireDays: 30 }));
+    expect(reasons(store, repo)).toEqual(["checked:expired"]);
+  });
+
+  test("a note expires after expireDays whole days, and a wrong window falls back to the default", () => {
+    const { repo, store } = fixture();
+    const daysBefore = (days: number, hours = 0) => new Date(NOW.getTime() - (days * 24 + hours) * 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    putNote(store, { id: "edge", scope: SCOPE, last_verified: daysBefore(90, 23) });
+    putNote(store, { id: "over", scope: SCOPE, last_verified: daysBefore(91) });
+    expect(reasons(store, repo)).toEqual(["over:expired"]);
+    for (const expireDays of [null, 0, -1, "abc"]) {
+      writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ expireDays, decayDays: expireDays }));
+      expect(store.config()).toMatchObject({ expireDays: 90, decayDays: 180 });
+      expect(reasons(store, repo)).toEqual(["over:expired"]);
+    }
   });
 
   test("duplicate: two titles share most of their words, and the newer note is the candidate", () => {
     const { repo, store } = fixture();
-    putNote(store, { id: "first", title: "Amounts are stored as integer cents", created: "2026-01-01T00:00:00Z", last_verified: FRESH });
+    putNote(store, { id: "first", scope: SCOPE, title: "Amounts are stored as integer cents", created: "2026-01-01T00:00:00Z", last_verified: FRESH });
     putNote(store, { id: "second", scope: SCOPE, title: "Store amounts as integer cents", created: "2026-02-01T00:00:00Z", last_verified: FRESH });
-    putNote(store, { id: "third", title: "Ledger rows are append-only", last_verified: FRESH });
+    putNote(store, { id: "third", scope: SCOPE, title: "Ledger rows are append-only", last_verified: FRESH });
     const found = findStale(store, repo, NOW).candidates;
     expect(found).toHaveLength(1);
     expect(found[0]).toMatchObject({ id: "second", reason: "duplicate", detail: "the title is close to first" });
   });
 
-  test("it leaves out other repos, trashed notes and promoted notes, and works outside a repo", () => {
+  test("it checks one scope: the repo's notes in a repo, the global notes outside any repo", () => {
     const { repo, store } = fixture();
     const old = "2025-01-01T00:00:00Z";
     putNote(store, { id: "elsewhere", scope: "github.com/acme/web", last_verified: old });
     putNote(store, { id: "trashed", last_verified: old }, true);
     putNote(store, { id: "promoted", scope: SCOPE, promoted_to: "CLAUDE.md", last_verified: old });
     putNote(store, { id: "global", last_verified: old });
-    expect(reasons(store, repo)).toEqual(["global:decayed"]);
+    putNote(store, { id: "mine", scope: SCOPE, last_verified: old });
+    expect(reasons(store, repo)).toEqual(["mine:expired"]);
     const outside = kb(store, ["stale", "--json"]);
     expect(outside.json).toMatchObject({ scope: null, notes: 1 });
     expect(outside.json.candidates[0].id).toBe("global");
@@ -107,8 +153,8 @@ describe("kb verify", () => {
     putNote(store, { id: "g" });
     writeFileSync(join(repo, "src/ledger.ts"), "export function append() { return 2; }\n");
     commit(repo, "change");
-    // Both notes are also past the decay window, because the fixture dates are old.
-    expect(kb(store, ["stale", "--json"], { cwd: repo }).json.candidates.map((c: any) => `${c.id}:${c.reason}`)).toEqual(["g:decayed", "ledger:anchor-changed", "ledger:decayed"]);
+    // Both notes have also expired, because the fixture dates are old and nobody used them.
+    expect(kb(store, ["stale", "--json"], { cwd: repo }).json.candidates.map((c: any) => `${c.id}:${c.reason}`)).toEqual(["ledger:anchor-changed", "ledger:expired"]);
 
     const result = kb(store, ["verify", "ledger", "g", "--json"], { cwd: repo });
     const newHead = sh(repo, "git", "rev-parse", "--short", "HEAD");
@@ -131,12 +177,12 @@ describe("kb verify", () => {
 });
 
 describe("kb add, metadata only", () => {
-  test("a demotion does not count as a verification", () => {
+  test("a change of confidence does not count as a verification", () => {
     const { repo, store } = fixture();
     putNote(store, { id: "n", scope: SCOPE });
-    const result = kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ id: "n", indexed: false }) });
+    const result = kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ id: "n", confidence: "high" }) });
     expect(result.json.status).toBe("updated");
-    expect(store.find("n")).toMatchObject({ indexed: false, last_verified: "2026-01-01T00:00:00Z" });
+    expect(store.find("n")).toMatchObject({ confidence: "high", last_verified: "2026-01-01T00:00:00Z" });
     expect(store.find("n")!.verified_at_commit).toBeUndefined();
   });
 });
@@ -146,11 +192,11 @@ describe("kb budget", () => {
     const { repo, store } = fixture();
     putNote(store, { id: "a", scope: SCOPE });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
-    expect(b).toMatchObject({ scope: SCOPE, over: false, demote: [], index: { lines: 0, budget: 60, hidden: 0 }, context: { bodies: 1, dropped: 0, budget: contextBudget(8000) } });
+    expect(b).toMatchObject({ scope: SCOPE, over: false, trim: [], index: { lines: 0, budget: 60, hidden: 0 }, context: { bodies: 1, dropped: 0, budget: contextBudget(8000) } });
     expect(b.notes[0]).toMatchObject({ id: "a", shown: "body", uses: 0 });
   });
 
-  test("bodies that drop to an index line are not a reason to demote", () => {
+  test("bodies that drop to an index line are not a reason to make room", () => {
     const { repo, store } = fixture();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 60, contextChars: 1500 } }));
     const body = "word ".repeat(80);
@@ -159,9 +205,9 @@ describe("kb budget", () => {
     expect(b.context.dropped).toBeGreaterThan(0);
     expect(b.index.hidden).toBe(0);
     expect(b.index.lines).toBe(b.context.dropped);
-    expect(b).toMatchObject({ over: false, demote: [] });
+    expect(b).toMatchObject({ over: false, trim: [] });
     const text = kb(store, ["budget"], { cwd: repo }).stdout;
-    expect(text).not.toContain("Demote");
+    expect(text).not.toContain("Trash or merge first");
     expect(text).toContain("every note reaches a session");
     expect(text).toContain("longest  ");
   });
@@ -179,15 +225,15 @@ describe("kb budget", () => {
     expect(b.over).toBe(true);
     expect(b.index.hidden).toBeGreaterThan(0);
     expect(b.index.lines).toBe(2);
-    const ids = b.demote.map((d: any) => d.id);
+    const ids = b.trim.map((d: any) => d.id);
     expect(ids).toHaveLength(b.index.hidden);
     for (const id of ids) expect(id).toMatch(/^howto-/);
-    expect(b.demote[0].reason).toBe("never used");
+    expect(b.trim[0].reason).toBe("never used");
     expect(b.ask).toEqual([]);
-    expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is full\.\nDemote first: howto-/);
+    expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is full\.\nTrash or merge first: howto-/);
   });
 
-  test("gotchas and conventions fill the rest of the hidden count as notes to ask about, never as demotions", () => {
+  test("gotchas and conventions fill the rest of the hidden count as notes to ask about, never as notes to trim", () => {
     const { repo, store } = fixture();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 1, contextChars: 1500 } }));
     const body = "word ".repeat(80);
@@ -196,60 +242,13 @@ describe("kb budget", () => {
     putNote(store, { id: "trap", scope: SCOPE, kind: "gotcha", body });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
     expect(b.over).toBe(true);
-    expect(b.demote.map((d: any) => d.id)).toEqual(["howto"]);
+    expect(b.trim.map((d: any) => d.id)).toEqual(["howto"]);
     expect(b.ask).toHaveLength(b.index.hidden - 1);
     for (const d of b.ask) expect(["gotcha", "convention"]).toContain(d.kind);
     const text = kb(store, ["budget"], { cwd: repo }).stdout;
-    expect(text).toContain("Demote first: howto (never used)");
+    expect(text).toContain("Trash or merge first: howto (never used)");
     expect(text).toMatch(/Then ask the user, because these are rules: (rule-\d|trap) \((convention|gotcha), never used\)/);
   });
 
-  test("a demoted note stays visible in kb budget and kb list", () => {
-    const { repo, store } = fixture();
-    putNote(store, { id: "kept", scope: SCOPE });
-    putNote(store, { id: "gone", scope: SCOPE, indexed: false });
-    putNote(store, { id: "elsewhere", scope: "github.com/acme/other", indexed: false });
-    expect(kb(store, ["budget", "--json"], { cwd: repo }).json.demoted).toEqual(["gone"]);
-    expect(kb(store, ["budget"], { cwd: repo }).stdout).toContain("demoted  1 note, in no session: gone");
-    expect(kb(store, ["list", "--scope", "repo"], { cwd: repo }).stdout).toMatch(/Title of gone \(demoted\)/);
-  });
 });
 
-describe("kb promote", () => {
-  test("--dry-run writes nothing, then the real run appends once and hides the note from context", () => {
-    const { repo, store } = fixture();
-    writeFileSync(join(repo, "CLAUDE.md"), "# Billing\n\nExisting text.");
-    putNote(store, { id: "cents", scope: SCOPE, title: "Amounts are integer cents", body: "Never use floats for money." });
-
-    const dry = kb(store, ["promote", "cents", "--to", "CLAUDE.md", "--dry-run", "--json"], { cwd: repo });
-    expect(dry.json).toMatchObject({ id: "cents", written: false, addition: "\n\n<!-- kb: cents -->\n## Amounts are integer cents\n\nNever use floats for money.\n" });
-    expect(readFileSync(join(repo, "CLAUDE.md"), "utf8")).toBe("# Billing\n\nExisting text.");
-    expect(store.find("cents")!.promoted_to).toBeUndefined();
-
-    const real = kb(store, ["promote", "cents", "--to", "CLAUDE.md", "--json"], { cwd: repo });
-    expect(real.json.written).toBe(true);
-    expect(readFileSync(join(repo, "CLAUDE.md"), "utf8")).toBe("# Billing\n\nExisting text.\n\n<!-- kb: cents -->\n## Amounts are integer cents\n\nNever use floats for money.\n");
-    expect(store.find("cents")!.promoted_to).toBe("CLAUDE.md");
-    expect(kb(store, ["context"], { cwd: repo }).stdout).not.toContain("cents");
-    expect(kb(store, ["promote", "cents", "--to", "CLAUDE.md"], { cwd: repo }).code).toBe(1);
-  });
-
-  test("creates AGENTS.md when it is missing", () => {
-    const { repo, store } = fixture();
-    putNote(store, { id: "cents", scope: SCOPE, title: "Amounts are integer cents", body: "Never use floats." });
-    expect(kb(store, ["promote", "cents", "--to", "AGENTS.md"], { cwd: repo }).code).toBe(0);
-    expect(readFileSync(join(repo, "AGENTS.md"), "utf8")).toBe("<!-- kb: cents -->\n## Amounts are integer cents\n\nNever use floats.\n");
-  });
-
-  test("refuses another file name, a note of another scope, and a run outside the repo", () => {
-    const { repo, store } = fixture();
-    putNote(store, { id: "cents", scope: SCOPE });
-    putNote(store, { id: "g" });
-    expect(kb(store, ["promote", "cents", "--to", "README.md"], { cwd: repo }).code).toBe(1);
-    expect(kb(store, ["promote", "cents", "--to", "../CLAUDE.md"], { cwd: repo }).code).toBe(1);
-    expect(kb(store, ["promote", "g", "--to", "CLAUDE.md"], { cwd: repo }).code).toBe(1);
-    expect(kb(store, ["promote", "cents", "--to", "CLAUDE.md"]).code).toBe(1);
-    expect(existsSync(join(repo, "CLAUDE.md"))).toBe(false);
-    rmSync(join(repo, "src"), { recursive: true });
-  });
-});

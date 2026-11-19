@@ -39,8 +39,10 @@ export function normalizeRemote(url: string): string | null {
  * Resolve the scope for a path.
  * With an origin remote: the normalised remote. Without one: the directory name of the main
  * checkout (worktrees share it), recorded in local.json so the id can be pinned after a rename.
+ * `record: false` reads local.json and never writes it: a hook on every Read must not add an alias
+ * for each scratch repo the agent looks at.
  */
-export function resolveRepo(path: string, store: Store): RepoInfo {
+export function resolveRepo(path: string, store: Store, options: { record?: boolean } = {}): RepoInfo {
   const none: RepoInfo = { scope: null, root: null, head: null };
   const top = git(path, "rev-parse", "--show-toplevel");
   if (!top.ok || !top.out) return none;
@@ -69,7 +71,7 @@ export function resolveRepo(path: string, store: Store): RepoInfo {
   const known = local.aliases[main];
   if (known) return { scope: known, root, head };
   const scope = slugify(basename(main)) || "repo";
-  if (store.exists()) {
+  if (store.exists() && options.record !== false) {
     local.aliases[main] = scope;
     try {
       store.saveLocal(local);

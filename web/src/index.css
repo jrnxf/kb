@@ -156,3 +156,10 @@ code {
 @media (hover: none) and (pointer: coarse) {
   [data-slot="kbd"], [data-slot="kbd-group"], [data-keys-only] { display: none !important; }
 }
+
+/* The colour of an audit pick, as --a, for its square, its key and its summary line. */
+.a-rewrite, .a-ask { --a: var(--link); }
+.a-trash { --a: var(--destructive); }
+.a-merge { --a: var(--k-decision); }
+.a-keep { --a: var(--faint); }
+.a-promote { --a: var(--k-convention); }
