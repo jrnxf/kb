@@ -16,6 +16,13 @@ export type Why = "task" | "check";
 export type WriteOp = "add" | "update" | "trash" | "restore" | "delete" | "verify";
 
 /**
+ * Why the record of an unsaved session was dropped. short: a measure found nothing to recover.
+ * user: `kb unsaved --forget`. aged: 7 days passed. gone: its transcript is no longer on disk.
+ */
+export const FORGET_WHYS = ["short", "user", "aged", "gone"] as const;
+export type ForgetWhy = (typeof FORGET_WHYS)[number];
+
+/**
  * Who an event belongs to, when known. `agent` is set for a subagent. `scope` is the repo id of the
  * directory the event came from, or "global" outside any repo.
  */
@@ -67,13 +74,37 @@ export type LogEvent = Who &
      * false, `hits` is 0 and `closest` counts the notes with the most words, which the search printed.
      */
     | { ev: "search"; query: string; hits: number; complete?: boolean; closest?: number; why: Why }
-    /** `neighbors`: the close notes that `kb add` showed when it wrote the note. */
-    | { ev: "write"; note: string; op: WriteOp; neighbors?: string[] }
+    /**
+     * `from`: the write came from a recovery, and this is the unsaved session it read.
+     * `neighbors`: the close notes that `kb add` showed when it wrote the note.
+     */
+    | { ev: "write"; note: string; op: WriteOp; from?: string; neighbors?: string[] }
     /** `kb add` wrote nothing and showed these close notes. The next write of the session says what the writer did. */
     | { ev: "neighbors"; title: string; neighbors: string[] }
     | { ev: "verdict"; note: string; verdict: Verdict }
     | { ev: "checkpoint" }
-    | { ev: "unsaved"; reason?: string }
+    /**
+     * A session ended. `reason` is the word of the harness: clear, other, and so on. `checkpoint`
+     * says if /kb:checkpoint had run in it. A session that is resumed ends more than once.
+     */
+    | { ev: "ended"; reason: string; checkpoint: boolean }
+    /**
+     * A session that ended with no checkpoint is worth a recovery. Written once per session, by the
+     * measure of a later session start or of /kb:recover, with what it counted. A transcript too
+     * large to measure at a start has `large` and no counts. A line with neither is of an older
+     * kb, and means only that a session ended with no checkpoint after /clear: `saysWorth`.
+     */
+    | { ev: "unsaved"; reason?: string; prompts?: number; failed?: number; large?: true }
+    /**
+     * Another session saved the knowledge of an unsaved one. `session` is the session that was
+     * recovered, `by` the session that did it, and `notes` the notes the recovery wrote.
+     */
+    | { ev: "recover"; by?: string; notes: string[]; reason?: string }
+    /**
+     * The record of an unsaved session was dropped, and nothing recovered it. `worth` is there
+     * when the log has an `unsaved` line for the session. `by` is the session that asked.
+     */
+    | { ev: "forgotten"; why: ForgetWhy; worth?: true; by?: string }
   );
 
 /** An event as the log holds it. A reader must expect kinds and fields that a later kb wrote. */
@@ -232,7 +263,13 @@ export interface LogSummary {
   starts: number;
   searches: { task: number; check: number };
   checkpoints: number;
+  /** Session ends, and those of a session in which a checkpoint had run. */
+  ended: { all: number; checkpointed: number };
+  /** Sessions that were worth a recovery, each once, and those that another session saved later. */
   unsaved: number;
+  recovered: number;
+  /** Records of unsaved sessions that were dropped, by why. `worth` counts those that were worth a recovery. */
+  forgotten: Record<ForgetWhy, number> & { worth: number };
   /** Every note the events name, by id. */
   notes: NoteLog[];
 }
@@ -268,6 +305,12 @@ function finalVerdicts(events: Logged[]): { note: string; verdict: Verdict; t: s
   return [...last.values()];
 }
 
+/**
+ * True for an `unsaved` line that says the session is worth a recovery: it has what a measure
+ * found. An older kb wrote the line with no measure, at each /clear with no checkpoint.
+ */
+export const saysWorth = (event: Record<string, unknown>) => typeof event.prompts === "number" || event.large === true;
+
 export function summarize(events: Logged[]): LogSummary {
   const notes = new Map<string, NoteLog>();
   const of = (id: unknown): NoteLog | null => {
@@ -275,8 +318,10 @@ export function summarize(events: Logged[]): LogSummary {
     if (!notes.has(id)) notes.set(id, emptyNoteLog(id));
     return notes.get(id)!;
   };
-  const summary: LogSummary = { from: events[0]?.t ?? null, to: events.at(-1)?.t ?? null, events: events.length, sessions: 0, starts: 0, searches: { task: 0, check: 0 }, checkpoints: 0, unsaved: 0, notes: [] };
+  const summary: LogSummary = { from: events[0]?.t ?? null, to: events.at(-1)?.t ?? null, events: events.length, sessions: 0, starts: 0, searches: { task: 0, check: 0 }, checkpoints: 0, ended: { all: 0, checkpointed: 0 }, unsaved: 0, recovered: 0, forgotten: { short: 0, user: 0, aged: 0, gone: 0, worth: 0 }, notes: [] };
   const sessions = new Set<string>();
+  /** A session is worth a recovery once, also when two starts measured it at the same moment. */
+  const unsaved = new Set<string>();
   // The fields are read as unknown: a later kb, or a hand edit, may have written another shape.
   for (const event of events as Raw[]) {
     const session = text(event.session);
@@ -308,8 +353,22 @@ export function summarize(events: Logged[]): LogSummary {
       case "checkpoint":
         summary.checkpoints++;
         break;
+      case "ended":
+        summary.ended.all++;
+        if (event.checkpoint === true) summary.ended.checkpointed++;
+        break;
       case "unsaved":
-        summary.unsaved++;
+        // The line of an older kb is a session end with no checkpoint, which had no `ended` line then.
+        if (!saysWorth(event)) summary.ended.all++;
+        else if (!session) summary.unsaved++;
+        else unsaved.add(session);
+        break;
+      case "recover":
+        summary.recovered++;
+        break;
+      case "forgotten":
+        if (FORGET_WHYS.includes(event.why as ForgetWhy)) summary.forgotten[event.why as ForgetWhy]++;
+        if (event.worth === true) summary.forgotten.worth++;
         break;
       case "write":
         // A note that only a write names still gets a row, so a new note is in the summary.
@@ -319,6 +378,7 @@ export function summarize(events: Logged[]): LogSummary {
   }
   for (const { note, verdict } of finalVerdicts(events)) of(note)!.verdicts[verdict]++;
   summary.sessions = sessions.size;
+  summary.unsaved += unsaved.size;
   summary.notes = [...notes.values()].sort((a, b) => a.id.localeCompare(b.id));
   return summary;
 }

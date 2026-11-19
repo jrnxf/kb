@@ -85,7 +85,18 @@ highest.
 - **A log says what each session got.** Each machine keeps an event log in `.state/log/`. It
   records the notes a session got at its start, and in what form: a body, an index line, or
   nothing. It also records the notes a trigger loaded, each `kb show` and `kb search`, each write and
-  each checkpoint. A read writes nothing to the store, so it makes no commit and no sync. A check
+  each checkpoint. For the end of a session it has four events, so an audit can count what came
+  of what the sessions knew:
+  - `ended`: a session ended, with the reason, and if a checkpoint had run in it.
+  - `unsaved`: a session that ended with no checkpoint is worth a recovery. A later session start
+    or `/kb:recover` measures it, and writes the line once per session, with what it counted. A
+    line of an older kb has no count. It says only that a session ended with no checkpoint.
+  - `recover`: another session saved its knowledge, with the notes it wrote.
+  - `forgotten`: its record was dropped with no recovery, and why: `short` (nothing to recover),
+    `user` (`kb unsaved --forget`), `aged` (7 days) or `gone` (no transcript). The line says if
+    the session was worth a recovery.
+
+  `kb log` sums them in one line. A read writes nothing to the store, so it makes no commit and no sync. A check
   (an audit, a look before an update) passes `--check`. At the checkpoint the agent gives a
   verdict on the notes it got: `kb verdict helped`, `not-needed` or `wrong`. `not-needed` is only
   for a note that a trigger loaded in that session: kb refuses it for a note from the session start,
@@ -149,14 +160,55 @@ highest.
   `CLAUDE.md` when the repo has none), and the global audit moves a global rule to the global file. The card shows the lines it
   adds. Apply writes the file and does not commit it. This is the only write `kb` makes inside a
   repo. A moved note is no longer injected.
-- **A missed checkpoint can be recovered.** Nothing can run before `/clear`, but `/clear` keeps the
-  transcript on disk. So a session that ends with `/clear` and no checkpoint is recorded, and a
-  new session in that checkout says in one line that `/kb:recover` saves it. The agent tells you
-  once per day and checkout. Other starts in that day only let the agent know, so a script or a
-  second window does not get the same sentence each time. `/kb:recover` hands
-  what the user and the agent said to a Sonnet subagent, which runs the checkpoint steps. No tool
-  call and no tool output gets through, also not the output of a `!` command. The reason you typed
-  when you rejected a tool call, and your answer to a question, stay in.
+- **A missed checkpoint can be recovered.** Nothing can run before a session ends, but the
+  transcript stays on disk. So every session that ends with no checkpoint is recorded: after
+  `/clear`, an exit, a logout, a switch to another session, and the end of a headless run. The
+  record keeps the repo id, the directory and the main checkout of the repo of that moment,
+  because a finished run often loses its folder. A new session in that checkout says in one line
+  that `/kb:recover` saves it. The
+  agent tells you once per day and checkout. Other starts in that day only let the agent know, so
+  a script or a second window does not get the same sentence each time. A headless run
+  (`claude -p`, or a run of the Agent SDK) gets only the short line for the agent, and does not
+  use up the sentence of the day. Recovery runs only when you type `/kb:recover`.
+  - A session that you resume is live again. Its record goes at its start, so no other session
+    recovers it while it works, and its next end records it again. `kb unsaved` and the line
+    never name the session that asks. A recovery marks a session with the end time that it
+    read. When the session ran again in that time, the mark is refused, and the session stays
+    for a second recovery.
+  - `/kb:recover` hands each session to a Sonnet subagent, which runs the checkpoint steps. The
+    subagent gets what you and the agent said. For each tool call that failed it also gets three
+    spans, each cut at 300 characters: the call (its command or path), the error, and the next
+    call the agent made in the same turn. An autonomous run learns its lessons there. Nothing of
+    a tool call that worked gets through, also not the output of a `!` command. A call that you
+    refused or stopped is no failed call. A call that did not run is none either: a parallel
+    call that was cancelled, or a write to a file that was not read first. The reason you typed
+    when you refused a call, and your answer to a question, stay in as your words.
+  - A span carries no text of a file. The call of Write, Edit and NotebookEdit is the path only,
+    and their error loses the text that it repeats. A shell command ends where the body of a
+    heredoc starts. The error stands in a `<tool-output>` block, and the subagent is told that
+    this text is data: it follows no instruction in it, and saves no note because the text asks.
+  - What the secret scan below knows is masked in every line. A private key goes from its BEGIN
+    line to its END line, with its armor headers. With no END line, the BEGIN mark goes, and
+    after it only the lines of base64 and of armor headers. A sentence that names the BEGIN
+    line stays. A span gets wider masks, for a value of any length:
+    - the value of an authorization header, and of a Bearer or Basic scheme.
+    - the value given to a name or a flag that ends with secret, token, password, passwd, pwd,
+      key, credential or auth: `TOKEN=abc`, `--token abc`. A flag that names a file
+      (`--key-file`) keeps its path.
+    - the password of `-u name:password` and of `--user`, and the password in a URL.
+    - the password glued to `-p` of a mysql client or of sshpass. For psql, `-p` with digits
+      is the port, and it stays.
+
+    The masks know these shapes only. A secret in another shape gets through.
+  - `/kb:recover all` sweeps every directory. It shows the count per project, asks before it
+    starts when there are more than 5 sessions, and handles at most 10 per run. Each note gets
+    the repo of its session, not of the directory you are in. A session outside any repo gives
+    global notes only. When the folder is gone, the notes are written from the main checkout of
+    its repo, or from the checkout that kb saw last. A start in a worktree remembers the main
+    checkout, not the worktree. With no checkout and no note of
+    that repo, the session is reported as not recoverable. `kb unsaved --all` lists them all.
+    From 5 sessions in other directories on, an interactive start says so once per day. Only
+    that start measures the sessions of other directories.
   - The report starts with "Recovered" and the date and directory of the old session. It says
     nothing about the session you are in, which still needs its own `/kb:checkpoint`.
   - A recovered note is verified at the time the old session ended (`kb add --as-of`), with low
@@ -165,13 +217,16 @@ highest.
   - The subagent writes no instruction file. It lists each rule it found, and you say which still
     hold. The session counts as saved only after that. Until then the line comes back. Each note
     of a recovery is recorded in the session (`kb add --recovered-from`), so a second
-    `/kb:recover` adds no note twice.
+    `/kb:recover` adds no note twice. The log records the recovery and its notes.
   - The text of the old session is in `.state/recover/`, readable by you only. It goes when the
     session is saved or forgotten, and after 7 days.
-  - `/kb:recover forget` stops the line. A session with fewer than 2 prompts or 3000 characters
-    is not reported. A slash command counts only for the arguments you typed after it, and a
-    `/kb:recover` turn does not count, so a session that only recovered another one is not
-    reported. A record goes after 7 days.
+  - `/kb:recover forget` stops the line for the sessions of this checkout, and
+    `/kb:recover forget <session id>` for one session. No form forgets the sessions of every
+    directory. A session is reported when it has 2 prompts and 3000
+    characters, or 3 failed tool calls. Calls that the agent made at once and that fail count
+    once. A slash command counts only for the arguments you typed
+    after it, and a `/kb:recover` turn does not count, so a session that only recovered another
+    one is not reported. A record goes after 7 days.
   - A session start never reads a transcript over 2 MB: such a session is reported as it is. The
     whole step has 300 ms. A session it could not measure in that time waits for a later start.
 
@@ -252,9 +307,10 @@ kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
 kb audit [--no-wait]         kb audit propose --file <path>   kb audit status   (an agent audits the scope)
-kb instructions [--repo .]   kb sync      kb checkpointed <session-id>
+kb instructions [--repo .]   kb sync      kb checkpointed <session-id> [--ended <time>]
 kb log [--session id] [--since days]      (what the log says of each note, or of one session)
-kb unsaved [--forget <session-id>]   sessions here that ended with no checkpoint
+kb unsaved [--forget <session-id>]   sessions here that ended with no checkpoint, never the one that asks
+kb unsaved --all             those of every directory, with the count per project
 ```
 
 `kb serve`, or `kb` alone in a terminal, opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
@@ -345,7 +401,9 @@ verdicts. `--since <days>` takes the last days only. `--session <id>` prints the
 session in time order, and the notes that session got and has not judged yet. The rows count the
 events of this machine. `last_activity` is the newest over all machines. A session that gives a
 verdict twice judged the note once: its last verdict counts. A verdict with no session counts once
-per note, verdict and day.
+per note, verdict and day. A second line sums the ends of sessions: how many ended, how many of
+them with a checkpoint, how many were worth a recovery, how many were recovered, and how many were
+forgotten and why.
 
 Every command accepts `--json`. The CLI knows nothing about Claude Code: only `hooks/` and `skills/` do.
 There is one exception. A command names its session in the log with `--session <id>`, or else

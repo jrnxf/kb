@@ -198,6 +198,17 @@ describe("the summary of the log", () => {
     expect(summarize([])).toMatchObject({ from: null, to: null, events: 0, notes: [] });
   });
 
+  // Before kb measured a session, `unsaved` meant "ended after /clear with no checkpoint". A log keeps such lines for good.
+  test("an unsaved line with no measure is a session end with no checkpoint, and not a session worth a recovery", () => {
+    const store = tempStore();
+    for (const [i, session] of ["old-1", "old-2", "old-3"].entries()) logAt(store, `2026-03-01T10:0${i}:00Z`, { ev: "unsaved", session, reason: "clear" });
+    logAt(store, "2026-03-02T10:00:00Z", { ev: "ended", session: "new-1", reason: "other", checkpoint: false });
+    logAt(store, "2026-03-02T10:01:00Z", { ev: "unsaved", session: "new-1", reason: "other", prompts: 4, failed: 0 });
+    logAt(store, "2026-03-02T10:02:00Z", { ev: "ended", session: "new-2", reason: "other", checkpoint: false });
+    logAt(store, "2026-03-02T10:03:00Z", { ev: "unsaved", session: "new-2", reason: "other", large: true });
+    expect(summarize(readLog(store))).toMatchObject({ ended: { all: 5, checkpointed: 0 }, unsaved: 2 });
+  });
+
   test("takes a line of any shape: an empty id, a missing note, a number where a text belongs", () => {
     const store = tempStore();
     logAt(store, "2026-03-01T10:00:00Z", { ev: "show", session: "s1", note: "a", why: "task" });
