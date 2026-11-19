@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { recordUnsaved } from "../cli/session.ts";
 import type { Store } from "../cli/store.ts";
 import { readConversation, worthRecovering } from "../hooks/transcript.ts";
-import { ROOT, kb, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { ROOT, kb, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const write = (lines: unknown[]) => {
   const path = join(tempDir("kb-transcript-"), "s1.jsonl");
@@ -67,15 +67,23 @@ describe("the transcript reader", () => {
     expect(read).toEqual({ prompts: 1, chars: "Deploy itDone.".length, text: "## user\n\nDeploy it\n\n## agent\n\nDone.\n" });
   });
 
-  test("a slash command is a short marker, and no prompt", () => {
-    const read = readConversation(
-      write([command("clear"), user("<local-command-stdout></local-command-stdout>"), user("Fix the login bug"), says("Done."), skill("billing:deploy", "staging now"), says("Deployed.")]),
-    );
+  test("a slash command with no arguments is a short marker, and no prompt", () => {
+    const read = readConversation(write([command("clear"), user("<local-command-stdout></local-command-stdout>"), user("Fix the login bug"), says("Done."), skill("billing:deploy"), says("Deployed.")]));
     expect(read.prompts).toBe(1);
     expect(read.chars).toBe("Fix the login bugDone.Deployed.".length);
-    expect(read.text).toBe("## user\n\n(the user ran /clear)\n\nFix the login bug\n\n## agent\n\nDone.\n\n## user\n\n(the user ran /billing:deploy staging now)\n\n## agent\n\nDeployed.\n");
+    expect(read.text).toBe("## user\n\n(the user ran /clear)\n\nFix the login bug\n\n## agent\n\nDone.\n\n## user\n\n(the user ran /billing:deploy)\n\n## agent\n\nDeployed.\n");
     // A prompt that only names the tags is still a prompt.
     expect(readConversation(write([user("Why does <command-name>/clear</command-name> show in the file?")])).prompts).toBe(1);
+  });
+
+  // A custom command gets the user's whole instruction as its arguments. Those are the user's words.
+  test("the arguments of a slash command are a prompt, with the command name in front", () => {
+    const task = "Move the rate table to the config file.\nKeep the old keys for one release.";
+    const read = readConversation(write([skill("billing:task", task), says("Moved."), command("model", "sonnet"), skill("billing:deploy", "staging now"), says("Deployed.")]));
+    expect(read.prompts).toBe(3);
+    // The name of the command is not the user's own words, so it does not count.
+    expect(read.chars).toBe(`${task}Moved.sonnetstaging nowDeployed.`.length);
+    expect(read.text).toBe(`## user\n\n/billing:task ${task}\n\n## agent\n\nMoved.\n\n## user\n\n/model sonnet\n\n/billing:deploy staging now\n\n## agent\n\nDeployed.\n`);
   });
 
   test("a stop by the user is no prompt", () => {
@@ -138,6 +146,8 @@ describe("the transcript reader", () => {
 
     test("counts for nothing and leaves no text", () => {
       expect(readConversation(write([command("clear"), ...recover]))).toEqual({ prompts: 0, chars: 0, text: "## user\n\n(the user ran /clear)\n" });
+      // Its argument is no prompt of the session either.
+      expect(readConversation(write([command("clear"), skill("kb:recover", "forget"), says("I forgot 2 sessions.")]))).toEqual({ prompts: 0, chars: 0, text: "## user\n\n(the user ran /clear)\n" });
     });
 
     test("ends at the next prompt, so the work around it still counts", () => {
@@ -200,20 +210,80 @@ describe("kb-transcript", () => {
   test("names the notes that an earlier recovery of the session saved, so a second one adds no twin", () => {
     const store = tempStore();
     const dir = tempDir();
-    lost(store, "s1", dir, "2020-01-01T00:00:00.500Z");
-    const add = (time: string, title: string) => kb(store, ["add", "--json", "--as-of", time], { stdin: JSON.stringify({ title, kind: "gotcha", body: "x", scope: "global" }), cwd: dir });
-    add("2020-01-01T00:00:00.500Z", "The provider retries a webhook for 3 days");
-    add("2020-01-02T00:00:00Z", "A note from the recovery of another session");
-    kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "A note of today", kind: "gotcha", body: "x", scope: "global" }), cwd: dir });
+    const ended = "2020-01-01T00:00:00.500Z";
+    lost(store, "s1", dir, ended);
+    lost(store, "s2", dir, ended);
+    const add = (flags: string[], note: object) => kb(store, ["add", "--json", ...flags], { stdin: JSON.stringify({ kind: "gotcha", body: "x", scope: "global", ...note }), cwd: dir });
+    const from = (session: string, note: object) => add(["--as-of", ended, "--recovered-from", session], note);
+    const retries = from("s1", { title: "The provider retries a webhook for 3 days" }).json.id;
+    const retired = from("s1", { title: "The old queue drops a job" }).json.id;
+    const deleted = from("s1", { title: "A note that is deleted later" }).json.id;
+    // The same time of the same day proves nothing: only the flag records a note.
+    from("s2", { title: "A note from the recovery of another session" });
+    add(["--as-of", ended], { title: "A note with the same time and no session" });
+    putNote(store, { id: "checked-later", last_verified: "2021-01-01T00:00:00Z" });
+    // A note that exists already, or that somebody checked later, is not a note of this recovery.
+    expect(from("s1", { title: "A note with the same time and no session" }).json.status).toBe("exists");
+    expect(from("s1", { id: "checked-later", body: "old text" }).json.status).toBe("newer");
+    // An update is: the recovery added a fact to it.
+    putNote(store, { id: "an-older-note", last_verified: "2019-01-01T00:00:00Z" });
+    expect(from("s1", { id: "an-older-note", body: "with the fact of the session" }).json.status).toBe("updated");
+    expect(from("s1", { id: "an-older-note", body: "with one more fact" }).json.status).toBe("updated");
+
+    // A later check or edit moves the note's time. The list must still hold it.
+    kb(store, ["verify", retries], { cwd: dir });
+    kb(store, ["add", "--json"], { stdin: JSON.stringify({ id: retries, body: "edited today" }), cwd: dir });
+    kb(store, ["trash", retired]);
+    kb(store, ["delete", deleted]);
+    expect(store.find(retries)!.last_verified > "2026").toBe(true);
+
     const text = readFileSync(JSON.parse(run(store, "s1").out).file, "utf8");
-    expect(text).toContain("Notes that an earlier /kb:recover of this session saved:\nthe-provider-retries-a-webhook-for-3-days | The provider retries a webhook for 3 days\n\n## user");
+    expect(text).toContain(
+      `Notes that an earlier /kb:recover of this session saved:\n${retries} | The provider retries a webhook for 3 days\n${retired} (in the trash) | The old queue drops a job\nan-older-note | Title of an-older-note\n\n## user`,
+    );
+  });
+
+  test("--recovered-from needs an unsaved session, and writes nothing without one", () => {
+    const store = tempStore();
+    const dir = tempDir();
+    const note = JSON.stringify({ title: "Never written", kind: "gotcha", body: "x", scope: "global" });
+    const result = kb(store, ["add", "--json", "--recovered-from", "nobody"], { stdin: note, cwd: dir });
+    expect(result).toMatchObject({ code: 1, json: { error: "no unsaved session nobody. `kb unsaved` lists them." } });
+    expect(kb(store, ["add", "--recovered-from"], { stdin: note })).toMatchObject({ code: 1, stderr: "--recovered-from needs a value\n" });
+    expect(store.notes()).toEqual([]);
+    // The mark keeps its age, so a record of a note does not keep the session for 7 more days.
+    lost(store, "s1", dir);
+    const mark = join(store.home, ".state", "unsaved-s1.json");
+    const threeDaysAgo = new Date(Date.now() - 3 * 86_400_000);
+    utimesSync(mark, threeDaysAgo, threeDaysAgo);
+    expect(kb(store, ["add", "--json", "--recovered-from", "s1"], { stdin: note, cwd: dir }).json.status).toBe("created");
+    expect(JSON.parse(readFileSync(mark, "utf8")).notes).toEqual(["never-written"]);
+    expect(Math.abs(statSync(mark).mtimeMs - threeDaysAgo.getTime())).toBeLessThan(1000);
   });
 
   test("reads only a session that has a mark", () => {
     const store = tempStore();
-    expect(run(store, "nobody")).toMatchObject({ code: 1, out: "", err: expect.stringContaining("no unsaved session nobody") });
+    expect(run(store, "nobody")).toEqual({ code: 1, out: '{"error":"no unsaved session nobody. `kb unsaved` lists them."}\n', err: "" });
     expect(run(store)).toMatchObject({ code: 1, out: "" });
     expect(existsSync(join(store.home, ".state", "recover"))).toBe(false);
+  });
+
+  // A stack trace names the raw transcript, and an agent that sees it can go and read the tool output there.
+  test("a transcript that cannot be read gives one JSON error, with no path and no stack", () => {
+    if (process.getuid?.() === 0) return; // root reads every file
+    const store = tempStore();
+    const dir = tempDir();
+    const transcript = lost(store, "locked", dir);
+    chmodSync(transcript, 0o000);
+    try {
+      const r = run(store, "locked");
+      expect(r).toEqual({ code: 1, out: '{"error":"the conversation of session locked cannot be read now (EACCES). Its mark stays."}\n', err: "" });
+      expect(existsSync(recoverFile(store, "locked"))).toBe(false);
+      expect(kb(store, ["unsaved", "--json"], { cwd: dir }).json).toMatchObject([{ session: "locked" }]);
+    } finally {
+      chmodSync(transcript, 0o600);
+    }
+    expect(run(store, "locked").code).toBe(0);
   });
 
   test("the file goes when the session is marked or forgotten, when its transcript is gone, and after 7 days", () => {
@@ -238,10 +308,15 @@ describe("kb-transcript", () => {
     const fresh = file("fresh");
     const eightDaysAgo = new Date(Date.now() - 8 * 86_400_000);
     utimesSync(old, eightDaysAgo, eightDaysAgo);
+    // The record of the day the user was told about unsaved sessions ages the same way.
+    const told = ["told-0123456789abcdef-2020-01-01", "told-0123456789abcdef-2020-01-02"].map((name) => join(store.home, ".state", name));
+    for (const path of told) writeFileSync(path, "");
+    utimesSync(told[0]!, eightDaysAgo, eightDaysAgo);
     writeFileSync(transcript, "");
     sh(dir, "rm", transcript);
     // Each session start lists the unsaved sessions, and so does `kb unsaved`.
     kb(store, ["unsaved"], { cwd: dir });
     expect([orphan, old, fresh].map((path) => existsSync(path))).toEqual([false, false, true]);
+    expect(told.map((path) => existsSync(path))).toEqual([false, true]);
   });
 });

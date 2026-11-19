@@ -44,7 +44,8 @@ try {
   if (store.exists()) {
     const repo = resolveRepo(cwd, store);
     // Sessions of this directory or checkout that ended with /clear and no checkpoint. A resume or
-    // a compaction is the same session, which already had the line.
+    // a compaction is the same session, which already had the line. The step never throws and has
+    // its own time budget, so no transcript can cost the session its notes.
     const lost = input.source === "startup" || input.source === "clear" ? unsavedNotice(store, cwd, repo.root) : null;
     if (lost) notices.push(lost);
 

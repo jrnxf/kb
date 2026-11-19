@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { SAVE_RULE } from "../cli/context.ts";
+import { forgetUnsaved, markSaved, recordSize, recordUnsaved, unsavedSession } from "../cli/session.ts";
 import { MEMORY_ON_NOTICE, MEMORY_RULE } from "../hooks/auto-memory.ts";
+import { BUDGET_MS, PARSE_LIMIT, unsavedNotice } from "../hooks/unsaved-notice.ts";
 import { ROOT, kb, plain, putNote, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const HOOK = join(ROOT, "hooks", "session-start.sh");
@@ -174,6 +176,15 @@ describe("plugin files", () => {
     // A note from an old conversation is verified when the session ended, and it is a guess until somebody checks it.
     expect(prompt).toContain("Pass `--as-of <ended>` to every `kb add`.");
     expect(prompt).toContain('Set `"confidence": "low"`');
+    // Each note of a recovery is recorded in the old session, and the prompt names the session.
+    expect(prompt).toContain("Pass `--recovered-from <session>` to every `kb add` too.");
+    expect(prompt).toContain("Its session id is `<session>`.");
+    // A note that somebody checked after the session keeps its text. What the session adds goes to the user.
+    expect(prompt).toContain("When `kb add` answers `newer`");
+    expect(prompt).toContain("under **Check by hand**");
+    // A session that cannot be read is reported, and nobody opens the .jsonl with its tool output.
+    expect(recover).toContain('When it prints `{"error"}`, report that session as not recoverable now, and go on to the next one.');
+    expect(recover).toContain("Never read the raw transcript.");
   });
 
   test("bin/kb runs from another directory", () => {
@@ -198,6 +209,8 @@ describe("session notices", () => {
   const endInput = (cwd: string, session: string, reason = "clear", path = transcript(session)) => ({ session_id: session, transcript_path: path, cwd, hook_event_name: "SessionEnd", reason });
   const startInput = (cwd: string, source: string, session = "next") => JSON.stringify({ session_id: session, transcript_path: "/home/user/next.jsonl", cwd, hook_event_name: "SessionStart", source });
   const NOTICE = "An earlier session here ended with /clear before /kb:checkpoint ran. Tell the user in one line, in your first reply, that /kb:recover saves its knowledge or forgets it.";
+  // What the other starts of the same day get: a fact for the agent, with no instruction to speak.
+  const QUIET = "An earlier session here has unsaved knowledge. The user can run /kb:recover.";
   const unsaved = (store: ReturnType<typeof tempStore>, cwd: string) => kb(store, ["unsaved", "--json"], { cwd }).json.map((s: { session: string }) => s.session);
 
   test("a /clear with no checkpoint is reported at each new start in the same directory, until it is recovered", () => {
@@ -213,16 +226,43 @@ describe("session notices", () => {
     const first = runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout;
     expect(first).toContain("### g [gotcha]");
     expect(first).toContain(NOTICE);
-    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(NOTICE);
+    // The agent tells the user once per day. A later start of that day only knows about it.
+    for (const source of ["startup", "clear"]) {
+      const later = runHook({ home: store.home, stdin: startInput(repo, source) }).stdout;
+      expect(later).toContain(QUIET);
+      expect(later).not.toContain("Tell the user in one line, in your first reply, that /kb:recover");
+    }
     // A resume or a compaction is the same session, which already had the notice.
-    for (const source of ["resume", "compact"]) expect(runHook({ home: store.home, stdin: startInput(repo, source) }).stdout).not.toContain(NOTICE);
+    for (const source of ["resume", "compact", "fork"]) expect(runHook({ home: store.home, stdin: startInput(repo, source) }).stdout).not.toContain("/kb:recover");
     expect(unsaved(store, repo)).toEqual(["lost"]);
     expect(kb(store, ["unsaved", "--json"], { cwd: repo }).json[0]).toMatchObject({ session: "lost", transcript: join(transcripts, "lost.jsonl"), cwd: repo });
 
     // /kb:recover ends with the old session's checkpoint.
     kb(store, ["checkpointed", "lost"]);
-    expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain(NOTICE);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain("/kb:recover");
     expect(unsaved(store, repo)).toEqual([]);
+  });
+
+  // A script that runs `claude -p` in a loop, or a second window, must not get the sentence in every run.
+  test("the instruction to tell the user comes once per day and checkout", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    const other = tempDir("kb-plain-");
+    mkdirSync(join(repo, "src"));
+    for (const [session, cwd] of [["one", repo], ["two", join(repo, "src")], ["elsewhere", other]] as const) recordUnsaved(store, { session, transcript: transcript(session), cwd, ended: new Date().toISOString() });
+    const TOLD = "2 earlier sessions here ended with /clear before /kb:checkpoint ran. Tell the user";
+    const KNOWN = "2 earlier sessions here have unsaved knowledge. The user can run /kb:recover.";
+    const monday = new Date(2026, 0, 5, 9, 0);
+    const notice = (cwd: string, root: string | null, day: Date) => unsavedNotice(store, cwd, root, undefined, day);
+    expect(notice(repo, repo, monday)).toStartWith(TOLD);
+    expect(notice(repo, repo, new Date(2026, 0, 5, 23, 59))).toBe(KNOWN);
+    // A start in a subdirectory is the same checkout.
+    expect(notice(join(repo, "src"), repo, monday)).toBe(KNOWN);
+    // Another directory has its own day, and so has the next day.
+    expect(notice(other, null, monday)).toBe(NOTICE);
+    expect(notice(other, null, monday)).toBe(QUIET);
+    expect(notice(repo, repo, new Date(2026, 0, 6, 0, 1))).toStartWith(TOLD);
+    expect(notice(repo, repo, new Date(2026, 0, 6, 0, 2))).toBe(KNOWN);
   });
 
   test("forget stops the notice, and two sessions give one line", () => {
@@ -233,7 +273,8 @@ describe("session notices", () => {
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain("2 earlier sessions here ended with /clear before /kb:checkpoint ran. Tell the user in one line, in your first reply, that /kb:recover saves their knowledge or forgets them.");
     expect(kb(store, ["unsaved", "--forget", "one", "--json"], { cwd: repo }).json).toEqual({ session: "one", forgotten: true });
     expect(kb(store, ["unsaved", "--forget", "one", "--json"], { cwd: repo }).json).toEqual({ session: "one", forgotten: false });
-    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(NOTICE);
+    expect(kb(store, ["unsaved", "--forget"], { cwd: repo })).toMatchObject({ code: 1, stderr: "--forget needs a value\n" });
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(QUIET);
     expect(unsaved(store, repo)).toEqual(["two"]);
   });
 
@@ -291,6 +332,127 @@ describe("session notices", () => {
     expect(unsaved(store, repo).sort()).toEqual(["one-prompt", "recover-and-work", "recover-only"]);
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(NOTICE);
     expect(unsaved(store, repo)).toEqual(["recover-and-work"]);
+  });
+
+  // A session driven by custom commands has its instructions in the arguments of each command.
+  test("a session of slash commands with long arguments is reported", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    const say = (type: string, content: unknown) => JSON.stringify({ type, message: { content } });
+    const run = (args: string) => say("user", `<command-message>billing:task</command-message>\n<command-name>/billing:task</command-name>\n<command-args>${args}</command-args>`);
+    const path = join(transcripts, "commands.jsonl");
+    writeFileSync(path, [run(`Move the rate table. ${"word ".repeat(400)}`), say("assistant", [{ type: "text", text: "Moved." }]), run(`Now the tests. ${"word ".repeat(400)}`), say("assistant", [{ type: "text", text: "Done." }])].join("\n"));
+    end(store.home, endInput(repo, "commands", "clear", path));
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(NOTICE);
+    expect(unsaved(store, repo)).toEqual(["commands"]);
+  });
+
+  // The hook has 5 seconds. A hook that is killed gives the session no notes at all, at every start.
+  describe("a session start stays cheap, whatever the transcripts hold", () => {
+    /** A file of this size with one short prompt in it: a parse would call the session short. */
+    const sized = (session: string, bytes: number) => {
+      const path = join(transcripts, `${session}.jsonl`);
+      writeFileSync(path, `${JSON.stringify({ type: "user", message: { content: "One short prompt" } })}\n`);
+      // A sparse file: the size is real, and the test writes no 40 MB.
+      const file = openSync(path, "r+");
+      ftruncateSync(file, bytes);
+      closeSync(file);
+      return path;
+    };
+
+    test("a transcript over the size limit is reported with no parse, inside the time budget", () => {
+      const store = tempStore();
+      const repo = tempRepo();
+      putNote(store, { id: "g" });
+      const path = sized("huge", 40 * 1024 * 1024);
+      recordUnsaved(store, { session: "huge", transcript: path, cwd: repo, ended: new Date().toISOString() });
+      // The same content under the limit is parsed, and found short.
+      recordUnsaved(store, { session: "small", transcript: sized("small", PARSE_LIMIT), cwd: repo, ended: new Date().toISOString() });
+
+      const started = performance.now();
+      const notice = unsavedNotice(store, repo, repo);
+      expect(performance.now() - started).toBeLessThan(BUDGET_MS);
+      expect(notice).toBe(NOTICE);
+      // No size is kept: nobody measured it.
+      expect(unsavedSession(store, "huge")).toEqual({ session: "huge", transcript: path, cwd: repo, ended: expect.any(String) });
+      expect(unsaved(store, repo)).toEqual(["huge"]);
+
+      const hook = runHook({ home: store.home, stdin: startInput(repo, "startup") });
+      expect(hook.stdout).toContain("### g [gotcha]");
+      expect(hook.stdout).toContain(QUIET);
+      expect(hook.ms).toBeLessThan(1500);
+    });
+
+    test("when the time is used up, the marks left wait for a later start, and the notice covers what is known", () => {
+      const store = tempStore();
+      const repo = tempRepo();
+      const ended = (i: number) => new Date(Date.now() - (10 - i) * 1000).toISOString();
+      for (const [i, session] of ["first", "second", "third"].entries()) recordUnsaved(store, { session, transcript: transcript(session), cwd: repo, ended: ended(i) });
+      recordUnsaved(store, { session: "short", transcript: transcript("short", 1), cwd: repo, ended: ended(3) });
+      // A clock that the test moves: each look at it takes 200 ms, so the time is up after the first transcript.
+      let time = 0;
+      const slow = () => (time += 200);
+      expect(unsavedNotice(store, repo, repo, slow, new Date(2026, 0, 5))).toBe(NOTICE);
+      expect(["first", "second", "third", "short"].map((session) => unsavedSession(store, session)?.size)).toEqual([{ prompts: 3, chars: expect.any(Number) }, undefined, undefined, undefined]);
+      // Nothing is forgotten unmeasured, also not the short one.
+      expect(unsaved(store, repo)).toEqual(["first", "second", "third", "short"]);
+      // A later start has the time, and reads no transcript twice.
+      writeFileSync(join(transcripts, "first.jsonl"), "");
+      expect(unsavedNotice(store, repo, repo, undefined, new Date(2026, 0, 6))).toStartWith("3 earlier sessions here ended with /clear");
+      expect(unsaved(store, repo)).toEqual(["first", "second", "third"]);
+    });
+
+    // `kb checkpointed` can run while a start measures the transcript. The size must not bring the mark back.
+    test("a measured size is written only to a mark that is still there, and the mark keeps its age", () => {
+      const store = tempStore();
+      const dir = tempDir();
+      const size = { prompts: 4, chars: 5000 };
+      const mark = (session: string) => join(store.home, ".state", `unsaved-${session}.json`);
+      for (const session of ["saved", "forgotten", "kept"]) recordUnsaved(store, { session, transcript: transcript(session), cwd: dir, ended: new Date().toISOString() });
+      const threeDaysAgo = new Date(Date.now() - 3 * 86_400_000);
+      utimesSync(mark("kept"), threeDaysAgo, threeDaysAgo);
+      markSaved(store, "saved");
+      forgetUnsaved(store, "forgotten");
+      expect(recordSize(store, "saved", size)).toBe(false);
+      expect(recordSize(store, "forgotten", size)).toBe(false);
+      expect(recordSize(store, "kept", size)).toBe(true);
+      expect([mark("saved"), mark("forgotten"), mark("kept")].map((path) => existsSync(path))).toEqual([false, false, true]);
+      expect(unsavedSession(store, "kept")).toMatchObject({ session: "kept", size });
+      // A write would give the mark 7 more days.
+      expect(Math.abs(statSync(mark("kept")).mtimeMs - threeDaysAgo.getTime())).toBeLessThan(1000);
+      // A mark that says the session is unsaved and a record that it is saved: the record wins.
+      recordUnsaved(store, { session: "saved", transcript: transcript("saved"), cwd: dir, ended: new Date().toISOString() });
+      expect(recordSize(store, "saved", size)).toBe(false);
+      expect(unsavedSession(store, "saved")?.size).toBeUndefined();
+    });
+
+    // A store on a read-only disk, or a full one. The notes must still reach the session.
+    test("a state folder that cannot be written costs the session no notes", () => {
+      if (process.getuid?.() === 0) return; // root writes everywhere
+      const store = tempStore();
+      const repo = tempRepo();
+      putNote(store, { id: "g" });
+      end(store.home, endInput(repo, "lost"));
+      end(store.home, endInput(repo, "headless", "clear", transcript("headless", 1)));
+      const state = join(store.home, ".state");
+      for (const name of ["unsaved-lost.json", "unsaved-headless.json"]) chmodSync(join(state, name), 0o400);
+      chmodSync(state, 0o500);
+      try {
+        expect(unsavedNotice(store, repo, repo)).toBe(QUIET);
+        const out = runHook({ home: store.home, stdin: startInput(repo, "startup") });
+        expect(out).toMatchObject({ code: 0, stderr: "" });
+        expect(out.stdout).toContain("### g [gotcha]");
+        // The day cannot be recorded, so the line never asks the agent to speak.
+        expect(out.stdout).toContain(QUIET);
+        expect(unsavedSession(store, "lost")?.size).toBeUndefined();
+      } finally {
+        chmodSync(state, 0o700);
+        for (const name of ["unsaved-lost.json", "unsaved-headless.json"]) chmodSync(join(state, name), 0o600);
+      }
+      expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(NOTICE);
+      expect(unsavedSession(store, "lost")?.size).toMatchObject({ prompts: 3 });
+      expect(unsaved(store, repo)).toEqual(["lost"]);
+    });
   });
 
   // The hook gets the directory from Claude Code and `kb unsaved` from the shell. A notice that the

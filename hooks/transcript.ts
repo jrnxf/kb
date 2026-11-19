@@ -6,12 +6,11 @@
 import { readFileSync } from "node:fs";
 import { unsavedSession, writeRecoverFile } from "../cli/session.ts";
 import { Store, git } from "../cli/store.ts";
-import { asOfTime } from "../cli/write.ts";
 
 export interface Conversation {
   /** The times the user said something: a prompt, the reason for a rejected tool call, an answer to a question. */
   prompts: number;
-  /** The characters the user and the agent said. Headings and the marker of a slash command do not count. */
+  /** The characters the user and the agent said. Headings and the name of a slash command do not count. */
   chars: number;
   /** The conversation as Markdown: a heading per turn, then its text. */
   text: string;
@@ -36,7 +35,8 @@ const NOISE = /<(system-reminder|local-command-stdout|local-command-stderr|local
 // whole, because the output can hold the closing tag and so end the match above too early.
 const OUTPUT_TURN = /^\s*<(local-command-stdout|local-command-stderr|task-notification|bash-input|bash-stdout|bash-stderr)>/;
 
-// A slash command arrives as a user turn that holds only these tags. It is not a prompt.
+// A slash command arrives as a user turn that holds only these tags. The command is no prompt.
+// The arguments are: the user typed them, and a custom command can get a whole instruction there.
 const COMMAND = /^(?:\s*<command-(name|message|args)>[\s\S]*?<\/command-\1>)+\s*$/;
 const commandTag = (text: string, name: string) => new RegExp(`<command-${name}>([\\s\\S]*?)</command-${name}>`).exec(text)?.[1]?.trim() ?? "";
 /** A session that only ran this command has nothing of its own to save. */
@@ -85,7 +85,7 @@ function answers(line: Line, block: Block, asked: Set<string>): string {
 
 type Said =
   | { kind: "prompt" | "reply" | "interrupt"; text: string }
-  | { kind: "command"; text: string; name: string };
+  | { kind: "command"; text: string; name: string; args: string };
 
 /** What the user said in one transcript line. A tool result gives only the user's own words in it. */
 function userSaid(line: Line, asked: Set<string>): Said[] {
@@ -106,7 +106,7 @@ function userSaid(line: Line, asked: Set<string>): Said[] {
   if (COMMAND.test(text)) {
     const name = commandTag(text, "name") || `/${commandTag(text, "message")}`;
     const args = commandTag(text, "args");
-    said.push({ kind: "command", name, text: `(the user ran ${name}${args ? ` ${args}` : ""})` });
+    said.push({ kind: "command", name, args, text: args ? `${name} ${args}` : `(the user ran ${name})` });
   } else said.push({ kind: INTERRUPTED.test(text) ? "interrupt" : "prompt", text });
   return said;
 }
@@ -120,9 +120,9 @@ export function readConversation(path: string): Conversation {
   // Inside a /kb:recover turn: from the command to the next prompt the user types. Its text is
   // the report on another session, which that session's recovery saved already.
   let recovering = false;
-  const add = (role: "user" | "agent", text: string, counts: boolean) => {
+  const add = (role: "user" | "agent", text: string, counted: number) => {
     if (recovering) return;
-    if (counts) chars += text.length;
+    chars += counted;
     const last = turns.at(-1);
     // The agent's text arrives in several lines per turn. Join them, so each turn has one heading.
     if (last?.role === role) last.text += `\n\n${text}`;
@@ -144,19 +144,20 @@ export function readConversation(path: string): Conversation {
       const content = line.message?.content;
       if (Array.isArray(content)) for (const block of content) if (block?.type === "tool_use" && block.name === "AskUserQuestion" && block.id) asked.add(block.id);
       const text = textOf(content).trim();
-      if (text) add("agent", text, true);
+      if (text) add("agent", text, text.length);
       continue;
     }
     for (const said of userSaid(line, asked)) {
       if (said.kind === "command") {
         recovering = said.name === RECOVER;
-        add("user", said.text, false);
-      } else if (said.kind === "interrupt") add("user", said.text, false);
+        if (said.args && !recovering) prompts++;
+        add("user", said.text, said.args.length);
+      } else if (said.kind === "interrupt") add("user", said.text, 0);
       else {
         // A reason or an answer belongs to the turn it is in. Only a typed prompt ends a recover turn.
         if (said.kind === "prompt") recovering = false;
         if (!recovering) prompts++;
-        add("user", said.text, true);
+        add("user", said.text, said.text.length);
       }
     }
   }
@@ -184,18 +185,22 @@ function commitsSince(cwd: string, time: string): string {
 }
 
 /**
- * The notes that an earlier /kb:recover of this session wrote: they have the verification time
- * that `kb add --as-of <ended>` gives. A search can miss a note that says the fact in other
- * words, so the second recovery gets the list and adds no twin.
+ * The notes that an earlier /kb:recover of this session wrote, as its mark names them. A search
+ * can miss a note that says the fact in other words, so the second recovery gets the list and
+ * adds no twin. A note that went to the trash since then stays in the list, so it does not come back.
  */
-function savedBefore(store: Store, ended: string): string {
-  try {
-    const at = asOfTime(ended);
-    const notes = store.notes().filter((note) => note.last_verified === at);
-    return notes.length > 0 ? notes.map((note) => `${note.id} | ${note.title}`).join("\n") : "none";
-  } catch {
-    return "none";
-  }
+function savedBefore(store: Store, ids: string[] = []): string {
+  const lines = ids.flatMap((id) => {
+    const note = store.find(id);
+    return note ? [`${note.id}${note.trashed ? " (in the trash)" : ""} | ${note.title}`] : [];
+  });
+  return lines.length > 0 ? lines.join("\n") : "none";
+}
+
+/** A failure is one JSON line, as the result is. The skill reads it and goes on to the next session. */
+function fail(message: string): never {
+  console.log(JSON.stringify({ error: message }));
+  process.exit(1);
 }
 
 if (import.meta.main) {
@@ -207,18 +212,20 @@ if (import.meta.main) {
   const store = new Store();
   // Only a session with a mark is read, so the command never reads a path that a caller makes up.
   const mark = store.exists() ? unsavedSession(store, session) : null;
-  if (!mark) {
-    console.error(`no unsaved session ${session}. \`kb unsaved\` lists them.`);
-    process.exit(1);
+  if (!mark) fail(`no unsaved session ${session}. \`kb unsaved\` lists them.`);
+  try {
+    const conversation = readConversation(mark.transcript);
+    const head = [
+      `# Session that ended ${mark.ended} in ${mark.cwd}\n`,
+      `Commits in that directory since it ended:\n${commitsSince(mark.cwd, mark.ended)}\n`,
+      `Notes that an earlier /kb:recover of this session saved:\n${savedBefore(store, mark.notes)}\n`,
+    ].join("\n");
+    // The user's own words can hold a secret. The file is private, and it goes when the session is
+    // marked or forgotten, or after 7 days.
+    const file = writeRecoverFile(store, session, `${head}\n${conversation.text}`);
+    console.log(JSON.stringify({ file, prompts: conversation.prompts, chars: conversation.chars }));
+  } catch (error) {
+    // No path and no stack: the caller must not go and read the raw transcript, which holds tool output.
+    fail(`the conversation of session ${session} cannot be read now (${(error as { code?: string })?.code ?? "error"}). Its mark stays.`);
   }
-  const conversation = readConversation(mark.transcript);
-  const head = [
-    `# Session that ended ${mark.ended} in ${mark.cwd}\n`,
-    `Commits in that directory since it ended:\n${commitsSince(mark.cwd, mark.ended)}\n`,
-    `Notes that an earlier /kb:recover of this session saved:\n${savedBefore(store, mark.ended)}\n`,
-  ].join("\n");
-  // The user's own words can hold a secret. The file is private, and it goes when the session is
-  // marked or forgotten, or after 7 days.
-  const file = writeRecoverFile(store, session, `${head}\n${conversation.text}`);
-  console.log(JSON.stringify({ file, prompts: conversation.prompts, chars: conversation.chars }));
 }
