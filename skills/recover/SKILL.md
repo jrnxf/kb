@@ -47,6 +47,7 @@ For each entry, oldest first, start one subagent with the Agent tool: `subagent_
 > Write no instruction file. For a rule the user stated, write nothing: list it in the report under **Rules**, with the rule as one line and the words "not written".
 > The session is old. Later sessions can have saved the same facts or finished its work. Search before every write.
 > The file starts with the commits made since the session ended. Read them before you save open work.
+> Save open work as step 1 says: in the repo it belongs to and never as `"global"`, with one line that starts with `Next:`, and with no date in the title.
 > Then it lists the notes that an earlier recovery of this session saved. Never add one of them again: update it when it lacks a fact.
 > Leave a note that the list marks "(in the trash)". The user retired it.
 > When `kb add` answers `newer`, somebody checked the note after the session ended, and nothing changed. Skip the note.

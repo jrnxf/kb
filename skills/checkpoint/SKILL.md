@@ -21,6 +21,9 @@ Sweep the whole session. Candidates:
 - **rule** - a rule the user stated or corrected you on. It goes to an instruction file, not to kb: see "Write a rule" below. Skip it when this session wrote it there already.
 - **how-to** - a non-obvious procedure that worked.
 - **open-work** - unfinished work. Write enough that a fresh session can resume: current state, the next step, the files, and what done looks like.
+  - Save it in the repo it belongs to, with the scope `"repo"`. Never save open work as `"global"`: a session start shows the next step only for the open work of its own repo.
+  - Give the body one line that starts with `Next:` and names the next step. A session start shows that line, and `kb show` gives the rest.
+  - Put no date in the title. kb records when the note was verified.
 
 Skip a candidate when:
 
@@ -118,7 +121,7 @@ A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor
 
 ## 4. Close finished work
 
-For each `open-work` note that this session finished, run `kb trash <id>`. If part of the work remains, update the note to the new state.
+For each `open-work` note that this session finished, run `kb trash <id>`. If part of the work remains, update the note to the new state, with a new `Next:` line.
 
 ## 5. Give a verdict on the notes you got
 
@@ -128,7 +131,7 @@ Run this:
 kb log --session ${CLAUDE_SESSION_ID}
 ```
 
-It prints the events of this session. Under `no verdict yet:` it lists each note you got and how: `body` (whole, at the session start), `opened` (you ran `kb show`) or `fired` (a trigger loaded it: a command, an error or a file).
+It prints the events of this session. Under `no verdict yet:` it lists each note you got and how: `brief` (open work, at the session start), `body` (whole, at the session start), `opened` (you ran `kb show`) or `fired` (a trigger loaded it: a command, an error or a file).
 No such list means there is nothing to judge: go to step 6.
 
 Give a verdict only for a note you can judge:
@@ -140,7 +143,7 @@ Give a verdict only for a note you can judge:
 Pass `--session ${CLAUDE_SESSION_ID}` on each verdict, so the verdict belongs to the session that the list above read.
 Skip a note when you cannot tell. An index line gets no verdict.
 Give `not-needed` only to a note that the list marks `fired`. kb refuses it for any other note.
-A `body` loads in every session, and most sessions do not need it. It gets `helped`, `wrong` or no verdict.
+A `brief` or a `body` loads in every session, and most sessions do not need it. It gets `helped`, `wrong` or no verdict.
 A verdict `wrong` sends the note to the next audit.
 Give no `wrong` to a note that this session corrected or rewrote: the correction is the record.
 

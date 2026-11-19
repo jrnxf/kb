@@ -5,8 +5,8 @@ without losing durable knowledge: gotchas, decisions, conventions, procedures an
 
 kb splits knowledge by source. A rule you state ("always", "never", a correction) goes to an
 instruction file, such as `~/.claude/CLAUDE.md`, which every session loads whole. What the agent
-learns (a gotcha, a decision, a how-to, open work) goes to kb, which loads the notes that rank
-highest.
+learns (a gotcha, a decision, a how-to, open work) goes to kb. A session start gets an index of the
+notes, and a note loads when it applies.
 
 ## The model
 
@@ -15,16 +15,25 @@ highest.
 - **Scope** is `global` or a repo id. The repo id is the normalised origin remote
   (`github.com/owner/name`), so SSH clones, HTTPS clones and worktrees share one scope.
   A repo with no remote uses its directory name.
-- **At session start** a hook injects `kb context` for `global` and the current repo: full
-  bodies for the top-ranked notes, one index line for each note whose body did not fit, and a
-  pointer to `kb show` and `kb search`. It also says how to write: a rule, a preference or a
-  correction the user states goes to an instruction file in that turn, and what the agent learns
-  goes to `kb add`. While Claude Code's auto memory is on, it also says that nothing goes there.
-  An index line is the id of the note, which is its title
-  in short form, and after `...` the words of the title that the id cut. So a title that states
-  the rule in full reaches every session, also when the body does not. It runs at startup,
-  resume, `/clear`, compaction and fork. With auto memory off, the fixed text is three lines:
-  the scope, one line on how to read the notes, and the save rule.
+- **At session start** a hook injects `kb context` for `global` and the current repo. The task is
+  not known yet, so no gotcha, convention, decision or how-to gets its body there. Such a note
+  loads at its trigger, at a path, or with `kb show`. A session start gives four parts:
+  - The fixed text: the scope, one line on how to read the notes, and the save rule. A rule, a
+    preference or a correction the user states goes to an instruction file in that turn. What the
+    agent learns goes to `kb add`. While Claude Code's auto memory is on, one more line says that
+    nothing goes there.
+  - The open work of this repo, as at most 3 briefs, the newest verified first. A brief is the id,
+    the kind and the title, then the `Next:` line of the body, then the day of the last check and
+    a pointer to `kb show`. A body with no line that starts with "Next" gives its first 240
+    characters. Other open work gets an index line. Open work with the scope `global` is an index
+    line in a repo, and a brief only outside any repo.
+  - The index: one line for each other note, the repo's notes first. A line is the id of the note,
+    which is its title in short form, and after `...` the words of the title that the id cut. So a
+    title that states the rule in full reaches every session. A global note with a `cmd`, `stop` or
+    `err` trigger gets no line: it loads at its trigger.
+  - A pointer to `kb show` and `kb search`. It counts the global notes that load only at their trigger.
+
+  It runs at startup, resume, `/clear`, compaction and fork.
 - **Notes load by path.** When the agent reads or changes a file, a hook gives the repo notes whose
   anchors name that file or a folder above it. A gotcha comes whole, because a title that the agent
   does not open is lost. Another kind comes as one line: the id, the kind and the title. A Read
@@ -74,17 +83,22 @@ highest.
   it. The hook runs before every shell command, so it reads no note file: it reads one small table
   of all triggers and anchors, which kb builds again when a note file changes. A command that
   matches nothing costs about 20 ms.
-- **Context stays small.** Budgets in `kb.config.json`: `indexLines` (60), `globalIndexLines`
-  (20) and `contextChars` (8000, clamped under the 10,000 character hook cap, with the save rule
-  on top). The repo's own notes rank first, by kind (open-work, gotcha, convention, decision,
-  how-to), then last activity on any machine, then last verified. Global notes come after them:
-  open work first, then by last activity, then by kind, then last verified. So a global note that
-  sessions open keeps its place. No count of reads is in the order. In a repo,
-  global notes take at most `globalIndexLines` places, so they never crowd out the repo's notes. Whole bodies drop from the bottom, and only a note without a body
-  takes an index line. The store can grow for years and a session loads the same amount.
+- **Context stays small.** Budgets in `kb.config.json`: `contextChars` (8000, clamped under the
+  10,000 character hook cap, with the save rule on top) and `briefChars` (1500, the part of it that
+  the briefs may take). The characters are the one limit of the index. When the index does not
+  fit, lines drop from the bottom, and the session start says how many notes reach no session. The
+  repo's own notes rank first, by kind (open-work, gotcha, convention, decision, how-to), then last
+  activity on any machine, then last verified. Global notes come after them: open work first, then
+  by last activity, then by kind, then last verified. So the first lines to go are global notes
+  that no session opened. No count of reads is in the order. kb ignores the `indexLines` and
+  `globalIndexLines` of an older config: a count of lines hid notes that fit.
+- **One start in 10 keeps the older form**, so an audit can compare the two. That start fills its
+  room with whole bodies in rank order, and has no briefs. A hash of the session id picks the arm,
+  so a resume, a compaction and a `/clear` of one session stay in one arm. The log marks each
+  start with `holdback`. `holdback` in `kb.config.json` sets the share (0.1), and 0 turns it off.
 - **A log says what each session got.** Each machine keeps an event log in `.state/log/`. It
-  records the notes a session got at its start, and in what form: a body, an index line, or
-  nothing. It also records the notes a trigger loaded, each `kb show` and `kb search`, each write and
+  records the notes a session got at its start, and in what form: a brief, an index line, a body
+  (the hold-back arm), or nothing. It also records the notes a trigger loaded, each `kb show` and `kb search`, each write and
   each checkpoint. A read writes nothing to the store, so it makes no commit and no sync. A check
   (an audit, a look before an update) passes `--check`. At the checkpoint the agent gives a
   verdict on the notes it got: `kb verdict helped`, `not-needed` or `wrong`. `not-needed` is only
@@ -129,16 +143,17 @@ highest.
   anchors of the repo's notes on disk, and tells the agent which notes name a file or a symbol that
   is gone.
   `kb stale` and `/kb:audit` cover one scope: the repo's notes in a repo, the global notes outside
-  any repo. `/kb:audit` reads the code for each candidate, checks both budgets, and proposes keep, rewrite,
+  any repo. `/kb:audit` reads the code for each candidate, checks the budget, and proposes keep, rewrite,
   merge, shorten or trash with `kb audit propose`. Each audit also moves rules to the
   instruction file of its scope: the agent merges the conventions into a few short rules, and each card
   shows the lines that Apply adds to the file. Apply writes them and does not commit the file. You decide in the `kb serve` page, one
   card per note: each card shows the note, the new text struck against the old, and the agent's
   pick with its reason. `a` accepts the agent's pick, `k` keeps the note as is and records that
   you checked it, `t` trashes it, a meter counts the notes that still reach no session, and Apply makes
-  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. In a repo it audits that repo. Outside any repo it audits the global notes, in an empty folder that no repo reaches. The Audit button in the page does the same for the global notes, and for any repo a session has opened once. `kb budget` asks for
-  room only when the index is full and a note reaches no session. A body that became an
-  index line is the normal state. It names the lowest ranked decisions and how-tos to trash or
+  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. In a repo it audits that repo. Outside any repo it audits the global notes, in an empty folder that no repo reaches. The Audit button in the page does the same for the global notes, and for any repo a session has opened once. `kb budget` says
+  what a session start gives of each note: a brief, an index line, nothing until its trigger, or
+  nothing at all. It asks for room only when the index is over its character budget and a note
+  reaches no session. It names the lowest ranked decisions and how-tos to trash or
   merge, and leaves gotchas and conventions for you to name, because a rule that works leaves no
   trace in the log.
   A session start says so in one
@@ -223,7 +238,8 @@ Pass `--project <name>`. A wipe with no project takes ten minutes to rebuild.
 
 kb also writes `promoted_to` (the instruction file a rule moved to), `supersedes` (the notes a merge
 took in) and `trashed_at`. `kb add` answers with `warnings`, and still saves the note, when a gotcha
-or a how-to has no trigger and no anchor, and when a body is over 700 characters.
+or a how-to has no trigger and no anchor, when open work has the scope `global`, and when a body is
+over 700 characters.
 
 ## Hooks
 
@@ -239,7 +255,7 @@ tool calls have 2 and 3 seconds.
 ## Commands
 
 ```
-kb context [--repo .]        what a session gets at start
+kb context [--repo .]        what a session gets at start (--session <id>: what that session got)
 kb add [--repo .]            create or update a note from JSON on stdin
 kb add --as-of <ISO time>    the same for a fact from an earlier time: the note is verified then
 kb add --recovered-from <session-id>   also record the note in that unsaved session
@@ -249,7 +265,7 @@ kb trash <id>...             kb restore <id>...
 kb delete <id>...            kb empty-trash
 kb trash|restore|delete|empty-trash --scope <repo id>   a whole project
 kb stale [--repo .]          kb verify <id>...
-kb budget [--repo .]
+kb budget [--repo .]         what a session start gives of each note, and what reaches no session
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
 kb audit [--no-wait]         kb audit propose   kb audit status   (an agent audits the scope)
 kb instructions [--repo .]   kb sync      kb checkpointed <session-id>
@@ -288,8 +304,8 @@ Anthropic, Slack and more), a password in a URL, and a long random value given t
 Skills: `/kb:checkpoint`, `/kb:recover`, `/kb:audit`. Only you can start them. `/kb:note` writes a rule the
 user states to an instruction file, and the agent starts it on its own.
 
-`kb log` prints one row per note: how often a session got it as a body, as an index line or not at
-all, how often an agent opened it (for a task, and as a check), how often a trigger loaded it, and its
+`kb log` prints one row per note: how often a session got it as a body, as a brief, as an index line
+or not at all, how often an agent opened it (for a task, and as a check), how often a trigger loaded it, and its
 verdicts. `--since <days>` takes the last days only. `--session <id>` prints the events of one
 session in time order, and the notes that session got and has not judged yet. The rows count the
 events of this machine. `last_activity` is the newest over all machines. A session that gives a
@@ -351,7 +367,7 @@ bun test && bun run typecheck && claude plugin validate .
 `test/keys.test.ts` presses the page's keys in a headless Chromium, at desktop and phone width.
 The `playwright install` step downloads that browser once.
 
-To try a change on a store that looks like months of use (about 150 invented notes, 9 repos):
+To try a change on a store that looks like months of use (about 165 invented notes, 9 repos):
 
 ```bash
 dir=$(mktemp -d) && bun scripts/seed.ts "$dir/seed"   # prints the KB_HOME to export

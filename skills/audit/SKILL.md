@@ -33,10 +33,14 @@ kb budget --json
     - When the title is too wide, propose a rewrite with a narrower title, so a session knows from the index line when the note applies.
     - If the note loads in the right place, propose keep.
   - `duplicate` - the title is close to the title of another note.
-- `kb budget` shows what a session of this scope loads. `notes` gives the size of each note and what a session gets of it, in rank order. In a repo, `index.capped` counts the global notes that stay out of its sessions on purpose, the lowest ranked. That is not a reason to change them here.
-  - Bodies that did not fit (`context.dropped`) are normal: each of these notes still reaches the session as an index line. This alone is no reason to take a note out. The notes with the most `chars` are the bodies to shorten, so that more notes load whole.
-  - `over` is true only when notes reach no session, because the index is full (`index.hidden`). Then `trim` lists the lowest ranked decisions and how-tos of this scope, the lowest first. Treat each one as a candidate too.
+- `kb budget` shows what a session start of this scope gives. No note loads its body there. `notes` lists each note in rank order, with what a session gets of it (`shown`):
+  - `brief` - open work of this scope in short form: the title, the `Next:` line and a pointer. At most 3 notes, the newest verified first.
+  - `index` - one line with the id and the title.
+  - `trigger` - a global note with a `cmd:`, `stop:` or `err:` trigger. It takes no line on purpose, and loads at its trigger. That is not a reason to change it.
+  - `hidden` - the index line did not fit the character budget, so no session sees the note.
+  - `over` is true only when notes are `hidden` (`index.hidden`). Then `trim` lists the lowest ranked decisions and how-tos of this scope, the lowest first. Treat each one as a candidate too.
   - `ask` fills the rest of the hidden count with gotchas and conventions, the lowest ranked first. Only the user can trash one of them.
+  - Open work with no line that starts with `Next:` gets a brief of its first 240 characters. Propose a rewrite that adds the line. Open work with the scope `global` is a brief in no repo: say in `why` which repo it belongs to.
 
 A candidate is a reason to look, not a verdict. If `kb stale` has no candidate and `over` is false, say so and stop.
 
