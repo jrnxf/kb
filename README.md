@@ -42,7 +42,8 @@ highest.
 - **A log says what each session got.** Each machine keeps an event log in `.state/log/`. It
   records the notes a session got at its start, and in what form: a body, an index line, or
   nothing. It also records the notes a Read named, each `kb show` and `kb search`, each write and
-  each checkpoint. A read writes nothing to the store, so it makes no commit and no sync. A check
+  each checkpoint, each session that ended with no checkpoint (with the reason of its end), and
+  each recovery with the notes it wrote. A read writes nothing to the store, so it makes no commit and no sync. A check
   (an audit, a look before an update) passes `--check`. At the checkpoint the agent gives a
   verdict on the notes it got: `kb verdict helped`, `not-needed` or `wrong`. `not-needed` is only
   for a note that a Read named in that session: kb refuses it for a note from the session start,
@@ -106,14 +107,27 @@ highest.
   `CLAUDE.md` when the repo has none), and the global audit moves a global rule to the global file. The card shows the lines it
   adds. Apply writes the file and does not commit it. This is the only write `kb` makes inside a
   repo. A moved note is no longer injected.
-- **A missed checkpoint can be recovered.** Nothing can run before `/clear`, but `/clear` keeps the
-  transcript on disk. So a session that ends with `/clear` and no checkpoint is recorded, and a
-  new session in that checkout says in one line that `/kb:recover` saves it. The agent tells you
-  once per day and checkout. Other starts in that day only let the agent know, so a script or a
-  second window does not get the same sentence each time. `/kb:recover` hands
-  what the user and the agent said to a Sonnet subagent, which runs the checkpoint steps. No tool
-  call and no tool output gets through, also not the output of a `!` command. The reason you typed
-  when you rejected a tool call, and your answer to a question, stay in.
+- **A missed checkpoint can be recovered.** Nothing can run before a session ends, but the
+  transcript stays on disk. So every session that ends with no checkpoint is recorded: after
+  `/clear`, an exit, a logout, a switch to another session, and the end of a headless run. The
+  record keeps the repo id and the directory of that moment, because a finished run often loses
+  its folder. A new session in that checkout says in one line that `/kb:recover` saves it. The
+  agent tells you once per day and checkout. Other starts in that day only let the agent know, so
+  a script or a second window does not get the same sentence each time. Recovery runs only when
+  you type `/kb:recover`.
+  - `/kb:recover` hands each session to a Sonnet subagent, which runs the checkpoint steps. The
+    subagent gets what you and the agent said. For each tool call that failed it also gets three
+    lines, each cut at 300 characters: the call (its command or path), the error, and the next
+    call the agent made. An autonomous run learns its lessons there. Nothing of a tool call that
+    worked gets through, also not the output of a `!` command. What the secret scan below knows
+    is masked in every line. The reason you typed when you rejected a tool call, and your answer
+    to a question, stay in.
+  - `/kb:recover all` sweeps every directory. It shows the count per project, asks before it
+    starts when there are more than 5 sessions, and handles at most 10 per run. Each note gets
+    the repo of its session, not of the directory you are in. A session outside any repo gives
+    global notes only. When the folder is gone and kb knows no other checkout and no note of
+    that repo, the session is reported as not recoverable. `kb unsaved --all` lists them all.
+    From 5 sessions in other directories on, an interactive start says so once per day.
   - The report starts with "Recovered" and the date and directory of the old session. It says
     nothing about the session you are in, which still needs its own `/kb:checkpoint`.
   - A recovered note is verified at the time the old session ended (`kb add --as-of`), with low
@@ -122,13 +136,13 @@ highest.
   - The subagent writes no instruction file. It lists each rule it found, and you say which still
     hold. The session counts as saved only after that. Until then the line comes back. Each note
     of a recovery is recorded in the session (`kb add --recovered-from`), so a second
-    `/kb:recover` adds no note twice.
+    `/kb:recover` adds no note twice. The log records the recovery and its notes.
   - The text of the old session is in `.state/recover/`, readable by you only. It goes when the
     session is saved or forgotten, and after 7 days.
-  - `/kb:recover forget` stops the line. A session with fewer than 2 prompts or 3000 characters
-    is not reported. A slash command counts only for the arguments you typed after it, and a
-    `/kb:recover` turn does not count, so a session that only recovered another one is not
-    reported. A record goes after 7 days.
+  - `/kb:recover forget` stops the line. A session is reported when it has 2 prompts and 3000
+    characters, or 3 failed tool calls. A slash command counts only for the arguments you typed
+    after it, and a `/kb:recover` turn does not count, so a session that only recovered another
+    one is not reported. A record goes after 7 days.
   - A session start never reads a transcript over 2 MB: such a session is reported as it is. The
     whole step has 300 ms. A session it could not measure in that time waits for a later start.
 
@@ -168,6 +182,7 @@ kb audit [--no-wait]         kb audit propose   kb audit status   (an agent audi
 kb instructions [--repo .]   kb sync      kb checkpointed <session-id>
 kb log [--session id] [--since days]      (what the log says of each note, or of one session)
 kb unsaved [--forget <session-id>]   sessions here that ended with no checkpoint
+kb unsaved --all             those of every directory, with the count per project
 ```
 
 `kb serve`, or `kb` alone in a terminal, opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
