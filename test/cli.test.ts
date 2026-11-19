@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { lastActivity } from "../cli/log.ts";
+import { lastActivity, logEvent } from "../cli/log.ts";
 import { parseNote } from "../cli/note.ts";
 import { search } from "../cli/search.ts";
 import { Store } from "../cli/store.ts";
@@ -268,12 +268,13 @@ describe("the event log from the CLI", () => {
     putNote(store, { id: "b" });
     putNote(store, { id: "trashed" }, true);
     const env = { KB_SESSION: "s1" };
+    logEvent(store, { ev: "fire", session: "s1", kind: "path", form: "title", note: "b", tool: "Read", match: "src/a.ts" });
     expect(kb(store, ["verdict", "helped", "a", "--json"], { env }).json).toEqual({ verdict: "helped", notes: ["a"], unknown: [] });
     expect(kb(store, ["verdict", "not-needed", "b", "ghost", "b"], { env }).stdout).toBe("not-needed: b\nunknown ghost\n");
     // A session may judge a note it trashed a moment ago.
     expect(kb(store, ["verdict", "wrong", "trashed"], { env }).code).toBe(0);
     expect(kb(store, ["use", "a", "b", "--json"], { env }).json).toEqual({ verdict: "helped", notes: ["a", "b"], unknown: [] });
-    expect(logged(store)).toEqual([
+    expect(logged(store).slice(1)).toEqual([
       { ev: "verdict", session: "s1", scope: "global", note: "a", verdict: "helped" },
       { ev: "verdict", session: "s1", scope: "global", note: "b", verdict: "not-needed" },
       { ev: "verdict", session: "s1", scope: "global", note: "trashed", verdict: "wrong" },
@@ -285,11 +286,55 @@ describe("the event log from the CLI", () => {
       expect(bad.code).toBe(1);
       expect(bad.stderr).toMatch(/usage: kb verdict <helped\|not-needed\|wrong> <id>\.\.\.|no note with id: ghost/);
     }
-    expect(logged(store)).toHaveLength(5);
+    expect(logged(store)).toHaveLength(6);
     // The help names verdict, not use.
     const help = kb(store, ["help"]).stdout;
     expect(help).toContain("kb verdict <helped|not-needed|wrong> <id>...");
     expect(help).not.toMatch(/kb use|--no-use|\buses\b/);
+  });
+
+  test("not-needed is only for a note that a trigger loaded in the session: a note from the session start is refused, and nothing is logged", () => {
+    const store = tempStore();
+    for (const id of ["fired", "body", "opened"]) putNote(store, { id });
+    const fire = (session: string, note: string) => logEvent(store, { ev: "fire", session, kind: "path", form: "title", note, tool: "Read", match: "src/a.ts" });
+    logEvent(store, { ev: "start", session: "s1", source: "startup", bodies: ["body"], index: [], hidden: [], chars: { fixed: 1, index: 0, bodies: 1, total: 2 } });
+    fire("s1", "fired");
+    logEvent(store, { ev: "show", session: "s1", note: "opened", why: "task" });
+    // A fire in another session is not a fire in this one.
+    fire("s2", "body");
+    const before = logged(store);
+
+    // One note with no fire refuses the whole command, so the session reads the message.
+    const refused = kb(store, ["verdict", "not-needed", "fired", "body", "opened", "--session", "s1"]);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("not-needed is only for a note that a trigger loaded in the session");
+    expect(refused.stderr).toContain("Session s1 has no fire of: body, opened. A note from the session start gets helped, wrong or no verdict. Nothing was recorded.");
+    // The session of the harness is a session too.
+    expect(kb(store, ["verdict", "not-needed", "body", "--json"], { env: { CLAUDE_CODE_SESSION_ID: "s1" } }).json.error).toContain("Session s1 has no fire of: body.");
+    expect(logged(store)).toEqual(before);
+
+    expect(kb(store, ["verdict", "not-needed", "fired", "--session", "s1", "--json"]).json).toEqual({ verdict: "not-needed", notes: ["fired"], unknown: [] });
+    expect(kb(store, ["verdict", "not-needed", "body", "--session", "s2"]).code).toBe(0);
+    // A note from the session start takes the other verdicts.
+    expect(kb(store, ["verdict", "helped", "body", "--session", "s1"]).code).toBe(0);
+    expect(kb(store, ["verdict", "wrong", "opened", "--session", "s1"]).code).toBe(0);
+    // With no session there is nothing to check, so the verdict is taken as before.
+    expect(kb(store, ["verdict", "not-needed", "opened"]).code).toBe(0);
+    expect(logged(store).slice(before.length).map((e) => `${e.session ?? "-"} ${e.verdict} ${e.note}`)).toEqual(["s1 not-needed fired", "s2 not-needed body", "s1 helped body", "s1 wrong opened", "- not-needed opened"]);
+  });
+
+  test("a verdict clears the stale count that a session start reads, and a show leaves it", () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    const cache = join(store.home, ".state", "stale.json");
+    expect(kb(store, ["stale", "--json"]).json.notes).toBe(1);
+    expect(existsSync(cache)).toBe(true);
+    kb(store, ["show", "a"]);
+    expect(existsSync(cache)).toBe(true);
+    // The note is now judged wrong, so the count of the cache is old.
+    expect(kb(store, ["verdict", "wrong", "a"]).code).toBe(0);
+    expect(existsSync(cache)).toBe(false);
+    expect(kb(store, ["stale", "--json"]).json.candidates.map((c: any) => c.reason)).toContain("judged-wrong");
   });
 
   test("each write is one event per note, with the session that wrote it", () => {

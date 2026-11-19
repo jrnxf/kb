@@ -115,11 +115,14 @@ Give a verdict only for a note you can judge:
 
 - `kb verdict helped <id>... --session ${CLAUDE_SESSION_ID}` - the note changed what you did.
 - `kb verdict wrong <id>... --session ${CLAUDE_SESSION_ID}` - the note was false or misleading.
-- `kb verdict not-needed <id>... --session ${CLAUDE_SESSION_ID}` - a hook loaded the note (`body` or `fired`), and it had no bearing on the work.
+- `kb verdict not-needed <id>... --session ${CLAUDE_SESSION_ID}` - a hook named the note when you read a file (`fired`), and it had no bearing on the work.
 
 Pass `--session ${CLAUDE_SESSION_ID}` on each verdict, so the verdict belongs to the session that the list above read.
 Skip a note when you cannot tell. An index line gets no verdict.
-A verdict `wrong` sends the note to the next audit, also when you corrected the note in step 3.
+Give `not-needed` only to a note that the list marks `fired`. kb refuses it for any other note.
+A `body` loads in every session, and most sessions do not need it. It gets `helped`, `wrong` or no verdict.
+A verdict `wrong` sends the note to the next audit.
+Give no `wrong` to a note that this session corrected or rewrote: the correction is the record.
 
 ## 6. Record the checkpoint
 

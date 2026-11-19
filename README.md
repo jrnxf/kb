@@ -44,7 +44,9 @@ highest.
   nothing. It also records the notes a Read named, each `kb show` and `kb search`, each write and
   each checkpoint. A read writes nothing to the store, so it makes no commit and no sync. A check
   (an audit, a look before an update) passes `--check`. At the checkpoint the agent gives a
-  verdict on the notes it got: `kb verdict helped`, `not-needed` or `wrong`. `kb log` sums the
+  verdict on the notes it got: `kb verdict helped`, `not-needed` or `wrong`. `not-needed` is only
+  for a note that a Read named in that session: kb refuses it for a note from the session start,
+  which loads in every session. A note that the session corrected gets no `wrong`. `kb log` sums the
   log per note, for the next audit. The log never leaves the machine, and it keeps 12 months: a
   monthly file older than that is removed.
 - **A roll-up of the log syncs.** Each machine writes one small file, `activity/<machine>.json`:

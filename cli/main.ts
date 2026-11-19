@@ -34,7 +34,9 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          --scope takes "repo", "global" or a repo id
   kb verdict <${VERDICTS.join("|")}> <id>...
                                          record what a note did for this session: it changed what you
-                                         did, it had no bearing, or it was false or misleading
+                                         did, it had no bearing, or it was false or misleading.
+                                         not-needed is only for a note that a trigger loaded in the
+                                         session, never for a note from the session start
   kb trash <id>... | kb restore <id>...  trash retires a note: restore brings it back. A note in the
                                          trash for more than trashDays (30) is deleted for good
   kb delete <id>...                      remove notes for good, active or in the trash. When the user
@@ -305,15 +307,26 @@ function cmdList(store: Store, args: Args): Output {
  * `kb verdict`: what a note did for the session that got it. `kb use <id>...` is the older form of
  * `kb verdict helped`, which a cached skill on another machine may still run.
  */
-function cmdVerdict(store: Store, verdict: string | undefined, ids: string[]): Output {
+function cmdVerdict(store: Store, verdict: string | undefined, ids: string[], session?: string): Output {
   if (!VERDICTS.includes(verdict as Verdict) || ids.length === 0) throw new KbError(`usage: kb verdict <${VERDICTS.join("|")}> <id>...`);
   // A session may judge a note that it trashed a moment ago, for example a note that was wrong.
   const known = new Set([...store.notes(), ...store.notes({ trashed: true })].map((n) => n.id));
   const notes = [...new Set(ids.filter((id) => known.has(id)))];
   const unknown = ids.filter((id) => !known.has(id));
   if (notes.length === 0) throw new KbError(`no note with id: ${unknown.join(", ")}`);
+  // "not-needed" says that a trigger loaded a note for nothing. A note that every session gets at
+  // its start has no bearing on most sessions, so three of them would send it to the audit.
+  if (verdict === "not-needed" && session !== undefined) {
+    const fired = new Set(readLog(store, { session }).flatMap((event) => (event.ev === "fire" ? [event.note] : [])));
+    const never = notes.filter((id) => !fired.has(id));
+    if (never.length > 0) {
+      throw new KbError(`not-needed is only for a note that a trigger loaded in the session: "fired" in \`kb log --session\`. Session ${session} has no fire of: ${never.join(", ")}. A note from the session start gets helped, wrong or no verdict. Nothing was recorded.`);
+    }
+  }
   // The log is all a verdict writes, so here a log that fails is an error.
   if (!logEvent(store, notes.map((note) => ({ ev: "verdict" as const, note, verdict: verdict as Verdict })))) throw new KbError("the verdict was not recorded: kb could not write its log");
+  // A verdict changes what `kb stale` says, so the count that a session start reads is old now.
+  clearStaleCache(store);
   const text = `${verdict}: ${notes.join(", ")}${unknown.length > 0 ? `\nunknown ${unknown.join(", ")}` : ""}`;
   return { json: { verdict, notes, unknown }, text };
 }
@@ -647,7 +660,7 @@ async function main(): Promise<number> {
       case "show": out = cmdShow(store, args); break;
       case "search": out = cmdSearch(store, args); break;
       case "list": out = cmdList(store, args); break;
-      case "verdict": out = cmdVerdict(store, args.positional[0], args.positional.slice(1)); break;
+      case "verdict": out = cmdVerdict(store, args.positional[0], args.positional.slice(1), sessionOf(args.flags.get("session"))); break;
       case "use": out = cmdVerdict(store, "helped", args.positional); break;
       case "log": out = cmdLog(store, args); break;
       case "trash": out = cmdMove(store, args, true); break;
