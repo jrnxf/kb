@@ -1,0 +1,4 @@
+#!/bin/sh
+# For /kb:recover: writes what an unsaved session said to a private file. A command of its own,
+# so the skill can allow it by name.
+exec bun "$(dirname "$0")/../hooks/transcript.ts" "$@"
