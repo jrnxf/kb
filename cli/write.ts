@@ -8,7 +8,9 @@ import { clearStaleCache } from "./stale.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import { kickSync } from "./sync.ts";
 
-export const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+/** A time as kb writes it: ISO 8601 in UTC, to the second. */
+export const isoTime = (time: number) => new Date(time).toISOString().replace(/\.\d{3}Z$/, "Z");
+export const nowIso = () => isoTime(Date.now());
 
 /** Regenerate the derived files, commit, and start a background sync. */
 export function afterWrite(store: Store, message: string): void {
@@ -32,18 +34,25 @@ export function requireNote(store: Store, id: string): StoredNote {
   throw new KbError(`no note with id "${id}"${close.length > 0 ? `. Ids with that text: ${close.slice(0, 8).join(", ")}${more}` : ""}`);
 }
 
-/** The time `kb add --as-of` takes, as kb writes a time. A time after now is now. */
-export function asOfTime(value: string): string {
-  const time = Date.parse(value);
-  if (Number.isNaN(time)) throw new KbError("--as-of needs an ISO time, such as 2026-01-31T12:00:00Z");
-  return new Date(Math.min(time, Date.now())).toISOString().replace(/\.\d{3}Z$/, "Z");
+// A date, a time to the second or finer, and a zone. `Date.parse` alone takes "1" for the year 2001.
+const FULL_ISO = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+/** The time `kb add --as-of` takes, as kb writes a time. A time after `now` is `now`. */
+export function asOfTime(value: string, now = Date.now()): string {
+  const [, year, month, day] = FULL_ISO.exec(value) ?? [];
+  // `Date.parse` moves a day that the month does not have into the next month.
+  const real = day !== undefined && new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))).getUTCDate() === Number(day);
+  const time = real ? Date.parse(value) : Number.NaN;
+  if (Number.isNaN(time)) throw new KbError("--as-of needs a full ISO time with a zone, such as 2026-01-31T12:00:00Z");
+  return isoTime(Math.min(time, now));
 }
 
 /**
  * Merge the given fields over an active note. `repo` is where the change was made:
  * a change of content inside the note's own repo also records that repo's HEAD.
  * With `asOf`, the content comes from an earlier time (a session recovered later): the note is
- * verified at that time and at the commit of that time, never now.
+ * verified at that time and at the commit of that time, never now. The caller refuses an `asOf`
+ * before the note's last check, so old content never goes under a newer check.
  */
 export function updateNote(store: Store, input: Record<string, unknown> & { id: string }, repo: Pick<RepoInfo, "scope" | "head"> & { root?: string | null }, asOf?: string): { id: string; path: string } {
   const existing = store.notes().find((n) => n.id === input.id);
@@ -52,9 +61,7 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
   const { path: _path, trashed: _trashed, ...stored } = existing;
   const merged: Record<string, unknown> = { ...stored, ...input, scope: existing.scope, created: existing.created };
   // Only a change of content says that somebody looked at the fact again.
-  // Old content must not replace a later check of the note: then the stored time and commit stay.
-  const later = asOf !== undefined && Date.parse(existing.last_verified) > Date.parse(asOf);
-  if (["title", "body", "anchors"].some((key) => key in input) && !later) {
+  if (["title", "body", "anchors"].some((key) => key in input)) {
     merged.last_verified = asOf ?? nowIso();
     const commit = asOf === undefined ? repo.head : commitAt(repo.root ?? null, asOf);
     if (repo.scope === existing.scope && commit) merged.verified_at_commit = commit;
@@ -161,7 +168,7 @@ const DAY_MS = 86_400_000;
 
 /** When the trash clears a note: `trashDays` after it went there. */
 export function clearsAt(trashedAt: string, days: number): string {
-  return new Date(Date.parse(trashedAt) + days * DAY_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
+  return isoTime(Date.parse(trashedAt) + days * DAY_MS);
 }
 
 /**

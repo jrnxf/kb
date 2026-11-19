@@ -128,25 +128,50 @@ describe("kb add", () => {
       expect(global.verified_at_commit).toBeUndefined();
     });
 
-    test("an update moves an older note to that time, and leaves a note that was verified later", () => {
+    test("an update moves an older note to that time", () => {
       const store = tempStore();
-      const { repo, february, march } = repoWithHistory();
+      const { repo, february } = repoWithHistory();
       putNote(store, { id: "older", scope: SCOPE, last_verified: "2020-01-10T00:00:00Z" });
-      putNote(store, { id: "later", scope: SCOPE, last_verified: "2020-03-10T00:00:00Z", verified_at_commit: march });
-      for (const id of ["older", "later"]) expect(asOf(store, "2020-02-15T12:00:00Z", { id, body: "from the old session" }, repo).json.status).toBe("updated");
-      expect(store.find("older")).toMatchObject({ body: "from the old session", last_verified: "2020-02-15T12:00:00Z", verified_at_commit: february });
-      // The old conversation knows less than the check that came after it.
-      expect(store.find("later")).toMatchObject({ body: "from the old session", last_verified: "2020-03-10T00:00:00Z", verified_at_commit: march });
+      putNote(store, { id: "same", scope: SCOPE, last_verified: "2020-02-15T12:00:00Z" });
+      for (const id of ["older", "same"]) {
+        expect(asOf(store, "2020-02-15T12:00:00.900Z", { id, body: "from the old session" }, repo).json.status).toBe("updated");
+        expect(store.find(id)).toMatchObject({ body: "from the old session", last_verified: "2020-02-15T12:00:00Z", verified_at_commit: february });
+      }
     });
 
-    test("a time after now is now, and a value that is no time is refused", () => {
+    // The old conversation knows less than the check that came after it. Its text must not stand under the newer date.
+    test("an update of a note that was verified after that time changes nothing", () => {
+      const store = tempStore();
+      const { repo, march } = repoWithHistory();
+      const before = putNote(store, { id: "later", scope: SCOPE, last_verified: "2020-03-10T00:00:00Z", verified_at_commit: march, anchors: ["src/new.ts"], confidence: "high" });
+      const file = readFileSync(store.find("later")!.path, "utf8");
+      const result = asOf(store, "2020-02-15T12:00:00Z", { id: "later", title: "An old title", body: "from the old session", anchors: ["src/old.ts"], confidence: "low" }, repo);
+      expect(result.code).toBe(0);
+      expect(result.json).toEqual({ status: "newer", id: "later", last_verified: "2020-03-10T00:00:00Z" });
+      expect(readFileSync(store.find("later")!.path, "utf8")).toBe(file);
+      expect(store.find("later")).toMatchObject({ title: before.title, body: before.body, anchors: ["src/new.ts"], confidence: "high" });
+      const text = kb(store, ["add", "--as-of", "2020-02-15T12:00:00Z"], { stdin: JSON.stringify({ id: "later", confidence: "low" }), cwd: repo });
+      expect(text.stdout).toBe("newer later: the note was checked at 2020-03-10T00:00:00Z, after the time of --as-of. Nothing changed.\n");
+      // With no --as-of, the same update is a check of today.
+      expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ id: "later", body: "checked today" }), cwd: repo }).json.status).toBe("updated");
+    });
+
+    test("a time after now is now, and a value that is no full ISO time is refused", () => {
       const store = tempStore();
       const note = store.find(asOf(store, "2999-01-01T00:00:00Z", { title: "From the future", kind: "gotcha", body: "x", scope: "global" }).json.id)!;
+      // One clock read gives both times, so they are equal also across the turn of a second.
       expect(note.last_verified).toBe(note.created);
-      for (const bad of ["yesterday-ish", ""]) {
+      // `Date.parse` takes each of these but the first two: "1" is the year 2001.
+      for (const bad of ["yesterday-ish", "", "1", "2026", "2026-01-31", "2026-01-31T12:00:00", "2026-01-31 12:00:00Z", "2026-02-31T12:00:00Z", "Jan 31 2026 12:00:00 GMT"]) {
         const result = asOf(store, bad, { title: "Never written", kind: "gotcha", body: "x", scope: "global" });
         expect(result.code).toBe(1);
-        expect(result.json.error).toContain("--as-of needs an ISO time");
+        expect(result.json.error).toBe("--as-of needs a full ISO time with a zone, such as 2026-01-31T12:00:00Z");
+      }
+      // The forms that kb and a session mark write.
+      for (const [good, stored] of [["2020-01-31T12:00:00Z", "2020-01-31T12:00:00Z"], ["2020-01-31T12:00:00.123Z", "2020-01-31T12:00:00Z"], ["2020-01-31T12:00:00+01:00", "2020-01-31T11:00:00Z"]] as const) {
+        const made = asOf(store, good, { title: `At ${good}`, kind: "gotcha", body: "x", scope: "global" });
+        expect(store.find(made.json.id)!.last_verified).toBe(stored);
+        kb(store, ["delete", made.json.id]);
       }
       expect(kb(store, ["add", "--as-of"], { stdin: "{}" })).toMatchObject({ code: 1, stderr: "--as-of needs a value\n" });
       expect(store.notes().map((n) => n.id)).toEqual([note.id]);

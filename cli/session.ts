@@ -1,7 +1,8 @@
 // Session marks: which sessions saved their knowledge, and which ended without doing so.
 // Per-machine state in .state/, never committed. One small file per session, so sessions never race.
 
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, closeSync, existsSync, fstatSync, ftruncateSync, futimesSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { type Store, writeAtomic } from "./store.ts";
 
@@ -12,8 +13,10 @@ export interface UnsavedSession {
   transcript: string;
   cwd: string;
   ended: string;
-  /** How much the session said, measured once by the next session start. */
+  /** How much the session said, measured once by a later session start. */
   size?: { prompts: number; chars: number };
+  /** The notes that a recovery of this session wrote: `kb add --recovered-from`. */
+  notes?: string[];
 }
 
 const safe = (session: string) => session.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 100);
@@ -29,9 +32,7 @@ export function writeRecoverFile(store: Store, session: string, text: string): s
   const path = recoverPath(store, session);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   chmodSync(dirname(path), 0o700); // the folder can be older than this rule
-  const temp = `${path}.tmp-${process.pid}`;
-  writeFileSync(temp, text, { mode: 0o600 });
-  renameSync(temp, path);
+  writeAtomic(path, text, 0o600);
   return path;
 }
 
@@ -60,6 +61,67 @@ export function unsavedSession(store: Store, session: string): UnsavedSession | 
   }
 }
 
+/**
+ * Change the mark of an unsaved session, and say if it was written. The mark is written in place,
+ * and only while it exists: a write to a new file would bring back a mark that `kb checkpointed`
+ * or a forget removed a moment ago. The mark keeps its age, so it still goes 7 days after the
+ * session ended. Never throws: a store that cannot be written changes nothing.
+ */
+function changeMark(store: Store, session: string, change: (mark: UnsavedSession) => void): boolean {
+  if (isSaved(store, session)) return false;
+  let file: number;
+  try {
+    file = openSync(store.statePath(`unsaved-${safe(session)}.json`), "r+");
+  } catch {
+    return false; // gone, or the store is read-only
+  }
+  try {
+    const { atime, mtime } = fstatSync(file);
+    const mark = JSON.parse(readFileSync(file, "utf8")) as UnsavedSession;
+    change(mark);
+    const text = Buffer.from(JSON.stringify(mark));
+    // One write from the first byte, then the cut: a reader never sees an empty mark.
+    writeSync(file, text, 0, text.length, 0);
+    ftruncateSync(file, text.length);
+    futimesSync(file, atime, mtime);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    closeSync(file);
+  }
+}
+
+/** Keep the measured size of an unsaved session in its mark, so no later start reads the transcript again. */
+export function recordSize(store: Store, session: string, size: { prompts: number; chars: number }): boolean {
+  return changeMark(store, session, (mark) => {
+    mark.size = size;
+  });
+}
+
+/** Record that a recovery of this session wrote a note, so a second recovery does not add it again. */
+export function recordRecovered(store: Store, session: string, id: string): boolean {
+  return changeMark(store, session, (mark) => {
+    mark.notes = [...new Set([...(mark.notes ?? []), id])];
+  });
+}
+
+/**
+ * True once per day (local time) for a directory, on this machine. The claim is a file made with
+ * "wx", so of two sessions that start together only one gets it. False when it cannot be recorded.
+ */
+export function firstToday(store: Store, dir: string, now = new Date()): boolean {
+  const two = (n: number) => String(n).padStart(2, "0");
+  const day = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
+  const key = createHash("sha256").update(real(dir)).digest("hex").slice(0, 16);
+  try {
+    writeFileSync(store.statePath(`told-${key}-${day}`), "", { flag: "wx" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function real(path: string): string {
   try {
     return realpathSync(path);
@@ -79,17 +141,19 @@ function gone(path: string): boolean {
   }
 }
 
-/** Remove what is older than the marks live. */
-function dropOld(dir: string, names: string[]): void {
-  for (const name of names) {
-    const path = join(dir, name);
-    try {
-      if (Date.now() - statSync(path).mtimeMs > KEEP_MS) rmSync(path, { force: true });
-    } catch {
-      // gone already
-    }
+/** Remove a file that is older than the marks live, and say if it is gone. */
+function dropOld(path: string): boolean {
+  try {
+    if (Date.now() - statSync(path).mtimeMs <= KEEP_MS) return false;
+    rmSync(path, { force: true });
+  } catch {
+    // gone already
   }
+  return true;
 }
+
+/** The files that hold state of a session or of a day, which lose their value with age. */
+const AGES = /^(unsaved|saved|told)-/;
 
 /** Stop reporting an unsaved session: it holds nothing worth a note. */
 export function forgetUnsaved(store: Store, session: string): boolean {
@@ -123,7 +187,7 @@ export function unsavedSessions(store: Store, cwd: string, root: string | null =
   // What a session said can hold a secret, so a file that no recovery finished does not stay.
   const recover = store.statePath("recover");
   try {
-    dropOld(recover, readdirSync(recover));
+    for (const name of readdirSync(recover)) dropOld(join(recover, name));
   } catch {
     // no recovery ran on this machine
   }
@@ -132,10 +196,7 @@ export function unsavedSessions(store: Store, cwd: string, root: string | null =
     const path = join(dir, name);
     try {
       // Old marks have no value: the transcript is gone or nobody will ask for it.
-      if ((name.startsWith("unsaved-") || name.startsWith("saved-")) && Date.now() - statSync(path).mtimeMs > KEEP_MS) {
-        rmSync(path, { force: true });
-        continue;
-      }
+      if (AGES.test(name) && dropOld(path)) continue;
       if (!name.startsWith("unsaved-")) continue;
       const entry = JSON.parse(readFileSync(path, "utf8")) as UnsavedSession;
       if (gone(entry.transcript)) {
