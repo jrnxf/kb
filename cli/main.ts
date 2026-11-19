@@ -2,13 +2,13 @@
 // kb: a personal knowledge store for coding agents. Harness-agnostic: flags and stdin only.
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { searchNotes } from "./search.ts";
 import { DEFAULT_PORT, isKbServer, serve } from "./serve.ts";
-import { markSaved } from "./session.ts";
+import { forgetUnsaved, markSaved, unsavedSessions } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
@@ -39,6 +39,8 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb promote <id> --to CLAUDE.md|AGENTS.md [--dry-run] [--repo .]
                                          append a note to the repo's own file
   kb checkpointed <session-id>           record that this session saved its knowledge
+  kb unsaved [--repo .]                  sessions here that ended with no checkpoint, and their transcripts
+  kb unsaved --forget <session-id>       stop reporting one of them, as it holds nothing to save
   kb scope [--repo .]                    print the scope id of a directory
   kb serve [--port n] [--no-open]        the store as a local page: read, edit and trash notes
                                          kb alone in a terminal does the same. Behind a proxy, name it in
@@ -60,7 +62,7 @@ interface Args {
   flags: Map<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["repo", "scope", "to", "port"]);
+const VALUE_FLAGS = new Set(["forget", "repo", "scope", "to", "port"]);
 
 function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -405,6 +407,20 @@ function cmdCheckpointed(store: Store, args: Args): Output {
   return { json: { session, recorded: store.exists() }, text: `recorded ${session}` };
 }
 
+function cmdUnsaved(store: Store, args: Args): Output {
+  const forget = args.flags.get("forget");
+  if (forget !== undefined) {
+    if (forget === true) throw new KbError("usage: kb unsaved --forget <session-id>");
+    const forgotten = store.exists() && forgetUnsaved(store, forget);
+    return { json: { session: forget, forgotten }, text: forgotten ? `forgot ${forget}` : `no unsaved session ${forget}` };
+  }
+  if (!store.exists()) return { json: [], text: "no unsaved session here" };
+  const dir = String(args.flags.get("repo") ?? ".");
+  const sessions = unsavedSessions(store, resolve(dir), resolveRepo(dir, store).root);
+  const text = sessions.map((s) => `${s.session} | ended ${s.ended} | ${s.transcript}`).join("\n") || "no unsaved session here";
+  return { json: sessions, text };
+}
+
 function openInBrowser(url: string): void {
   const opener = process.platform === "darwin" ? "open" : "xdg-open";
   try {
@@ -484,6 +500,7 @@ async function main(): Promise<number> {
       case "budget": out = cmdBudget(store, args); break;
       case "promote": out = cmdPromote(store, args); break;
       case "checkpointed": out = cmdCheckpointed(store, args); break;
+      case "unsaved": out = cmdUnsaved(store, args); break;
       case "serve": out = await cmdServe(store, args, json); break;
       case "sync": out = cmdSync(store); break;
       default: throw new KbError(`unknown command "${command}". Run \`kb help\`.`);

@@ -83,12 +83,16 @@ describe("SessionStart hook", () => {
     for (let i = 0; i < 40; i++) putNote(store, { id: `big-${i}`, body: "x".repeat(400) });
     const repo = tempRepo();
     const END = join(ROOT, "hooks", "session-end.sh");
+    const dir = tempDir("kb-transcripts-");
     for (let i = 0; i < 20; i++) {
-      const body = { session_id: `lost-${i}`, transcript_path: `/home/user/${"t".repeat(150)}-${i}.jsonl`, cwd: repo, hook_event_name: "SessionEnd", reason: "clear" };
+      const path = join(dir, `${"t".repeat(150)}-${i}.jsonl`);
+      const prompt = JSON.stringify({ type: "user", message: { content: "x".repeat(2000) } });
+      writeFileSync(path, `${prompt}\n${prompt}\n`);
+      const body = { session_id: `lost-${i}`, transcript_path: path, cwd: repo, hook_event_name: "SessionEnd", reason: "clear" };
       Bun.spawnSync([END], { env: { ...process.env, KB_HOME: store.home }, stdin: Buffer.from(JSON.stringify(body)) });
     }
     const out = runHook({ home: store.home, stdin: input(repo), env: { CLAUDE_CONFIG_DIR: tempDir("kb-claude-") } }).stdout;
-    expect(out).toContain("An earlier session in this directory");
+    expect(out).toContain("20 earlier sessions here ended with /clear");
     expect(out.length).toBeLessThan(10000);
   });
 
@@ -133,10 +137,20 @@ describe("session notices", () => {
   const END = join(ROOT, "hooks", "session-end.sh");
   const end = (home: string, body: object) =>
     Bun.spawnSync([END], { cwd: plain(), env: { ...process.env, KB_HOME: home }, stdin: Buffer.from(JSON.stringify(body)), stdout: "pipe", stderr: "pipe" });
-  const endInput = (cwd: string, session: string, reason = "clear") => ({ session_id: session, transcript_path: `/home/user/${session}.jsonl`, cwd, hook_event_name: "SessionEnd", reason });
+  // A transcript on disk, long enough to recover: a session whose transcript is gone or short is forgotten.
+  const transcripts = tempDir("kb-transcripts-");
+  const transcript = (session: string, prompts = 3) => {
+    const path = join(transcripts, `${session}.jsonl`);
+    const turn = (type: string, text: string) => JSON.stringify({ type, message: { content: [{ type: "text", text }] } });
+    writeFileSync(path, Array.from({ length: prompts }, (_, i) => [turn("user", `prompt ${i} ${"word ".repeat(300)}`), turn("assistant", "answer")]).flat().join("\n"));
+    return path;
+  };
+  const endInput = (cwd: string, session: string, reason = "clear", path = transcript(session)) => ({ session_id: session, transcript_path: path, cwd, hook_event_name: "SessionEnd", reason });
   const startInput = (cwd: string, source: string, session = "next") => JSON.stringify({ session_id: session, transcript_path: "/home/user/next.jsonl", cwd, hook_event_name: "SessionStart", source });
+  const NOTICE = "An earlier session here ended with /clear before /kb:checkpoint ran. Tell the user in one line, in your first reply, that /kb:recover saves its knowledge or forgets it.";
+  const unsaved = (store: ReturnType<typeof tempStore>, cwd: string) => kb(store, ["unsaved", "--json"], { cwd }).json.map((s: { session: string }) => s.session);
 
-  test("a /clear with no checkpoint is reported once, at the next start in the same directory", () => {
+  test("a /clear with no checkpoint is reported at each new start in the same directory, until it is recovered", () => {
     const store = tempStore();
     const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
     const other = tempRepo({ remote: "git@github.com:acme/web.git" });
@@ -144,11 +158,42 @@ describe("session notices", () => {
     const r = end(store.home, endInput(repo, "lost"));
     expect({ code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() }).toEqual({ code: 0, out: "", err: "" });
 
-    expect(runHook({ home: store.home, stdin: startInput(other, "clear") }).stdout).not.toContain("/home/user/lost.jsonl");
+    expect(runHook({ home: store.home, stdin: startInput(other, "clear") }).stdout).not.toContain(NOTICE);
+    expect(unsaved(store, other)).toEqual([]);
     const first = runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout;
     expect(first).toContain("### g [gotcha]");
-    expect(first).toContain("ended with /clear before /kb:checkpoint ran. Its transcript is /home/user/lost.jsonl.");
-    expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain("lost.jsonl");
+    expect(first).toContain(NOTICE);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(NOTICE);
+    // A resume or a compaction is the same session, which already had the notice.
+    for (const source of ["resume", "compact"]) expect(runHook({ home: store.home, stdin: startInput(repo, source) }).stdout).not.toContain(NOTICE);
+    expect(unsaved(store, repo)).toEqual(["lost"]);
+    expect(kb(store, ["unsaved", "--json"], { cwd: repo }).json[0]).toMatchObject({ session: "lost", transcript: join(transcripts, "lost.jsonl"), cwd: repo });
+
+    // /kb:recover ends with the old session's checkpoint.
+    kb(store, ["checkpointed", "lost"]);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain(NOTICE);
+    expect(unsaved(store, repo)).toEqual([]);
+  });
+
+  test("forget stops the notice, and two sessions give one line", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    end(store.home, endInput(repo, "one"));
+    end(store.home, endInput(repo, "two"));
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain("2 earlier sessions here ended with /clear before /kb:checkpoint ran. Tell the user in one line, in your first reply, that /kb:recover saves their knowledge or forgets them.");
+    expect(kb(store, ["unsaved", "--forget", "one", "--json"], { cwd: repo }).json).toEqual({ session: "one", forgotten: true });
+    expect(kb(store, ["unsaved", "--forget", "one", "--json"], { cwd: repo }).json).toEqual({ session: "one", forgotten: false });
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(NOTICE);
+    expect(unsaved(store, repo)).toEqual(["two"]);
+  });
+
+  test("a short session, or one whose transcript is gone, is forgotten with no notice", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    end(store.home, endInput(repo, "headless", "clear", transcript("headless", 1)));
+    end(store.home, endInput(repo, "gone", "clear", join(transcripts, "missing.jsonl")));
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain("ended with /clear");
+    expect(unsaved(store, repo)).toEqual([]);
   });
 
   // The agent can change directory inside the project, so the two hooks do not always get the same cwd.
@@ -160,9 +205,9 @@ describe("session notices", () => {
     mkdirSync(join(repo, "src"));
     end(store.home, endInput(join(repo, "src"), "lost"));
 
-    expect(runHook({ home: store.home, stdin: startInput(other, "clear") }).stdout).not.toContain("lost.jsonl");
-    expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).toContain("Its transcript is /home/user/lost.jsonl.");
-    expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain("lost.jsonl");
+    expect(runHook({ home: store.home, stdin: startInput(other, "clear") }).stdout).not.toContain(NOTICE);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).toContain(NOTICE);
+    expect(unsaved(store, repo)).toEqual(["lost"]);
   });
 
   test("no report after a checkpoint, for another end reason, or with no store", () => {
@@ -179,6 +224,7 @@ describe("session notices", () => {
     expect(end(missing, {}).exitCode).toBe(0);
     expect(existsSync(missing)).toBe(false);
     expect(kb(missing, ["checkpointed", "x", "--json"]).json.recorded).toBe(false);
+    expect(kb(missing, ["unsaved", "--json"]).json).toEqual([]);
     expect(existsSync(missing)).toBe(false);
   });
 
@@ -186,7 +232,7 @@ describe("session notices", () => {
     const store = tempStore();
     const repo = tempRepo();
     end(store.home, endInput(repo, "lost"));
-    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toStartWith(`${SAVING}\nAn earlier session`);
+    expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toStartWith(`${SAVING}\n${NOTICE}`);
   });
 
   test("after a compaction it says once per start that no checkpoint ran, unless one did", () => {

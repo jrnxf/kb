@@ -12,6 +12,8 @@ export interface UnsavedSession {
   transcript: string;
   cwd: string;
   ended: string;
+  /** How much the session said, measured once by the next session start. */
+  size?: { prompts: number; chars: number };
 }
 
 const safe = (session: string) => session.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 100);
@@ -39,12 +41,21 @@ function real(path: string): string {
   }
 }
 
+/** Stop reporting an unsaved session: it holds nothing worth a note. */
+export function forgetUnsaved(store: Store, session: string): boolean {
+  const path = store.statePath(`unsaved-${safe(session)}.json`);
+  if (!existsSync(path)) return false;
+  rmSync(path, { force: true });
+  return true;
+}
+
 /**
- * Return the unsaved sessions of a directory and forget them, so each one is reported once.
- * With `root`, the root of the repo around `cwd`, a session that ended anywhere in that
- * checkout counts: a session can end in a subdirectory and the next one start at the root.
+ * The unsaved sessions of a directory. Each stays until /kb:recover saves it or the user forgets
+ * it, or for 7 days. With `root`, the root of the repo around `cwd`, a session that ended anywhere
+ * in that checkout counts: a session can end in a subdirectory and the next one start at the root.
+ * A session whose transcript is gone is forgotten, as nothing can recover it.
  */
-export function takeUnsaved(store: Store, cwd: string, root: string | null = null): UnsavedSession[] {
+export function unsavedSessions(store: Store, cwd: string, root: string | null = null): UnsavedSession[] {
   const top = root && real(root);
   const here = (ended: string) => ended === cwd || (top !== null && (real(ended) === top || real(ended).startsWith(top + sep)));
   const dir = store.statePath("");
@@ -58,16 +69,15 @@ export function takeUnsaved(store: Store, cwd: string, root: string | null = nul
   for (const name of names) {
     const path = join(dir, name);
     try {
-      if (name.startsWith("unsaved-")) {
-        const entry = JSON.parse(readFileSync(path, "utf8")) as UnsavedSession;
-        if (here(entry.cwd)) {
-          found.push(entry);
-          rmSync(path, { force: true });
-          continue;
-        }
-      }
       // Old marks have no value: the transcript is gone or nobody will ask for it.
-      if ((name.startsWith("unsaved-") || name.startsWith("saved-")) && Date.now() - statSync(path).mtimeMs > KEEP_MS) rmSync(path, { force: true });
+      if ((name.startsWith("unsaved-") || name.startsWith("saved-")) && Date.now() - statSync(path).mtimeMs > KEEP_MS) {
+        rmSync(path, { force: true });
+        continue;
+      }
+      if (!name.startsWith("unsaved-")) continue;
+      const entry = JSON.parse(readFileSync(path, "utf8")) as UnsavedSession;
+      if (!existsSync(entry.transcript)) rmSync(path, { force: true });
+      else if (here(entry.cwd)) found.push(entry);
     } catch {
       // a broken mark is not worth a failure
     }
