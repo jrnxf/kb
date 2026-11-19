@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pageData } from "../cli/page.ts";
+import { pageData, storeVersion } from "../cli/page.ts";
 import { DIST } from "../cli/serve.ts";
 import type { PageNote } from "../cli/wire.ts";
 import { sourceHash } from "../web/source-hash.ts";
 import { EMPTY_VIEW, clearsIn, day, fromHash, neighbour, scopeHref, scopeName, show, toHash } from "../web/src/lib/view.ts";
-import { putNote, tempStore } from "./helpers.ts";
+import { logAt, otherMachine, putNote, tempStore } from "./helpers.ts";
 
 describe("the data behind the page", () => {
   test("shows raw HTML in a note as text, and renders the markdown", () => {
@@ -35,6 +35,29 @@ describe("the data behind the page", () => {
     expect(data.trashDays).toBe(30);
     expect(data.token).toBe("the-token");
     expect(data.kinds).toEqual(["open-work", "gotcha", "convention", "decision", "how-to"]);
+  });
+
+  test("the version changes when activity changes the order of the notes, so the page loads the new order", () => {
+    const store = tempStore();
+    const scope = "github.com/acme/api";
+    putNote(store, { id: "a", scope });
+    putNote(store, { id: "b", scope });
+    const order = () => pageData(store, "t").notes.map((n) => n.id);
+    const first = storeVersion(store);
+    expect(order()).toEqual(["a", "b"]);
+    expect(pageData(store, "t").version).toBe(first);
+    // No note changed. A read of "b" on this machine puts it first.
+    logAt(store, "2026-03-01T00:00:00Z", { ev: "show", note: "b", why: "task" });
+    expect(order()).toEqual(["b", "a"]);
+    const second = storeVersion(store);
+    expect(second).not.toBe(first);
+    // A read that leaves the order as it is leaves the version too, so the page does not load again.
+    logAt(store, "2026-03-02T00:00:00Z", { ev: "show", note: "b", why: "task" });
+    expect(storeVersion(store)).toBe(second);
+    // Activity that a sync brings from another machine counts in the same way.
+    otherMachine(store, "machine-b", { a: { last: "2026-03-05T00:00:00Z" } });
+    expect(order()).toEqual(["a", "b"]);
+    expect(storeVersion(store)).not.toBe(second);
   });
 });
 

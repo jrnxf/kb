@@ -21,12 +21,21 @@ export function renderBody(markdown: string): string {
   }
 }
 
-/** Changes whenever a note or the trash changes. The page refreshes when it differs. */
+/** The live notes as the page lists them: scope by scope, each scope in rank order. */
+function ranked(store: Store, active: StoredNote[]): StoredNote[] {
+  const lastActive = lastActivity(store);
+  const scopes = [...new Set(active.map((n) => n.scope))].sort((a, b) => (a === "global" ? -1 : b === "global" ? 1 : a.localeCompare(b)));
+  return scopes.flatMap((scope) => rank(active.filter((n) => n.scope === scope), lastActive));
+}
+
+/** Changes whenever a note, the trash or the order of the notes changes. The page refreshes when it differs. */
 export function storeVersion(store: Store): string {
   const strip = ({ path: _path, ...note }: StoredNote) => note;
   // An audit agent that ends changes the page too: its repo gets an audit to open.
   const audits = auditableScopes(store).map((scope) => runState(store, scope)?.status);
-  return Bun.hash(JSON.stringify([store.notes().map(strip), store.notes({ trashed: true }).map(strip), openAudits(store), audits])).toString(36);
+  // The order depends on the last activity, which is not in a note: a read changes the order and no note.
+  const active = ranked(store, store.notes());
+  return Bun.hash(JSON.stringify([active.map(strip), store.notes({ trashed: true }).map(strip), openAudits(store), audits])).toString(36);
 }
 
 /** The last audit agent of each repo the page can audit. */
@@ -38,13 +47,11 @@ function runs(store: Store) {
 }
 
 export function pageData(store: Store, token: string): PageData {
-  const lastActive = lastActivity(store);
   const active = store.notes();
   const trashed = store.notes({ trashed: true });
   const days = store.config().trashDays;
-  const scopes = [...new Set([...active, ...trashed].map((n) => n.scope))].sort((a, b) => (a === "global" ? -1 : b === "global" ? 1 : a.localeCompare(b)));
   // Live notes scope by scope in rank order, then the trash, most recently trashed first.
-  const ordered = [...scopes.flatMap((scope) => rank(active.filter((n) => n.scope === scope), lastActive)), ...trashed.sort(byTrashedAt)];
+  const ordered = [...ranked(store, active), ...trashed.sort(byTrashedAt)];
   const notes = ordered.map((note): PageNote => ({
     id: note.id,
     title: note.title,
