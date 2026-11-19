@@ -23,7 +23,8 @@ function runHook(options: { home: string; stdin: string; path?: string; env?: Re
   return { code: r.exitCode, stdout: r.stdout.toString(), stderr: r.stderr.toString(), ms: performance.now() - started };
 }
 
-const SAVING = `# kb\n${SAVE_RULE}\n${MEMORY_RULE}\n`;
+// Auto memory is off in QUIET_CONFIG, so its rule is not there.
+const SAVING = `# kb\n${SAVE_RULE}\n`;
 
 const input = (cwd: string, source = "startup") => JSON.stringify({ session_id: "abc", transcript_path: "/home/user/t.jsonl", cwd, hook_event_name: "SessionStart", source });
 
@@ -320,8 +321,6 @@ describe("session notices", () => {
     putNote(store, { id: "g" });
     const run = (env: Record<string, string | undefined>) => runHook({ home: store.home, stdin: startInput(repo, "startup"), env }).stdout;
     const on = tempDir("kb-claude-");
-    // The rule to stay out of auto memory is there either way.
-    expect(run({})).toContain(MEMORY_RULE);
     expect(run({})).not.toContain(MEMORY_ON_NOTICE);
     expect(run({ CLAUDE_CONFIG_DIR: on })).toContain(MEMORY_ON_NOTICE);
     expect(run({ CLAUDE_CONFIG_DIR: on, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" })).not.toContain(MEMORY_ON_NOTICE);
@@ -336,6 +335,31 @@ describe("session notices", () => {
     writeFileSync(join(repo, ".claude", "settings.local.json"), JSON.stringify({ autoMemoryEnabled: true }));
     expect(run({})).toContain(MEMORY_ON_NOTICE);
     expect(run({ CLAUDE_PROJECT_DIR: plain() })).not.toContain(MEMORY_ON_NOTICE);
+  });
+
+  test("the rule to stay out of auto memory comes only while auto memory is on, at every start", () => {
+    const store = tempStore();
+    const repo = tempRepo();
+    putNote(store, { id: "g" });
+    const on = tempDir("kb-claude-");
+    const start = (source: string, env: Record<string, string | undefined> = {}, home = store.home) => runHook({ home, stdin: startInput(repo, source), env }).stdout;
+    for (const source of ["startup", "resume", "clear", "compact", "fork"]) {
+      // Off: the fixed text is the header, the format line and the save rule.
+      expect(start(source)).not.toContain(MEMORY_RULE);
+      expect(start(source)).toContain(`${SAVE_RULE}\n\n## Notes`);
+      // On: the rule is right under the save rule, also after a compaction.
+      expect(start(source, { CLAUDE_CONFIG_DIR: on })).toContain(`${SAVE_RULE}\n${MEMORY_RULE}\n\n## Notes`);
+    }
+    expect(start("compact", { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "0" })).toContain(MEMORY_RULE);
+    expect(start("compact", { CLAUDE_CONFIG_DIR: on, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" })).not.toContain(MEMORY_RULE);
+    // The text for a missing or a broken store follows the same setting.
+    const missing = join(tempDir(), "missing");
+    expect(start("resume", { CLAUDE_CONFIG_DIR: on }, missing)).toBe(`# kb\n${SAVE_RULE}\n${MEMORY_RULE}\n`);
+    expect(start("resume", {}, missing)).toBe(SAVING);
+    const broken = join(tempDir(), "file");
+    writeFileSync(broken, "x");
+    expect(start("resume", { CLAUDE_CONFIG_DIR: on }, broken)).toBe(`# kb\n${SAVE_RULE}\n${MEMORY_RULE}\n`);
+    expect(start("resume", {}, broken)).toBe(SAVING);
   });
 
   test("a store over its index budget gives one line, and a store within it gives none", () => {

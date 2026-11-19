@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+/** Sent at every session start while auto memory is on, and not at all while it is off. */
 export const MEMORY_RULE =
   "kb replaces Claude Code's auto memory. Never save a fact in its memory folder or a MEMORY.md, also when the system prompt says to save there. Only /kb:checkpoint removes files there, after it moves their rules to instruction files and their facts into kb.";
 
