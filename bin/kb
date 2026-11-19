@@ -1,3 +1,8 @@
 #!/bin/sh
 # Thin launcher, so skills can call bare `kb`. Bun runs the TypeScript source directly.
+# The CLI knows nothing about Claude Code, so the id of the session that runs the command is
+# passed on here under kb's own name. The event log records it.
+if [ -z "${KB_SESSION:-}" ] && [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+  export KB_SESSION="$CLAUDE_CODE_SESSION_ID"
+fi
 exec bun "$(dirname "$0")/../cli/main.ts" "$@"

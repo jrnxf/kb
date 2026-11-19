@@ -5,7 +5,7 @@ import { SAVE_RULE, budgetOf, buildContext, contextBudget, indexLine } from "../
 import { rememberRepo } from "../cli/repos.ts";
 import { slugify } from "../cli/note.ts";
 import { HARD_CONTEXT_CAP, type StoredNote } from "../cli/store.ts";
-import { plain, putNote, tempRepo, tempStore } from "./helpers.ts";
+import { legacyUsage, logAt, plain, putNote, tempRepo, tempStore } from "./helpers.ts";
 
 const REMOTE = "git@github.com:acme/billing.git";
 const SCOPE = "github.com/acme/billing";
@@ -15,7 +15,7 @@ function setConfig(home: string, budgets: { indexLines?: number; contextChars?: 
 }
 
 describe("kb context ranking", () => {
-  test("orders repo notes before global ones, then by kind, then last_used, then last_verified", () => {
+  test("orders repo notes before global ones, then by kind, then last activity, then last_verified", () => {
     const store = tempStore();
     const repo = tempRepo({ remote: REMOTE });
     putNote(store, { id: "howto", kind: "how-to", scope: SCOPE });
@@ -26,7 +26,7 @@ describe("kb context ranking", () => {
     putNote(store, { id: "gotcha-new", kind: "gotcha", scope: SCOPE, last_verified: "2026-03-01T00:00:00Z" });
     putNote(store, { id: "gotcha-used", kind: "gotcha", scope: SCOPE });
     putNote(store, { id: "open", kind: "open-work", scope: SCOPE });
-    store.bumpUsage(["gotcha-used"], "2026-05-01T00:00:00Z");
+    logAt(store, "2026-05-01T00:00:00Z", { ev: "show", note: "gotcha-used", why: "task" });
 
     const result = buildContext(store, repo);
     expect(result.scope).toBe(SCOPE);
@@ -34,22 +34,37 @@ describe("kb context ranking", () => {
     expect(result.dropped).toEqual([]);
   });
 
-  test("in a repo, global notes take at most globalIndexLines places: open work first, then the most used", () => {
+  test("among repo notes of one kind the newest activity goes first: a show for a task, a fire, a verdict helped, or an older last_used", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: REMOTE });
+    for (const id of ["a-quiet", "b-checked", "c-shown", "d-fired", "e-helped", "f-legacy", "g-not-needed"]) putNote(store, { id, scope: SCOPE });
+    logAt(store, "2026-05-01T00:00:00Z", { ev: "show", note: "c-shown", why: "task" });
+    logAt(store, "2026-05-02T00:00:00Z", { ev: "fire", kind: "path", form: "title", note: "d-fired", tool: "Read", match: "src/a.ts" });
+    logAt(store, "2026-05-03T00:00:00Z", { ev: "verdict", note: "e-helped", verdict: "helped" });
+    legacyUsage(store, "old", { "f-legacy": { uses: 1, last_used: "2026-05-04T00:00:00Z" } });
+    // A check and a verdict that the note had no bearing are no activity.
+    logAt(store, "2026-06-01T00:00:00Z", { ev: "show", note: "b-checked", why: "check" });
+    logAt(store, "2026-06-01T00:00:00Z", { ev: "verdict", note: "g-not-needed", verdict: "not-needed" });
+    expect(buildContext(store, repo).bodies).toEqual(["f-legacy", "e-helped", "d-fired", "c-shown", "a-quiet", "b-checked", "g-not-needed"]);
+  });
+
+  test("in a repo, global notes take at most globalIndexLines places: open work first, then by kind, then last verified", () => {
     const store = tempStore();
     setConfig(store.home, { globalIndexLines: 3 });
     const repo = tempRepo({ remote: REMOTE });
     putNote(store, { id: "repo-note", kind: "how-to", scope: SCOPE });
-    for (const id of ["g-none", "g-one", "g-three", "g-five"]) putNote(store, { id, kind: "convention" });
+    putNote(store, { id: "g-howto", kind: "how-to", last_verified: "2026-04-01T00:00:00Z" });
+    putNote(store, { id: "g-rule-old", kind: "convention", last_verified: "2026-02-01T00:00:00Z" });
+    putNote(store, { id: "g-rule-new", kind: "convention", last_verified: "2026-03-01T00:00:00Z" });
+    putNote(store, { id: "g-trap", kind: "gotcha" });
     putNote(store, { id: "g-open", kind: "open-work" });
-    store.bumpUsage(["g-one", "g-three", "g-five"], "2026-05-01T00:00:00Z");
-    store.bumpUsage(["g-three", "g-five"], "2026-05-01T00:00:00Z");
-    store.bumpUsage(["g-three", "g-five"], "2026-05-01T00:00:00Z");
-    store.bumpUsage(["g-five"], "2026-05-01T00:00:00Z");
-    store.bumpUsage(["g-five"], "2026-05-01T00:00:00Z");
+    // No count of reads lifts a global note: not the log, and not the counters of an older kb.
+    for (const day of ["01", "02", "03"]) logAt(store, `2026-05-${day}T00:00:00Z`, { ev: "show", note: "g-howto", why: "task" });
+    legacyUsage(store, "old", { "g-howto": { uses: 50, last_used: "2026-05-01T00:00:00Z" }, "g-rule-old": { uses: 9, last_used: "2026-05-01T00:00:00Z" } });
     const result = buildContext(store, repo);
-    expect(result.bodies).toEqual(["repo-note", "g-open", "g-five", "g-three"]);
-    expect(result.capped.sort()).toEqual(["g-none", "g-one"]);
-    expect(result.text).toContain("2 global notes with fewer uses are left out here. `kb show <id>` prints one note. `kb search <words>` searches every note.");
+    expect(result.bodies).toEqual(["repo-note", "g-open", "g-trap", "g-rule-new"]);
+    expect(result.capped).toEqual(["g-rule-old", "g-howto"]);
+    expect(result.text).toContain("2 global notes of lower rank are left out here. `kb show <id>` prints one note. `kb search <words>` searches every note.");
     // Left out on purpose is not over the budget, so no session hears that notes are hidden.
     expect(result.hiddenIndexLines).toBe(0);
     // Outside any repo, the global notes are the session's own, and none is left out.

@@ -14,7 +14,7 @@ import type { RepoInfo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import type { AuditAction, AuditCard, AuditData, AuditNote, AuditPick, AuditPromote, AuditResult } from "./wire.ts";
-import { afterWrite, nowIso } from "./write.ts";
+import { afterWrite, logWrites, nowIso } from "./write.ts";
 
 /** The card shows `why` as one short line, so it stays brief. */
 export const WHY_MAX = 140;
@@ -183,7 +183,6 @@ export function proposeAudit(store: Store, input: unknown, repo: RepoInfo): Audi
 export function auditData(store: Store, scope: string, token: string): AuditData {
   const audit = readAudit(store, scope);
   if (!audit) throw new KbError(`no audit for ${scope}. Run /kb:audit ${scope === "global" ? "outside any repo" : "in that repo"}.`);
-  const usage = store.usage();
   const active = activeNotes(store);
   const budget = budgetOf(store, audit.scope === "global" ? null : audit.scope);
   const places = new Map(budget.notes.map((n) => [n.id, n.shown]));
@@ -193,7 +192,6 @@ export function auditData(store: Store, scope: string, token: string): AuditData
     kind: n.kind,
     scope: n.scope,
     body: n.body,
-    uses: usage.get(n.id)?.uses ?? 0,
     place: places.get(n.id) ?? "hidden",
   });
   // A note that changed or left since the proposal is not on a card: the proposal no longer fits it.
@@ -360,5 +358,8 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
   audit.result = result;
   writeAll(store, all);
   if (plan.some(({ pick, written }) => written.length > 0 || pick.action === "trash")) afterWrite(store, `kb: apply the audit of ${scope}`);
+  logWrites(store, "update", [...result.rewritten, ...result.merged.map((m) => m.kept), ...result.promoted!]);
+  logWrites(store, "trash", [...result.merged.flatMap((m) => m.trashed), ...result.trashed]);
+  logWrites(store, "verify", result.checked);
   return result;
 }

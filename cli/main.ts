@@ -8,6 +8,7 @@ import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
+import { type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, lastActivity, logEvent, readLog, sessionOf, setActor, summarize } from "./log.ts";
 import { CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
@@ -18,20 +19,22 @@ import { markSaved } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
-import { afterWrite, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, moveNotes, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+import { afterWrite, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, logWrites, moveNotes, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 const USAGE = `kb - a personal knowledge store for coding agents
 
   kb context [--repo .]                  text for a session start: index, top notes, pointer
   kb add [--repo .]                      create or update a note from JSON on stdin
-  kb show <id> [--no-use]                print one note, and count a use of it. A part of the id is
-                                         enough when one note has it. --no-use for a check, not a use
-  kb search <words> [--scope s] [--trash]
+  kb show <id> [--check]                 print one note. A part of the id is enough when one note has
+                                         it. --check when the read is a check, not a need for the note:
+                                         an audit, or a look before an update
+  kb search <words> [--scope s] [--trash] [--check]
                                          notes that have every word, in any order, this repo first
-  kb list [--scope s] [--trash]          every note with kind, uses and verified date
+  kb list [--scope s] [--trash]          every note with kind and verified date
                                          --scope takes "repo", "global" or a repo id
-  kb use <id>...                         record that these notes changed what you did, when you did not
-                                         read them with kb show
+  kb verdict <${VERDICTS.join("|")}> <id>...
+                                         record what a note did for this session: it changed what you
+                                         did, it had no bearing, or it was false or misleading
   kb trash <id>... | kb restore <id>...  trash retires a note: restore brings it back. A note in the
                                          trash for more than trashDays (30) is deleted for good
   kb delete <id>...                      remove notes for good, active or in the trash. When the user
@@ -52,6 +55,9 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb instructions [--repo .]             the instruction files for a rule the user states: the global
                                          one, and the repo's CLAUDE.md and AGENTS.md
   kb checkpointed <session-id>           record that this session saved its knowledge
+  kb log [--session id] [--since days]   what the log of this machine says of each note: how often a
+                                         session got it, opened it and judged it. With --session, the
+                                         events of one session in time order
   kb scope [--repo .]                    print the scope id of a directory
   kb serve [--port n] [--no-open]        the store as a local page: read, edit and trash notes
                                          kb alone in a terminal does the same. Behind a proxy, name it in
@@ -59,6 +65,8 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb sync                                commit, pull and push the store
 
 Every command accepts --json. The store is ~/.kb, or KB_HOME.
+A read, a write and a verdict each add one line to a log on this machine. The line names the
+session: --session <id>, or KB_SESSION.
 
 kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "confidence"?, "supersedes"?}
   scope: "repo" (the default inside a git repo), "global", or the id of a repo that has notes
@@ -73,7 +81,7 @@ interface Args {
   flags: Map<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["repo", "scope", "to", "port"]);
+const VALUE_FLAGS = new Set(["repo", "scope", "to", "port", "session", "since"]);
 
 function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -163,8 +171,9 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
     confidence: "medium",
     anchors: [],
     ...input,
-    // An id with counters on any machine belongs to a deleted note: a new note must not inherit its uses.
-    id: uniqueId(slug, new Set([...active, ...trashed].map((n) => n.id).concat([...store.usage().keys()]))),
+    // An id with counters on any machine, or with activity in the log of this machine, belongs to a
+    // deleted note: a new note must not inherit its history.
+    id: uniqueId(slug, new Set([...active, ...trashed].map((n) => n.id).concat([...store.usage().keys()], [...lastActivity(store).keys()]))),
     scope,
     created: now,
     last_verified: now,
@@ -173,6 +182,7 @@ function cmdAdd(store: Store, args: Args, stdin: string): Output {
   const note: Note = validateNote(raw);
   const path = store.writeNote(note);
   afterWrite(store, `kb: add ${note.id}`);
+  logWrites(store, "add", [note.id]);
   return { json: { status: "created", id: note.id, path }, text: `created ${note.id}` };
 }
 
@@ -211,30 +221,30 @@ function scopeFilter(store: Store, args: Args): string | undefined {
   return value;
 }
 
+/**
+ * Why the command reads: for a task, or as a check (an audit, a look before an update). --no-use is
+ * the older name of --check, which a cached skill on another machine may still pass.
+ */
+const whyOf = (args: Args): Why => (args.flags.has("check") || args.flags.has("no-use") ? "check" : "task");
+
 function cmdShow(store: Store, args: Args): Output {
   const given = args.positional[0];
-  if (!given) throw new KbError("usage: kb show <id> [--no-use]");
+  if (!given) throw new KbError("usage: kb show <id> [--check]");
   // Ids are long. A part of one is enough to read a note, when only one note has it.
   const close = store.find(given) ? [] : closeIds(store, given);
   const note = requireNote(store, close.length === 1 ? close[0]! : given);
-  const id = note.id;
-  // An agent reads a note because it needs it now: that is a use. A check (an audit, a search
-  // before a write) passes --no-use, so it does not count.
-  if (!note.trashed && !args.flags.has("no-use")) {
-    store.bumpUsage([id], nowIso());
-    afterWrite(store, `kb: show ${id}`);
-  }
-  const usage = store.usage().get(id) ?? { uses: 0 };
-  const header = `# ${relative(store.home, note.path)} | uses ${usage.uses}${usage.last_used ? `, last used ${usage.last_used}` : ""}`;
-  return { json: { ...note, ...usage }, text: `${header}\n${readFileSync(note.path, "utf8").trimEnd()}` };
+  // A read changes nothing in the store. The log on this machine records it.
+  logEvent(store, { ev: "show", note: note.id, why: whyOf(args) });
+  return { json: note, text: `# ${relative(store.home, note.path)}\n${readFileSync(note.path, "utf8").trimEnd()}` };
 }
 
 function cmdSearch(store: Store, args: Args): Output {
   const query = args.positional.join(" ");
-  if (!query) throw new KbError("usage: kb search <words> [--scope s] [--trash]");
+  if (!query) throw new KbError("usage: kb search <words> [--scope s] [--trash] [--check]");
   const scope = scopeFilter(store, args);
   const first = resolveRepo(String(args.flags.get("repo") ?? "."), store).scope ?? undefined;
   const { hits, complete } = searchNotes(store, query, { scope, trash: inTrash(args), first });
+  logEvent(store, { ev: "search", query, hits: new Set(hits.map((h) => h.id)).size, why: whyOf(args) });
   // One line per note. The body lines that matched follow it, because the title is already there.
   const rows: string[] = [];
   let last = "";
@@ -259,19 +269,16 @@ const inTrash = (args: Args) => args.flags.has("trash");
 
 function cmdList(store: Store, args: Args): Output {
   const scope = scopeFilter(store, args);
-  const usage = store.usage();
   const trash = inTrash(args);
   const days = store.config().trashDays;
   const found = store.notes({ trashed: trash }).filter((n) => scope === undefined || n.scope === scope);
   // The trash lists the most recently trashed note first.
-  const notes = trash ? found.sort(byTrashedAt) : rank(found, usage);
+  const notes = trash ? found.sort(byTrashedAt) : rank(found, lastActivity(store));
   const rows = notes.map((n) => ({
     id: n.id,
     kind: n.kind,
     scope: n.scope,
     title: n.title,
-    uses: usage.get(n.id)?.uses ?? 0,
-    last_used: usage.get(n.id)?.last_used ?? null,
     last_verified: n.last_verified,
     confidence: n.confidence,
     promoted_to: n.promoted_to ?? null,
@@ -279,25 +286,30 @@ function cmdList(store: Store, args: Args): Output {
   }));
   const width = (key: "id" | "kind" | "scope") => Math.max(key.length, ...rows.map((r) => r[key].length));
   const [wId, wKind, wScope] = [width("id"), width("kind"), width("scope")];
-  const line = (id: string, kind: string, scope: string, uses: string, verified: string, title: string) =>
-    `${id.padEnd(wId)}  ${kind.padEnd(wKind)}  ${scope.padEnd(wScope)}  ${uses.padStart(4)}  ${verified.padEnd(10)}  ${title}`;
+  const line = (id: string, kind: string, scope: string, verified: string, title: string) =>
+    `${id.padEnd(wId)}  ${kind.padEnd(wKind)}  ${scope.padEnd(wScope)}  ${verified.padEnd(10)}  ${title}`;
   const text =
     rows.length === 0
       ? trash ? "the trash is empty" : "no notes"
-      : [line("id", "kind", "scope", "uses", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, String(r.uses), r.last_verified.slice(0, 10), `${r.title}${r.clears_at ? ` (deleted ${r.clears_at.slice(0, 10)})` : ""}`))].join("\n");
+      : [line("id", "kind", "scope", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, r.last_verified.slice(0, 10), `${r.title}${r.clears_at ? ` (deleted ${r.clears_at.slice(0, 10)})` : ""}`))].join("\n");
   return { json: rows, text };
 }
 
-function cmdUse(store: Store, args: Args): Output {
-  if (args.positional.length === 0) throw new KbError("usage: kb use <id>...");
-  const known = new Set(store.notes().map((n) => n.id));
-  const used = [...new Set(args.positional.filter((id) => known.has(id)))];
-  const unknown = args.positional.filter((id) => !known.has(id));
-  if (used.length === 0) throw new KbError(`no active note with id: ${unknown.join(", ")}`);
-  store.bumpUsage(used, nowIso());
-  afterWrite(store, `kb: use ${used.join(" ")}`);
-  const text = `used ${used.join(", ")}${unknown.length > 0 ? `\nunknown ${unknown.join(", ")}` : ""}`;
-  return { json: { used, unknown }, text };
+/**
+ * `kb verdict`: what a note did for the session that got it. `kb use <id>...` is the older form of
+ * `kb verdict helped`, which a cached skill on another machine may still run.
+ */
+function cmdVerdict(store: Store, verdict: string | undefined, ids: string[]): Output {
+  if (!VERDICTS.includes(verdict as Verdict) || ids.length === 0) throw new KbError(`usage: kb verdict <${VERDICTS.join("|")}> <id>...`);
+  // A session may judge a note that it trashed a moment ago, for example a note that was wrong.
+  const known = new Set([...store.notes(), ...store.notes({ trashed: true })].map((n) => n.id));
+  const notes = [...new Set(ids.filter((id) => known.has(id)))];
+  const unknown = ids.filter((id) => !known.has(id));
+  if (notes.length === 0) throw new KbError(`no note with id: ${unknown.join(", ")}`);
+  // The log is all a verdict writes, so here a log that fails is an error.
+  if (!logEvent(store, notes.map((note) => ({ ev: "verdict" as const, note, verdict: verdict as Verdict })))) throw new KbError("the verdict was not recorded: kb could not write its log");
+  const text = `${verdict}: ${notes.join(", ")}${unknown.length > 0 ? `\nunknown ${unknown.join(", ")}` : ""}`;
+  return { json: { verdict, notes, unknown }, text };
 }
 
 /** The --scope of a project command: the exact repo id, with no note ids next to it. */
@@ -363,6 +375,7 @@ function cmdVerify(store: Store, args: Args): Output {
   }
   const ids = notes.map((n) => n.id);
   afterWrite(store, `kb: verify ${ids.join(" ")}`);
+  logWrites(store, "verify", ids);
   return { json: { verified: ids, commit: repo.head }, text: `verified ${ids.join(", ")}` };
 }
 
@@ -377,7 +390,7 @@ function cmdBudget(store: Store, args: Args): Output {
   // One long body ends the list of bodies, so the longest ones are the first to shorten.
   const longest = b.notes.filter((n) => n.shown === "body").sort((x, y) => y.chars - x.chars).slice(0, 3);
   if (b.context.dropped > 0 && longest.length > 0) lines.push(`longest  ${longest.map((n) => `${n.id} (${n.chars})`).join(", ")}`);
-  if (b.index.capped > 0) lines.push(`global   ${b.index.globalBudget} global notes load here, the most used. ${count(b.index.capped)} with fewer uses stay out, on purpose.`);
+  if (b.index.capped > 0) lines.push(`global   ${b.index.globalBudget} global notes load here, the highest ranked. ${count(b.index.capped)} of lower rank stay out, on purpose.`);
   if (b.over) {
     lines.push(`${count(b.index.hidden)} ${b.index.hidden === 1 ? "reaches" : "reach"} no session, because the index is full.`);
     if (b.trim.length > 0) lines.push(`Trash or merge first: ${b.trim.map((d) => `${d.id} (${d.reason})`).join(", ")}`);
@@ -391,7 +404,94 @@ function cmdCheckpointed(store: Store, args: Args): Output {
   const session = args.positional[0];
   if (!session) throw new KbError("usage: kb checkpointed <session-id>");
   if (store.exists()) markSaved(store, session);
+  logEvent(store, { ev: "checkpoint", session });
   return { json: { session, recorded: store.exists() }, text: `recorded ${session}` };
+}
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** A time of the log in the local time of this machine, for a person to read. */
+function localTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/** One event of a session as text. An event that a later kb wrote prints its name and its note. */
+function eventText(event: Logged): string {
+  const e = event as Logged & Record<string, any>;
+  const detail = (): string => {
+    switch (e.ev) {
+      case "start": return `${e.source}: ${count(e.bodies.length, "body", "bodies")}, ${count(e.index.length, "index line", "index lines")}, ${e.hidden.length} hidden, ${e.chars.total} characters`;
+      case "fire": return `${e.note} (${e.tool} of ${e.match})`;
+      case "show": return `${e.note} (${e.why})`;
+      case "search": return `${JSON.stringify(e.query)}: ${count(e.hits, "note", "notes")} (${e.why})`;
+      case "write": return `${e.op} ${e.note}`;
+      case "verdict": return `${e.verdict} ${e.note}`;
+      case "unsaved": return e.reason ? `after ${e.reason}` : "";
+      default: return typeof e.note === "string" ? e.note : "";
+    }
+  };
+  let text = "";
+  try {
+    text = detail();
+  } catch {
+    // a line with a field missing still shows its time and its name
+  }
+  return `${localTime(e.t)}  ${e.ev.padEnd(10)}  ${text}${e.agent ? `  [agent ${e.agent}]` : ""}`.trimEnd();
+}
+
+/**
+ * `kb log`: what the log of this machine says of each note. With --session, the events of one
+ * session in time order, and the notes it got and has not judged yet. The JSON is what the audit
+ * reads: one row per note, with the same fields in both forms.
+ */
+function cmdLog(store: Store, args: Args): Output {
+  const session = args.flags.get("session");
+  const sinceDays = args.flags.get("since");
+  if (sinceDays !== undefined && !(Number(sinceDays) > 0)) throw new KbError("--since needs a number of days above 0");
+  const since = sinceDays === undefined ? undefined : new Date(Date.now() - Number(sinceDays) * 86_400_000);
+  const events = readLog(store, { since, session: typeof session === "string" ? session : undefined });
+  const { notes: logged, ...totals } = summarize(events);
+
+  const active = new Map(store.notes().map((n) => [n.id, n]));
+  const trashed = new Map(store.notes({ trashed: true }).map((n) => [n.id, n]));
+  const lastActive = lastActivity(store);
+  const row = ({ id, ...counts }: NoteLog) => {
+    const note = active.get(id) ?? trashed.get(id);
+    // "gone": the note was deleted, or it lives on a machine that has not synced it here.
+    return { id, scope: note?.scope ?? null, kind: note?.kind ?? null, state: active.has(id) ? "active" : trashed.has(id) ? "trash" : "gone", ...counts, last_activity: lastActive.get(id) ?? null };
+  };
+  const head = { since: since ? nowIso(since) : null, ...totals };
+  const period = totals.from ? `${localTime(totals.from)} to ${localTime(totals.to!)}` : "no events";
+
+  if (typeof session === "string") {
+    const notes = logged.map(row);
+    // The notes the session can judge: it got the body, opened the note for a task, or a hook named it.
+    const got = (n: (typeof notes)[number]) => [n.body > 0 ? "body" : "", n.opened.task > 0 ? "opened" : "", n.fired > 0 ? "fired" : ""].filter(Boolean);
+    const judged = (n: (typeof notes)[number]) => VERDICTS.some((v) => n.verdicts[v] > 0);
+    const unjudged = notes.filter((n) => n.state !== "gone" && got(n).length > 0 && !judged(n));
+    const scope = events.find((e) => e.scope)?.scope ?? null;
+    const lines = [`session ${session} | ${scope ?? "scope unknown"} | ${period} | ${count(events.length, "event", "events")}`, ...events.map(eventText)];
+    if (unjudged.length > 0) lines.push("no verdict yet:", ...unjudged.map((n) => `- ${n.id} | ${got(n).join(", ")} | ${(active.get(n.id) ?? trashed.get(n.id))!.title}`));
+    return { json: { session, scope, ...head, notes, unjudged: unjudged.map((n) => n.id), timeline: events }, text: lines.join("\n") };
+  }
+
+  // Every active note has a row, so a note that no session got shows as zeros, not as a gap.
+  const named = new Set(logged.map((n) => n.id));
+  const quiet = [...active.keys()].filter((id) => !named.has(id));
+  const notes = [...logged, ...quiet.map(emptyNoteLog)].map(row).sort((a, b) => a.id.localeCompare(b.id));
+  const columns = ["body", "index", "hidden", "opened", "checked", "fired", ...VERDICTS];
+  const cells = (n: (typeof notes)[number]) => [n.body, n.index, n.hidden, n.opened.task, n.opened.check, n.fired, ...VERDICTS.map((v) => n.verdicts[v])];
+  const wId = Math.max(2, ...logged.map((n) => n.id.length));
+  const table = (id: string, values: (string | number)[]) => `${id.padEnd(wId)}  ${values.map((v, i) => String(v).padStart(columns[i]!.length)).join("  ")}`;
+  const lines = [
+    `log  ${period} | ${count(totals.sessions, "session", "sessions")}, ${count(totals.starts, "start", "starts")}, ${count(totals.checkpoints, "checkpoint", "checkpoints")}, ${totals.unsaved} unsaved | searches: ${totals.searches.task} for a task, ${totals.searches.check} as a check`,
+  ];
+  if (logged.length > 0) lines.push(table("id", columns), ...notes.filter((n) => named.has(n.id)).map((n) => table(n.id, cells(n))));
+  if (quiet.length > 0) lines.push(`${count(quiet.length, "active note has", "active notes have")} no event${since ? " in this time" : ""}.`);
+  return { json: { ...head, notes }, text: lines.join("\n") };
 }
 
 function openInBrowser(url: string): void {
@@ -519,6 +619,13 @@ async function main(): Promise<number> {
         console.error(`kb: the trash was not cleared: ${(error as Error).message}`);
       }
     }
+    // Each event of the command names the session that runs it. The scope takes a git call, so it
+    // waits for the first event. The page server runs for hours and serves the user, so it names none.
+    // The trash above is cleared for nobody, so its events come before this.
+    if (command && command !== "serve") {
+      let who: { session?: string; scope: string } | undefined;
+      setActor(() => (who ??= { session: sessionOf(args.flags.get("session")), scope: resolveRepo(String(args.flags.get("repo") ?? "."), store, { record: false }).scope ?? "global" }));
+    }
     // A person who types only `kb` in a terminal wants to see the notes. A script gets the help.
     if (!command && process.stdout.isTTY && store.exists()) await cmdServe(store, args, json);
     if (!command || command === "help" || command === "--help" || command === "-h" || args.flags.has("help")) {
@@ -533,7 +640,9 @@ async function main(): Promise<number> {
       case "show": out = cmdShow(store, args); break;
       case "search": out = cmdSearch(store, args); break;
       case "list": out = cmdList(store, args); break;
-      case "use": out = cmdUse(store, args); break;
+      case "verdict": out = cmdVerdict(store, args.positional[0], args.positional.slice(1)); break;
+      case "use": out = cmdVerdict(store, "helped", args.positional); break;
+      case "log": out = cmdLog(store, args); break;
       case "trash": out = cmdMove(store, args, true); break;
       case "restore": out = cmdMove(store, args, false); break;
       case "delete": out = cmdDelete(store, args); break;

@@ -104,13 +104,23 @@ function oneLine(text: string, max: number): string {
   return line.length > max ? `${line.slice(0, max - 3)}...` : line;
 }
 
+/** What a Read gives the agent: the text, and the notes it names, for the event log. */
+export interface PathNotice {
+  text: string;
+  scope: string;
+  /** The repo-relative path of the file. */
+  path: string;
+  /** The ids of the notes the text names. */
+  notes: string[];
+}
+
 /**
  * What the agent reads after it reads a file: the notes on the file that this reader has not got
  * yet, at most NOTES_PER_FILE. null when there is nothing new. Each named note is recorded before
  * it is returned, with a create that fails when the file exists, so of two Reads at the same time
  * only one names a note.
  */
-export function byPathNotice(store: Store, file: string, reader: Reader, now = Date.now()): string | null {
+export function byPathNotice(store: Store, file: string, reader: Reader, now = Date.now()): PathNotice | null {
   const found = notesForFile(store, file);
   if (!found || found.notes.length === 0) return null;
   const dir = seenDir(store, reader);
@@ -150,5 +160,5 @@ export function byPathNotice(store: Store, file: string, reader: Reader, now = D
     ...named.map((n) => `- ${n.id} [${n.kind}] ${oneLine(n.title, TITLE_CHARS)}`),
   ];
   if (more > 0) lines.push(`${more} more. \`kb search\` finds them.`);
-  return lines.join("\n");
+  return { text: lines.join("\n"), scope: found.scope, path: found.path, notes: named.map((n) => n.id) };
 }

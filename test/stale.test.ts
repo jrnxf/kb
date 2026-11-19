@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { contextBudget } from "../cli/context.ts";
 import { findStale } from "../cli/stale.ts";
-import { kb, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
+import { kb, legacyUsage, logAt, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
 
 const SCOPE = "github.com/acme/billing";
 const NOW = new Date("2026-03-01T00:00:00Z");
@@ -91,19 +91,26 @@ describe("kb stale", () => {
     expect(reasons(store, repo)).toEqual(["never:commit-unknown", "rebased:commit-unknown"]);
   });
 
-  test("expired: no use and no check for expireDays. decayed: used, but not verified for decayDays", () => {
+  test("expired: no activity and no check for expireDays. decayed: active, but not verified for decayDays", () => {
     const { repo, store } = fixture();
     putNote(store, { id: "unused", scope: SCOPE, last_verified: "2025-11-01T00:00:00Z" });
     putNote(store, { id: "used", scope: SCOPE, last_verified: "2025-08-01T00:00:00Z" });
     putNote(store, { id: "checked", scope: SCOPE, last_verified: "2026-01-01T00:00:00Z" });
     putNote(store, { id: "old-global", last_verified: "2025-08-01T00:00:00Z" });
-    store.bumpUsage(["used"], "2026-02-01T00:00:00Z");
+    logAt(store, "2026-02-01T00:00:00Z", { ev: "show", note: "used", why: "task" });
+    // A read that is a check, and a verdict that the note had no bearing, keep no note alive.
+    logAt(store, "2026-02-01T00:00:00Z", { ev: "show", note: "unused", why: "check" });
+    logAt(store, "2026-02-01T00:00:00Z", { ev: "verdict", note: "unused", verdict: "not-needed" });
     // A note gets one of the two: expired says more.
     expect(findStale(store, repo, NOW).candidates.map((c) => `${c.id}: ${c.detail}`)).toEqual(["unused: no use and no check for 120 days", "used: last verified 212 days ago"]);
     expect(reasons(store, repo)).toEqual(["unused:expired", "used:decayed"]);
-    // A use within expireDays keeps a note from expiring, and the config sets both windows.
-    store.bumpUsage(["unused"], "2026-02-01T00:00:00Z");
+    // Activity within expireDays keeps a note from expiring: here a Read of a file the note is anchored to.
+    logAt(store, "2026-02-01T00:00:00Z", { ev: "fire", kind: "path", form: "title", note: "unused", tool: "Read", match: "src/ledger.ts" });
     expect(reasons(store, repo)).toEqual(["used:decayed"]);
+    // So does the last use that an older kb recorded, on any machine.
+    legacyUsage(store, "old", { "old-global": { uses: 2, last_used: "2026-02-01T00:00:00Z" } });
+    expect(findStale(store, join(repo, ".."), NOW).candidates.map((c) => `${c.id}:${c.reason}`)).toEqual(["old-global:decayed"]);
+    // The config sets both windows.
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ decayDays: 365, expireDays: 30 }));
     expect(reasons(store, repo)).toEqual(["checked:expired"]);
   });
@@ -193,7 +200,7 @@ describe("kb budget", () => {
     putNote(store, { id: "a", scope: SCOPE });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
     expect(b).toMatchObject({ scope: SCOPE, over: false, trim: [], index: { lines: 0, budget: 60, hidden: 0 }, context: { bodies: 1, dropped: 0, budget: contextBudget(8000) } });
-    expect(b.notes[0]).toMatchObject({ id: "a", shown: "body", uses: 0 });
+    expect(b.notes[0]).toEqual({ id: "a", kind: "gotcha", scope: SCOPE, chars: expect.any(Number), shown: "body" });
   });
 
   test("bodies that drop to an index line are not a reason to make room", () => {
@@ -212,7 +219,7 @@ describe("kb budget", () => {
     expect(text).toContain("longest  ");
   });
 
-  test("when notes reach no session it names as many as are hidden: least used, lowest rank, never open work or a rule", () => {
+  test("when notes reach no session it names as many as are hidden: the lowest ranked decisions and how-tos, never open work or a rule", () => {
     const { repo, store } = fixture();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { indexLines: 2, contextChars: 1500 } }));
     const body = "word ".repeat(80);
@@ -220,7 +227,8 @@ describe("kb budget", () => {
     putNote(store, { id: "trap", scope: SCOPE, kind: "gotcha", body });
     putNote(store, { id: "used", scope: SCOPE, kind: "how-to", body });
     for (const id of ["howto-1", "howto-2", "howto-3"]) putNote(store, { id, scope: SCOPE, kind: "how-to", body });
-    kb(store, ["use", "used"]);
+    // Activity ranks a note first in its kind. A count of reads plays no part.
+    logAt(store, "2026-02-01T00:00:00Z", { ev: "show", note: "used", why: "task" });
     const b = kb(store, ["budget", "--json"], { cwd: repo }).json;
     expect(b.over).toBe(true);
     expect(b.index.hidden).toBeGreaterThan(0);
@@ -228,7 +236,8 @@ describe("kb budget", () => {
     const ids = b.trim.map((d: any) => d.id);
     expect(ids).toHaveLength(b.index.hidden);
     for (const id of ids) expect(id).toMatch(/^howto-/);
-    expect(b.trim[0].reason).toBe("never used");
+    expect(b.trim[0]).toEqual({ id: "howto-3", reason: "low rank, 6 of 6" });
+    expect(JSON.stringify(b)).not.toMatch(/"uses"|last_used|never used/);
     expect(b.ask).toEqual([]);
     expect(kb(store, ["budget"], { cwd: repo }).stdout).toMatch(/reach(es)? no session, because the index is full\.\nTrash or merge first: howto-/);
   });
@@ -246,8 +255,8 @@ describe("kb budget", () => {
     expect(b.ask).toHaveLength(b.index.hidden - 1);
     for (const d of b.ask) expect(["gotcha", "convention"]).toContain(d.kind);
     const text = kb(store, ["budget"], { cwd: repo }).stdout;
-    expect(text).toContain("Trash or merge first: howto (never used)");
-    expect(text).toMatch(/Then ask the user, because these are rules: (rule-\d|trap) \((convention|gotcha), never used\)/);
+    expect(text).toContain("Trash or merge first: howto (low rank, 5 of 5)");
+    expect(text).toContain("Then ask the user, because these are rules: rule-3 (convention, low rank, 4 of 5)");
   });
 
 });

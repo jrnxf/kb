@@ -1,6 +1,7 @@
 // Changes to stored notes, shared by the CLI commands and `kb serve`.
 
 import { existsSync } from "node:fs";
+import { type WriteOp, logEvent } from "./log.ts";
 import { KbError, serializeNote, validateNote } from "./note.ts";
 import type { RepoInfo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
@@ -8,13 +9,18 @@ import { clearStaleCache } from "./stale.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import { kickSync } from "./sync.ts";
 
-export const nowIso = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+export const nowIso = (date: Date = new Date()) => date.toISOString().replace(/\.\d{3}Z$/, "Z");
 
 /** Regenerate the derived files, commit, and start a background sync. */
 export function afterWrite(store: Store, message: string): void {
   store.writeIndex();
   clearStaleCache(store);
   if (store.commit(message)) kickSync(store);
+}
+
+/** Record a write of each note in the event log. The session comes from the command that runs. */
+export function logWrites(store: Store, op: WriteOp, ids: string[]): void {
+  logEvent(store, ids.map((note) => ({ ev: "write" as const, note, op })));
 }
 
 /** Ids that contain the given text. For a caller who remembers a part of an id. */
@@ -50,6 +56,7 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
   const note = validateNote(merged);
   const path = store.writeNote(note);
   afterWrite(store, `kb: update ${note.id}`);
+  logWrites(store, "update", [note.id]);
   return { id: note.id, path };
 }
 
@@ -66,14 +73,15 @@ export function moveNotes(store: Store, ids: string[], toTrash: boolean): string
     moved.push(id);
   }
   afterWrite(store, `kb: ${toTrash ? "trash" : "restore"} ${moved.join(" ")}`);
+  logWrites(store, toTrash ? "trash" : "restore", moved);
   return moved;
 }
 
 function removeNotes(store: Store, notes: StoredNote[], message: string): string[] {
   for (const note of notes) store.remove(note);
   const deleted = notes.map((n) => n.id);
-  store.dropUsage(deleted);
   afterWrite(store, message);
+  logWrites(store, "delete", deleted);
   return deleted;
 }
 
@@ -119,6 +127,7 @@ export function trashProject(store: Store, scope: string): string[] {
   for (const note of notes) store.move(note, true, at);
   const ids = notes.map((n) => n.id).sort();
   afterWrite(store, `kb: trash the project ${scope} (${ids.length})`);
+  logWrites(store, "trash", ids);
   return ids;
 }
 
@@ -135,6 +144,7 @@ export function restoreProject(store: Store, scope: string): string[] {
   for (const note of notes) store.move(note, false, nowIso());
   const ids = notes.map((n) => n.id).sort();
   afterWrite(store, `kb: restore the project ${scope} (${ids.length})`);
+  logWrites(store, "restore", ids);
   return ids;
 }
 

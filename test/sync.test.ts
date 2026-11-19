@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildContext } from "../cli/context.ts";
+import { lastActivity } from "../cli/log.ts";
 import { Store } from "../cli/store.ts";
 import { syncNow } from "../cli/sync.ts";
-import { kb, plain, putNote, sh, tempDir } from "./helpers.ts";
+import { kb, legacyUsage, logAt, plain, putNote, sh, tempDir } from "./helpers.ts";
 
 /** Two machines: two clones of one bare remote. */
 function twoMachines(): { a: Store; b: Store } {
@@ -53,19 +54,30 @@ describe("kb sync", () => {
     expect(readFileSync(join(b.home, "INDEX.md"), "utf8")).toContain("from-a");
   });
 
-  test("usage on two machines never conflicts and the counters add up", () => {
+  test("the counters of an older kb still sync, and each machine reads the newest last use", () => {
     const { a, b } = twoMachines();
     putNote(a, { id: "shared" });
     syncNow(a);
     syncNow(b);
-    expect(a.machine()).not.toBe(b.machine());
-    a.bumpUsage(["shared"], "2026-03-01T00:00:00Z");
-    b.bumpUsage(["shared"], "2026-04-01T00:00:00Z");
-    b.bumpUsage(["shared"], "2026-04-02T00:00:00Z");
+    legacyUsage(a, "machine-a", { shared: { uses: 1, last_used: "2026-03-01T00:00:00Z" } });
+    legacyUsage(b, "machine-b", { shared: { uses: 2, last_used: "2026-04-02T00:00:00Z" } });
     expect(syncNow(a).status).toBe("ok");
     expect(syncNow(b).status).toBe("ok");
     expect(syncNow(a).status).toBe("ok");
-    for (const store of [a, b]) expect(store.usage().get("shared")).toEqual({ uses: 3, last_used: "2026-04-02T00:00:00Z" });
+    for (const store of [a, b]) expect(lastActivity(store).get("shared")).toBe("2026-04-02T00:00:00Z");
+  });
+
+  test("the event log stays on its machine: a sync never commits it", () => {
+    const { a, b } = twoMachines();
+    putNote(a, { id: "shared" });
+    syncNow(a);
+    syncNow(b);
+    logAt(a, "2026-04-01T00:00:00Z", { ev: "show", note: "shared", why: "task" });
+    expect(lastActivity(a).get("shared")).toBe("2026-04-01T00:00:00Z");
+    expect(syncNow(a).status).toBe("ok");
+    expect(syncNow(b).status).toBe("ok");
+    expect(sh(a.home, "git", "ls-files")).not.toContain(".state");
+    expect(lastActivity(b).has("shared")).toBe(false);
   });
 
   test("different notes changed on both machines merge", () => {

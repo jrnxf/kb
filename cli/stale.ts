@@ -3,6 +3,7 @@
 
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
+import { lastActivity } from "./log.ts";
 import { normalizeTitle } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
 import { git, type Store, type StoredNote, writeAtomic } from "./store.ts";
@@ -138,16 +139,16 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
 
   const { decayDays, expireDays } = store.config();
   const read = anchorReader();
-  const usage = store.usage();
+  const active = lastActivity(store);
   const days = (iso: string) => Math.floor((now.getTime() - new Date(iso).getTime()) / 86_400_000);
   for (const note of notes) {
     if (repo.root && repo.head && note.scope === repo.scope) {
       for (const found of anchorCandidates(note, repo.root, changedSince, read)) add(note, found.reason, found.detail);
     }
-    // Expired: no session used the note and nobody checked it for expireDays. It says more than
+    // Expired: the note had no activity and nobody checked it for expireDays. It says more than
     // decayed, so a note gets one of the two.
-    const lastUsed = usage.get(note.id)?.last_used;
-    const seen = lastUsed && lastUsed > note.last_verified ? lastUsed : note.last_verified;
+    const lastActive = active.get(note.id);
+    const seen = lastActive && lastActive > note.last_verified ? lastActive : note.last_verified;
     if (days(seen) > expireDays) add(note, "expired", `no use and no check for ${days(seen)} days`);
     else if (days(note.last_verified) > decayDays) add(note, "decayed", `last verified ${days(note.last_verified)} days ago`);
   }

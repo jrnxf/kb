@@ -1,10 +1,11 @@
 // `kb context`: the text a session gets at start. Ranking and both budgets live here.
 
+import { lastActivity } from "./log.ts";
 import { KINDS, normalizeTitle } from "./note.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
 import { anchorReader, missingAnchors } from "./stale.ts";
-import { HARD_CONTEXT_CAP, type Store, type StoredNote, type Usage } from "./store.ts";
+import { HARD_CONTEXT_CAP, type Store, type StoredNote } from "./store.ts";
 
 export interface ContextResult {
   text: string;
@@ -17,11 +18,13 @@ export interface ContextResult {
   dropped: string[];
   /** Notes with no body and no index line: the index budget cut them. A session cannot see them. */
   hiddenIndexLines: number;
-  /** Global notes over the global cap in a repo session, the least used. `kb search` still finds them. */
+  /** Global notes over the global cap in a repo session, the lowest ranked. `kb search` still finds them. */
   capped: string[];
   /** Notes in the session whose anchor is gone from the checkout, with what is gone. */
   gone: { id: string; detail: string }[];
   chars: number;
+  /** `chars` by what it pays for: the index section, the bodies section, and `fixed` for all the rest. */
+  charsBy: { fixed: number; index: number; bodies: number };
 }
 
 /**
@@ -40,24 +43,24 @@ export function contextBudget(contextChars: number): number {
   return Math.min(Math.max(500, contextChars) + SAVE_RULE.length + 1, HARD_CONTEXT_CAP);
 }
 
-const EMPTY: ContextResult = { text: "", scope: null, index: [], bodies: [], dropped: [], hiddenIndexLines: 0, capped: [], gone: [], chars: 0 };
+const EMPTY: ContextResult = { text: "", scope: null, index: [], bodies: [], dropped: [], hiddenIndexLines: 0, capped: [], gone: [], chars: 0, charsBy: { fixed: 0, index: 0, bodies: 0 } };
 
 /**
  * Repo notes before global notes, so the notes of the repo are never crowded out. Repo notes go by
- * kind (open-work, gotcha, convention, decision, how-to), then last_used, then last_verified. Global
- * notes go open work first, then by uses, so the global cap keeps the notes that sessions use.
+ * kind (open-work, gotcha, convention, decision, how-to), then by last activity on this machine,
+ * then last_verified. Global notes go open work first, then by kind, then last_verified. No count
+ * of reads is in the order: a count measures neither the value of a note nor the need for it.
+ * `active` is `lastActivity` of the store.
  */
-export function rank(notes: StoredNote[], usage: Map<string, Usage>): StoredNote[] {
+export function rank(notes: StoredNote[], active: Map<string, string>): StoredNote[] {
   const desc = (a: string | undefined, b: string | undefined) => (b ?? "").localeCompare(a ?? "");
-  const uses = (n: StoredNote) => usage.get(n.id)?.uses ?? 0;
   return [...notes].sort((a, b) => {
     const global = a.scope === "global";
     if (global !== (b.scope === "global")) return global ? 1 : -1;
+    // Open work is the first kind, so the order of the kinds puts it first.
     const kind = KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind);
-    const used = desc(usage.get(a.id)?.last_used, usage.get(b.id)?.last_used);
     const rest = desc(a.last_verified, b.last_verified) || a.id.localeCompare(b.id);
-    if (!global) return kind || used || rest;
-    return Number(b.kind === "open-work") - Number(a.kind === "open-work") || uses(b) - uses(a) || used || kind || rest;
+    return global ? kind || rest : kind || desc(active.get(a.id), active.get(b.id)) || rest;
   });
 }
 
@@ -94,7 +97,7 @@ function bodyBlock(note: StoredNote): string {
 
 function pointer(dropped: number, capped: number): string {
   const fit = dropped > 0 ? `${dropped} ${dropped === 1 ? "note is" : "notes are"} in the index only, because the bodies did not fit. ` : "";
-  const out = capped > 0 ? `${capped} global ${capped === 1 ? "note" : "notes"} with fewer uses ${capped === 1 ? "is" : "are"} left out here. ` : "";
+  const out = capped > 0 ? `${capped} global ${capped === 1 ? "note" : "notes"} of lower rank ${capped === 1 ? "is" : "are"} left out here. ` : "";
   return `${fit}${out}\`kb show <id>\` prints one note. \`kb search <words>\` searches every note.`;
 }
 
@@ -120,7 +123,6 @@ const GONE_LINES = 5;
  */
 export function contextFor(store: Store, scope: string | null, root: string | null = null): ContextResult {
   if (!store.exists()) return EMPTY;
-  const usage = store.usage();
   const config = store.config();
 
   // A promoted note loads from the instruction file that holds it now, so it is not here too.
@@ -128,9 +130,9 @@ export function contextFor(store: Store, scope: string | null, root: string | nu
   const syncError = store.syncError();
   if (visible.length === 0 && !syncError) return { ...EMPTY, scope };
 
-  // In a repo, global notes take at most globalIndexLines places, the most used first. The rest
+  // In a repo, global notes take at most globalIndexLines places, the highest ranked. The rest
   // stay out, so the repo's own notes always fit. Outside a repo, global notes are all there is.
-  const all = rank(visible, usage);
+  const all = rank(visible, lastActivity(store));
   const globals = all.filter((n) => n.scope === "global");
   const capped = scope ? globals.slice(Math.max(0, config.budgets.globalIndexLines)) : [];
   const ranked = all.filter((n) => !capped.includes(n));
@@ -151,7 +153,9 @@ export function contextFor(store: Store, scope: string | null, root: string | nu
   // the top of the ranking, so the index is the next notes, up to the index budget.
   const listedFor = (bodyCount: number, lines: number) => ranked.slice(bodyCount, bodyCount + lines);
 
-  const render = (listed: StoredNote[], bodies: StoredNote[]): string => {
+  // `sizes` takes the characters of the index section and of the bodies section, each line with its newline.
+  const size = (lines: string[], from: number, to: number) => lines.slice(from, to).reduce((sum, line) => sum + line.length + 1, 0);
+  const render = (listed: StoredNote[], bodies: StoredNote[], sizes?: { index: number; bodies: number }): string => {
     const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, "These notes come from earlier sessions. Each is below once: with its body, or as an index line. An index line is the id, then after \"...\" the words of the title that the id cut.", SAVE_RULE];
     if (syncError) lines.push(`kb sync did not finish: ${syncError} \`kb sync\` shows the detail.`);
     // A note whose file or symbol is gone may be wrong now. The session checks it before it acts on it.
@@ -160,6 +164,7 @@ export function contextFor(store: Store, scope: string | null, root: string | nu
       lines.push("", "## Anchors gone", "These notes name a file or a symbol that is not in the checkout now. Check a note before you act on it, then update it or trash it.", ...gone.slice(0, GONE_LINES).map((g) => `- ${g.id}: ${g.detail}`));
       if (gone.length > GONE_LINES) lines.push(`${gone.length - GONE_LINES} more. \`kb stale\` lists them.`);
     }
+    const indexFrom = lines.length;
     if (listed.length > 0) {
       lines.push("", "## Index");
       for (const section of [scope, "global"]) {
@@ -170,12 +175,14 @@ export function contextFor(store: Store, scope: string | null, root: string | nu
       const hidden = ranked.length - bodies.length - listed.length;
       if (hidden > 0) lines.push(`${hidden} more index ${hidden === 1 ? "line is" : "lines are"} over the index budget.`);
     }
+    const bodiesFrom = lines.length;
     if (bodies.length > 0) {
       lines.push("", `## Notes (${bodies.length} of ${ranked.length}, by rank)`);
       for (const note of bodies) lines.push(bodyBlock(note));
     } else {
       lines.push("");
     }
+    if (sizes) Object.assign(sizes, { index: size(lines, indexFrom, bodiesFrom), bodies: bodies.length > 0 ? size(lines, bodiesFrom, lines.length) : 0 });
     if (ranked.length > 0) lines.push(pointer(listed.length, capped.length));
     return `${lines.join("\n")}\n`;
   };
@@ -194,7 +201,8 @@ export function contextFor(store: Store, scope: string | null, root: string | nu
 
   const listed = listedFor(bodies.length, indexCount);
   const dropped = ranked.slice(bodies.length);
-  const text = render(listed, bodies);
+  const sizes = { index: 0, bodies: 0 };
+  const text = render(listed, bodies, sizes);
   return {
     text,
     scope,
@@ -205,6 +213,7 @@ export function contextFor(store: Store, scope: string | null, root: string | nu
     capped: capped.map((n) => n.id),
     gone: goneIn([...bodies, ...listed]),
     chars: text.length,
+    charsBy: { fixed: text.length - sizes.index - sizes.bodies, ...sizes },
   };
 }
 
@@ -216,10 +225,10 @@ export interface BudgetResult {
   /** True only when a note reaches no session: it has no body and no index line. Bodies that drop to an index line are the normal state. */
   over: boolean;
   /** Every note a session of this scope can see, in rank order. */
-  notes: { id: string; kind: string; scope: string; uses: number; last_used: string | null; chars: number; shown: "body" | "index" | "hidden" }[];
-  /** Notes to look at first to make room, at most as many as are hidden: fewest uses, longest unused, lowest rank. Only decisions and how-tos of this scope (the repo, or global outside a repo), because its audit covers only them. Each may be trashed or merged. Shortening one frees nothing, because it ranks low. Empty when no note is hidden. */
+  notes: { id: string; kind: string; scope: string; chars: number; shown: "body" | "index" | "hidden" }[];
+  /** Notes to look at first to make room, at most as many as are hidden: the lowest ranked decisions and how-tos of this scope (the repo, or global outside a repo), because its audit covers only them. The reason gives the rank. Each may be trashed or merged. Shortening one frees nothing, because it ranks low. Empty when no note is hidden. */
   trim: { id: string; reason: string }[];
-  /** The rest of the hidden count, as gotchas and conventions in the same order. A rule that works leaves no use count, so only the user can remove one. */
+  /** The rest of the hidden count, as gotchas and conventions, the lowest ranked first. A rule that works leaves no trace in the log, so only the user can remove one. */
   ask: { id: string; kind: string; reason: string }[];
 }
 
@@ -235,7 +244,6 @@ export function budgetOf(store: Store, scope: string | null): BudgetResult {
 
 function budgetFor(store: Store, context: ContextResult): BudgetResult {
   const config = store.config();
-  const usage = store.usage();
   const all = store.notes();
   const byId = new Map(all.map((n) => [n.id, n]));
   const ranked = [...context.bodies, ...context.dropped].map((id) => byId.get(id)!).filter(Boolean);
@@ -245,8 +253,6 @@ function budgetFor(store: Store, context: ContextResult): BudgetResult {
     id: n.id,
     kind: n.kind,
     scope: n.scope,
-    uses: usage.get(n.id)?.uses ?? 0,
-    last_used: usage.get(n.id)?.last_used ?? null,
     chars: bodyBlock(n).length,
     shown: bodies.has(n.id) ? ("body" as const) : index.has(n.id) ? ("index" as const) : ("hidden" as const),
   }));
@@ -255,11 +261,10 @@ function budgetFor(store: Store, context: ContextResult): BudgetResult {
   const over = context.hiddenIndexLines > 0;
   const position = new Map(notes.map((n, i) => [n.id, i]));
   // Open work is never a candidate: it leaves the index when it is done. A gotcha or a convention
-  // that works leaves no use count, so the count cannot say it is unneeded: those go to `ask`, for
-  // the user to name. Among notes that nobody used, the lowest rank goes first.
-  const reason = (n: (typeof notes)[number]) => (n.uses === 0 ? "never used" : `${n.uses} ${n.uses === 1 ? "use" : "uses"}, last ${n.last_used?.slice(0, 10)}`);
-  const order = (a: (typeof notes)[number], b: (typeof notes)[number]) =>
-    a.uses - b.uses || (a.last_used ?? "").localeCompare(b.last_used ?? "") || position.get(b.id)! - position.get(a.id)!;
+  // that works leaves no trace in the log, so nothing can say it is unneeded: those go to `ask`,
+  // for the user to name. The lowest rank goes first, and the reason gives the rank.
+  const reason = (n: (typeof notes)[number]) => `low rank, ${position.get(n.id)! + 1} of ${notes.length}`;
+  const order = (a: (typeof notes)[number], b: (typeof notes)[number]) => position.get(b.id)! - position.get(a.id)!;
   const rule = (kind: string) => kind === "gotcha" || kind === "convention";
   // An audit covers one scope, so only its notes are candidates.
   const own = notes.filter((n) => n.scope === (context.scope ?? "global"));

@@ -1,9 +1,11 @@
 // Reads the SessionStart JSON on stdin and prints `kb context` for the session's directory,
 // the rule for where rules and facts go, and at most four one-line notices. With the other
-// files in hooks/ and the skills, this is the only code that knows about Claude Code.
+// files in hooks/ and the skills, this is the only code that knows about Claude Code. After the
+// output it adds one `start` line to the event log: which notes this session got, and in what form.
 
 import { forgetSeen } from "../cli/by-path.ts";
 import { SAVE_RULE, buildContext } from "../cli/context.ts";
+import { hookWho, logEvent } from "../cli/log.ts";
 import { resolveRepo } from "../cli/scope.ts";
 import { isSaved, takeUnsaved } from "../cli/session.ts";
 import { cachedStaleCount } from "../cli/stale.ts";
@@ -29,7 +31,8 @@ try {
   const store = new Store();
   // The notes a Read named before a compaction or a /clear are gone from the context, so a Read may name them again.
   if (input.source === "compact" || input.source === "clear") forgetSeen(store, input.session_id);
-  const { text, hiddenIndexLines } = buildContext(store, cwd);
+  const context = buildContext(store, cwd);
+  const { text, hiddenIndexLines } = context;
   const notices: string[] = [];
 
   if (store.exists()) {
@@ -66,7 +69,21 @@ try {
     shown.push(notice);
     length += notice.length + 1;
   }
-  process.stdout.write(shown.length === 0 ? head : `${head}\n${shown.join("\n")}\n`);
+  const output = shown.length === 0 ? head : `${head}\n${shown.join("\n")}\n`;
+  process.stdout.write(output);
+  // The log comes after the output, so it can never change or delay what the session gets.
+  const { index, bodies } = context.charsBy;
+  logEvent(store, {
+    ev: "start",
+    ...hookWho(input),
+    scope: context.scope ?? "global",
+    source: typeof input.source === "string" ? input.source : "unknown",
+    bodies: context.bodies,
+    index: context.index,
+    // In no session: a note the index budget cut, or a global note over the global cap.
+    hidden: [...context.dropped.filter((id) => !context.index.includes(id)), ...context.capped],
+    chars: { fixed: output.length - index - bodies, index, bodies, total: output.length },
+  });
   // Fetch changes from other machines in the background, at most once per 5 minutes.
   kickSync(store, 5 * 60_000);
 } catch {

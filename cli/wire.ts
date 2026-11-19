@@ -19,12 +19,10 @@ export interface PageNote {
   body: string;
   /** The body as HTML. Raw HTML in the markdown is escaped, so the page can insert it as is. */
   html: string;
-  uses: number;
-  last_used?: string;
 }
 
 export interface PageData {
-  /** Changes whenever a note, the trash or a usage counter changes. */
+  /** Changes whenever a note or the trash changes. */
   version: string;
   /** Every request that changes the store must carry this. */
   token: string;
@@ -70,7 +68,6 @@ export interface AuditNote {
   kind: string;
   scope: string;
   body: string;
-  uses: number;
   /** What the note takes in a session now: its body, an index line, or nothing. */
   place: "body" | "index" | "hidden";
 }
