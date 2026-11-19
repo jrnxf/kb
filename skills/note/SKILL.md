@@ -36,7 +36,7 @@ Do not commit the change. The user commits it with their other work.
 
 ## 3. Clear old notes
 
-Run `kb search <two or three key words>`, with the nouns of the rule. If a kb note holds the same rule, run `kb trash <id>`, so the rule lives in one place.
+Run `kb search --check <two or three key words>`, with the nouns of the rule. If a kb note holds the same rule, run `kb trash <id>`, so the rule lives in one place.
 
 ## 4. Confirm
 

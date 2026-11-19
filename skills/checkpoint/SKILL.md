@@ -32,13 +32,14 @@ Never save a secret, token, password, key, or credential. Never save the content
 
 ## 2. Search before you write
 
-For each candidate, run `kb search <two or three key words>`. It finds the notes that have every word, in any order.
+For each candidate, run `kb search --check <two or three key words>`. It finds the notes that have every word, in any order.
+`--check` tells the log that the search is a check before a write, not a need for a note.
 Each note is one line, `id | scope | title`, with the notes of this repo first. A hit in another repo's scope does not cover this repo.
 Use the nouns of the fact ("staging migration"), not a sentence. Also check the notes injected at session start.
 When the answer starts with `no note has every word. Closest:`, read those notes too: one of them can be the same fact in other words.
 
 - A note already covers it and is still correct: skip it.
-- A note covers it but is incomplete or wrong: update that note (pass its `id`). Read it with `kb show <id> --no-use`, so the read counts no use.
+- A note covers it but is incomplete or wrong: update that note (pass its `id`). Read it with `kb show <id> --check`, so the log records a check.
 - Nothing covers it: add a note.
 
 ### Move Claude Code's auto memory into kb
@@ -91,17 +92,32 @@ KB_NOTE
 - `kind`: `gotcha`, `decision`, `convention`, `how-to` or `open-work`.
 - `confidence`: `high` when you verified it in this session, `medium` when it is likely, `low` when it is a guess.
 - `anchors`: repo-relative paths, or `path#symbol`, of the code the fact depends on. They let a later check find stale notes. Leave the list empty for a global note.
-- To update, add `"id": "<id>"` and only the fields that change. A `body` replaces the whole body, so read the note with `kb show <id> --no-use` first and write the full new body, with the old detail that is still true. A new title, body or anchors also records the note as verified now.
+- To update, add `"id": "<id>"` and only the fields that change. A `body` replaces the whole body, so read the note with `kb show <id> --check` first and write the full new body, with the old detail that is still true. A new title, body or anchors also records the note as verified now.
 
-Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id> --no-use`, then update it or skip.
+Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id> --check`, then update it or skip.
 
 ## 4. Close finished work
 
 For each `open-work` note that this session finished, run `kb trash <id>`. If part of the work remains, update the note to the new state.
 
-## 5. Record what helped
+## 5. Give a verdict on the notes you got
 
-Run `kb use <id>...` once, with the ids of the injected notes that changed what you did in this session. Leave out the notes you read with `kb show`: the read counted a use already. Do not list notes you only read.
+Run this:
+
+```bash
+kb log --session ${CLAUDE_SESSION_ID}
+```
+
+It prints the events of this session. Under `no verdict yet:` it lists each note you got and how: `body` (whole, at the session start), `opened` (you ran `kb show`) or `fired` (a hook named it when you read a file).
+No such list means there is nothing to judge: go to step 6.
+
+Give a verdict only for a note you can judge:
+
+- `kb verdict helped <id>...` - the note changed what you did.
+- `kb verdict wrong <id>...` - the note was false or misleading.
+- `kb verdict not-needed <id>...` - a hook loaded the note (`body` or `fired`), and it had no bearing on the work.
+
+Skip a note when you cannot tell. An index line gets no verdict.
 
 ## 6. Record the checkpoint
 

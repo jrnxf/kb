@@ -32,13 +32,17 @@ highest.
 - **Context stays small.** Budgets in `kb.config.json`: `indexLines` (60), `globalIndexLines`
   (20) and `contextChars` (8000, clamped under the 10,000 character hook cap, with the save rule
   on top). The repo's own notes rank first, by kind (open-work, gotcha, convention, decision,
-  how-to), then last used, then last verified. Global notes come after them, open work first, then
-  the most used. In a repo, global notes take at most `globalIndexLines` places, so they never
-  crowd out the repo's notes. Whole bodies drop from the bottom, and only a note without a body
+  how-to), then last activity on this machine, then last verified. Global notes come after them:
+  open work first, then by kind, then last verified. No count of reads is in the order. In a repo,
+  global notes take at most `globalIndexLines` places, so they never crowd out the repo's notes. Whole bodies drop from the bottom, and only a note without a body
   takes an index line. The store can grow for years and a session loads the same amount.
-- **A use is a read that helped.** `kb show` counts a use, because an agent reads a note when it
-  needs it. `kb use` counts the injected notes that changed what the agent did. A check (an
-  audit, a search before a write) passes `--no-use`. The use count ranks global notes.
+- **A log says what each session got.** Each machine keeps an event log in `.state/log/`. It
+  records the notes a session got at its start, and in what form: a body, an index line, or
+  nothing. It also records the notes a Read named, each `kb show` and `kb search`, each write and
+  each checkpoint. A read writes nothing to the store, so it makes no commit and no sync. A check
+  (an audit, a look before an update) passes `--check`. At the checkpoint the agent gives a
+  verdict on the notes it got: `kb verdict helped`, `not-needed` or `wrong`. `kb log` sums the
+  log per note, for the next audit. The log never leaves the machine.
 - **A rule goes to an instruction file when the user states it.** The agent starts `/kb:note` on
   its own when the user says "always", "never", "from now on" or corrects it. `kb instructions`
   names the files. A global rule goes into the global file, which `globalInstructions` in
@@ -47,7 +51,7 @@ highest.
   `AGENTS.md` after you say yes. Nothing is committed for you.
 - **Before `/clear`** you run `/kb:checkpoint`. The agent saves what the session learned,
   updates notes instead of duplicating them, writes stated rules to instruction files, trashes
-  finished open work, empties Claude Code's auto memory, and records which notes helped with `kb use`.
+  finished open work, empties Claude Code's auto memory, and gives a verdict on the notes it got with `kb verdict`.
 - **A trash that clears itself.** `kb trash` moves a note to `trash/`, and `kb restore` brings it
   back. A note in the trash for more than `trashDays` (30) is deleted for good, before the next
   command. `kb delete` removes a note now, and `kb empty-trash` removes the whole trash. If the
@@ -58,8 +62,9 @@ highest.
   trash. Each takes the exact repo id, and none touches `global`.
 - **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: an
   anchored file changed since the note was verified, an anchor is gone, the verified commit left
-  the history, no session used the note and nobody checked it for `expireDays` (90), nobody
-  verified it for `decayDays` (180), or two titles are close. An expired note goes to the audit
+  the history, the note had no activity and nobody checked it for `expireDays` (90), nobody
+  verified it for `decayDays` (180), or two titles are close. Activity is a `kb show` for a task,
+  a Read that named the note, or a verdict `helped`, on this machine. An expired note goes to the audit
   as trash, and you decide: kb never deletes a note on its own. A session start also checks the
   anchors of the repo's notes on disk, and tells the agent which notes name a file or a symbol that
   is gone.
@@ -73,8 +78,9 @@ highest.
   you checked it, `t` trashes it, a meter counts the notes that still reach no session, and Apply makes
   every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. In a repo it audits that repo. Outside any repo it audits the global notes, in an empty folder that no repo reaches. The Audit button in the page does the same for the global notes, and for any repo a session has opened once. `kb budget` asks for
   room only when the index is full and a note reaches no session. A body that became an
-  index line is the normal state. It names decisions and how-tos to trash or merge, and
-  leaves gotchas and conventions for you to name, because a rule that works leaves no use count.
+  index line is the normal state. It names the lowest ranked decisions and how-tos to trash or
+  merge, and leaves gotchas and conventions for you to name, because a rule that works leaves no
+  trace in the log.
   A session start says so in one
   line when more than 5 notes are candidates.
 - **Rules move to an instruction file.** A rule you stated belongs where every session loads it
@@ -88,14 +94,16 @@ highest.
   line with the path of its transcript, also when one of the two was in a subdirectory of the checkout. Before a compaction, a hook tells the summary what to
   keep, and the next start says once that no checkpoint ran.
 - **Sync.** If the store has a git remote, each write starts a background pull and push, and
-  each session start does the same at most once per 5 minutes. Usage counters live in one file
-  per machine, so two machines never edit the same file.
+  each session start does the same at most once per 5 minutes. The event log stays on its
+  machine. The `usage/` files of an older kb stay in the store as history: kb reads the last use
+  in them, and writes them no more.
 
 ```
 ~/.kb/
   notes/<scope>/<id>.md     trash/<scope>/<id>.md
-  usage/<machine>.json      kb.config.json
+  kb.config.json            usage/<machine>.json    # counters of an older kb, read only
   INDEX.md  local.json  .state/                 # generated or per-machine, not committed
+  .state/log/<YYYY-MM>.jsonl                    # the event log of this machine
 ```
 
 ## Commands
@@ -103,8 +111,8 @@ highest.
 ```
 kb context [--repo .]        what a session gets at start
 kb add [--repo .]            create or update a note from JSON on stdin
-kb show <id> [--no-use]      kb search <words> [--scope s] [--trash]
-kb list [--scope s] [--trash]  kb use <id>...
+kb show <id> [--check]       kb search <words> [--scope s] [--trash] [--check]
+kb list [--scope s] [--trash]  kb verdict <helped|not-needed|wrong> <id>...
 kb trash <id>...             kb restore <id>...
 kb delete <id>...            kb empty-trash
 kb trash|restore|delete|empty-trash --scope <repo id>   a whole project
@@ -113,6 +121,7 @@ kb budget [--repo .]
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
 kb audit [--no-wait]         kb audit propose   kb audit status   (an agent audits the scope)
 kb instructions [--repo .]   kb sync      kb checkpointed <session-id>
+kb log [--session id] [--since days]      (what the log says of each note, or of one session)
 ```
 
 `kb serve`, or `kb` alone in a terminal, opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
@@ -146,7 +155,14 @@ Anthropic, Slack and more), a password in a URL, and a long random value given t
 Skills: `/kb:checkpoint`, `/kb:audit`. Only you can start them. `/kb:note` writes a rule the
 user states to an instruction file, and the agent starts it on its own.
 
+`kb log` prints one row per note: how often a session got it as a body, as an index line or not at
+all, how often an agent opened it (for a task, and as a check), how often a Read named it, and its
+verdicts. `--since <days>` takes the last days only. `--session <id>` prints the events of one
+session in time order, and the notes that session got and has not judged yet.
+
 Every command accepts `--json`. The CLI knows nothing about Claude Code: only `hooks/` and `skills/` do.
+A command names its session in the log with `--session <id>`, or else `KB_SESSION`. The launcher
+`bin/kb` sets `KB_SESSION` from the session id of Claude Code.
 
 ## Install
 
