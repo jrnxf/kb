@@ -2,7 +2,7 @@
 // Tool calls and tool results are left out: they are large, and a tool result can hold a secret.
 // `bun hooks/transcript.ts <transcript>` writes the conversation to a temp file for /kb:recover.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -18,8 +18,9 @@ export interface Conversation {
 type Block = { type?: string; text?: string };
 type Line = { type?: string; isMeta?: boolean; isSidechain?: boolean; isCompactSummary?: boolean; message?: { content?: string | Block[] } };
 
-// The harness adds these to user turns. They are not the user's words.
-const NOISE = /<(system-reminder|local-command-stdout|local-command-stderr|local-command-caveat)>[\s\S]*?<\/\1>/g;
+// The harness adds these to user turns. They are not the user's words. A task notification is
+// the result of a background task, and it arrives as a user turn.
+const NOISE = /<(system-reminder|local-command-stdout|local-command-stderr|local-command-caveat|task-notification)>[\s\S]*?<\/\1>/g;
 
 function words(content: string | Block[] | undefined): string {
   if (typeof content === "string") return content;
@@ -74,7 +75,8 @@ if (import.meta.main) {
     process.exit(1);
   }
   const conversation = readConversation(path);
-  const file = join(tmpdir(), `kb-recover-${basename(path, ".jsonl")}.md`);
-  writeFileSync(file, conversation.text);
+  // The user's own words can hold a secret, so the file goes in a folder that only the user can read.
+  const file = join(mkdtempSync(join(tmpdir(), "kb-recover-")), `${basename(path, ".jsonl")}.md`);
+  writeFileSync(file, conversation.text, { mode: 0o600 });
   console.log(JSON.stringify({ file, prompts: conversation.prompts, chars: conversation.chars }));
 }

@@ -33,14 +33,19 @@ For each entry, oldest first, start one subagent with the Agent tool: `subagent_
 
 > An earlier Claude Code session ended before it saved its knowledge to kb. Do its checkpoint now.
 > Its conversation is in `<file>` (Read it whole, in parts if it is long). It ran in `<cwd>`, and ended `<ended>`.
-> Follow steps 1, 2, 3, 4 and 7 of `<this skill's base directory>/../checkpoint/SKILL.md`. Skip the auto memory section, step 5 and step 6.
+> Follow steps 1, 2, 3, 4 and 7 of `<this skill's base directory>/../checkpoint/SKILL.md`. Skip "Move Claude Code's auto memory into kb", "Write a rule", step 5 and step 6.
 > Pass `--repo <cwd>` to every `kb add` and `kb search`.
+> Write no instruction file. For a rule the user stated, write nothing: list it in the report under **Rules**, with the rule as one line and the words "not written".
 > The session is old. Later sessions can have saved the same facts or finished its work. Search before every write, and check `git -C <cwd> log --oneline -20` before you save open work.
 > The conversation leaves out tool output, so a fact you cannot confirm from it gets `"confidence": "medium"` at most.
-> When every write succeeded, run `kb checkpointed <session>`.
+> When `kb add` refuses a note because of a secret, write a placeholder for the secret. Never look for a way around the refusal.
+> When no `kb` command failed, run `kb checkpointed <session>`. Run it also when nothing was worth a note.
 > End with the step 7 report, and nothing after it.
 
 ## 4. Report
 
 Show each subagent's report as it gave it, under a heading with the date the session ended.
 When a subagent did not run `kb checkpointed`, say which session is still unsaved and why.
+
+When a report lists rules, ask the user which of them still hold. The session is old, and the user can have changed their mind.
+Write each rule the user confirms as /kb:note does: `kb instructions` names the file, and one short line goes in it.

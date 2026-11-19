@@ -128,6 +128,20 @@ describe("plugin files", () => {
     }
   });
 
+  // /kb:recover hands the checkpoint skill to a subagent by step number and section name.
+  test("the recover skill names steps and sections that the checkpoint skill has", () => {
+    const recover = readFileSync(join(ROOT, "skills", "recover", "SKILL.md"), "utf8");
+    const checkpoint = readFileSync(join(ROOT, "skills", "checkpoint", "SKILL.md"), "utf8");
+    expect(recover).toContain("Follow steps 1, 2, 3, 4 and 7 of");
+    for (const heading of ["## 1. ", "## 2. ", "## 3. ", "## 4. ", "## 5. ", "## 6. ", "## 7. Report"]) expect(checkpoint).toContain(`\n${heading}`);
+    for (const section of ["Move Claude Code's auto memory into kb", "Write a rule"]) {
+      expect(recover).toContain(`"${section}"`);
+      expect(checkpoint).toContain(`\n### ${section}\n`);
+    }
+    expect(recover).toContain("/../../hooks/transcript.ts");
+    expect(existsSync(join(ROOT, "skills", "recover", "..", "..", "hooks", "transcript.ts"))).toBe(true);
+  });
+
   test("bin/kb runs from another directory", () => {
     const r = Bun.spawnSync([join(ROOT, "bin", "kb"), "scope", "--json"], { cwd: dirname(ROOT), env: { ...process.env, KB_HOME: join(tempDir(), "none") }, stdout: "pipe" });
     expect(r.exitCode).toBe(0);
@@ -198,6 +212,40 @@ describe("session notices", () => {
     expect(unsaved(store, repo)).toEqual([]);
   });
 
+  // The hook gets the directory from Claude Code and `kb unsaved` from the shell. A notice that the
+  // skill cannot list would never clear.
+  test("outside a repo, a directory matches through a link", () => {
+    const store = tempStore();
+    const dir = tempDir("kb-plain-");
+    const link = join(tempDir(), "link");
+    symlinkSync(dir, link);
+    end(store.home, endInput(link, "lost"));
+    expect(runHook({ home: store.home, stdin: startInput(dir, "startup") }).stdout).toContain(NOTICE);
+    expect(unsaved(store, dir)).toEqual(["lost"]);
+    expect(unsaved(store, link)).toEqual(["lost"]);
+  });
+
+  // A /clear start does three things: it forgets the Read record, checks the anchors and names the unsaved session.
+  test("a /clear start names the unsaved session, lists the anchors that are gone, and lets a Read name its notes again", () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    const scope = "github.com/acme/billing";
+    putNote(store, { id: "on-readme", scope, anchors: ["README.md"] });
+    putNote(store, { id: "deleted", scope, anchors: ["src/rates.ts"] });
+    const body = { session_id: "next", cwd: repo, hook_event_name: "PostToolUse", tool_name: "Read", tool_input: { file_path: join(repo, "README.md") }, tool_response: {} };
+    const read = () => Bun.spawnSync([join(ROOT, "hooks", "post-read.sh")], { cwd: plain(), env: { ...process.env, KB_HOME: store.home }, stdin: Buffer.from(JSON.stringify(body)), stdout: "pipe", stderr: "pipe" }).stdout.toString();
+    expect(read()).toContain("- on-readme ");
+    expect(read()).toBe("");
+    end(store.home, endInput(repo, "lost"));
+
+    const out = runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout;
+    expect(out).toContain("## Anchors gone");
+    expect(out).toContain("- deleted: src/rates.ts does not exist");
+    expect(out).toContain(NOTICE);
+    expect(read()).toContain("- on-readme ");
+    expect(unsaved(store, repo)).toEqual(["lost"]);
+  });
+
   // The agent can change directory inside the project, so the two hooks do not always get the same cwd.
   test("a /clear with no checkpoint in a subdirectory is reported at the next start in the repo root", () => {
     const store = tempStore();
@@ -212,13 +260,14 @@ describe("session notices", () => {
     expect(unsaved(store, repo)).toEqual(["lost"]);
   });
 
-  test("no report after a checkpoint, for another end reason, or with no store", () => {
+  test("no report after a checkpoint, for another end reason, from a subagent, or with no store", () => {
     const store = tempStore();
     const repo = tempRepo();
     putNote(store, { id: "g" });
     expect(kb(store, ["checkpointed", "saved-one", "--json"]).json).toEqual({ session: "saved-one", recorded: true });
     end(store.home, endInput(repo, "saved-one"));
     end(store.home, endInput(repo, "just-quit", "prompt_input_exit"));
+    end(store.home, { ...endInput(repo, "subagent"), agent_id: "agent-a1" });
     expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain("ended with /clear");
 
     const missing = join(tempDir(), "missing");

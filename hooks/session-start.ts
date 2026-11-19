@@ -5,17 +5,14 @@
 import { forgetSeen } from "../cli/by-path.ts";
 import { SAVE_RULE, buildContext } from "../cli/context.ts";
 import { resolveRepo } from "../cli/scope.ts";
-import { forgetUnsaved, isSaved, recordUnsaved, unsavedSessions } from "../cli/session.ts";
+import { isSaved } from "../cli/session.ts";
 import { cachedStaleCount } from "../cli/stale.ts";
 import { Store } from "../cli/store.ts";
 import { detached, kickSync } from "../cli/sync.ts";
 import { MEMORY_ON_NOTICE, MEMORY_RULE, autoMemoryOn } from "./auto-memory.ts";
-import { worthRecovering } from "./transcript.ts";
+import { unsavedNotice } from "./unsaved-notice.ts";
 
 const STALE_NOTICE_ABOVE = 5;
-/** A session shorter than this has nothing to recover. One prompt is mostly a headless run. */
-const MIN_PROMPTS = 2;
-const MIN_CHARS = 3000;
 /** Claude Code shows SessionStart output above 10,000 characters as a file preview. */
 const OUTPUT_LIMIT = 9900;
 /** What a session gets when there is no note to show: no store yet, or a broken one. */
@@ -38,26 +35,10 @@ try {
 
   if (store.exists()) {
     const repo = resolveRepo(cwd, store);
-    // Sessions of this directory or checkout that ended with /clear and no checkpoint. The notice
-    // comes at each new start until /kb:recover saves them or the user forgets them.
-    if (input.source === "startup" || input.source === "clear") {
-      const lost = unsavedSessions(store, cwd, repo.root).filter((entry) => {
-        // Measured once, then kept in the mark. A short session is forgotten: it has nothing to save.
-        // Write only a new size: a write resets the 7-day clock of the mark.
-        const measured = !entry.size;
-        entry.size ??= worthRecovering(entry.transcript);
-        if (entry.size.prompts >= MIN_PROMPTS && entry.size.chars >= MIN_CHARS) {
-          if (measured) recordUnsaved(store, entry);
-          return true;
-        }
-        forgetUnsaved(store, entry.session);
-        return false;
-      });
-      if (lost.length > 0) {
-        const what = lost.length === 1 ? "An earlier session here" : `${lost.length} earlier sessions here`;
-        notices.push(`${what} ended with /clear before /kb:checkpoint ran. Tell the user in one line, in your first reply, that /kb:recover saves ${lost.length === 1 ? "its" : "their"} knowledge or forgets ${lost.length === 1 ? "it" : "them"}.`);
-      }
-    }
+    // Sessions of this directory or checkout that ended with /clear and no checkpoint. A resume or
+    // a compaction is the same session, which already had the line.
+    const lost = input.source === "startup" || input.source === "clear" ? unsavedNotice(store, cwd, repo.root) : null;
+    if (lost) notices.push(lost);
 
     if (input.source === "compact" && typeof input.session_id === "string" && !isSaved(store, input.session_id)) {
       notices.push("This session was compacted and /kb:checkpoint has not run in it. Knowledge from before the compaction now exists only in the summary. Tell the user once that /kb:checkpoint saves it.");

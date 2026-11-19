@@ -57,7 +57,10 @@ export function forgetUnsaved(store: Store, session: string): boolean {
  */
 export function unsavedSessions(store: Store, cwd: string, root: string | null = null): UnsavedSession[] {
   const top = root && real(root);
-  const here = (ended: string) => ended === cwd || (top !== null && (real(ended) === top || real(ended).startsWith(top + sep)));
+  // Compare real paths: the hook gets the directory from Claude Code, the CLI from the shell, and
+  // one of them can go through a link (/tmp on macOS).
+  const self = real(cwd);
+  const here = (ended: string) => real(ended) === self || (top !== null && (real(ended) === top || real(ended).startsWith(top + sep)));
   const dir = store.statePath("");
   let names: string[];
   try {

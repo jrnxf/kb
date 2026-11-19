@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { readConversation, worthRecovering } from "../hooks/transcript.ts";
 import { ROOT, tempDir } from "./helpers.ts";
 
@@ -27,6 +27,7 @@ describe("the transcript reader", () => {
     user("Summary of the earlier part", { isCompactSummary: true }),
     user("<local-command-stdout>output of /cost</local-command-stdout>"),
     user("Caveat: ...", { isMeta: true }),
+    user("<task-notification><status>completed</status><result>background result</result></task-notification>"),
     "{not json",
     agent([{ type: "text", text: "Because the proxy drops it." }]),
   ]);
@@ -41,7 +42,7 @@ describe("the transcript reader", () => {
 
   test("leaves out tool calls, tool output, thinking, subagents and harness text", () => {
     const { text } = readConversation(path);
-    for (const left of ["SECRET123", ".env", "private reasoning", "subagent work", "harness text", "/cost", "Summary of the earlier part", "Caveat"]) expect(text).not.toContain(left);
+    for (const left of ["SECRET123", ".env", "private reasoning", "subagent work", "harness text", "/cost", "Summary of the earlier part", "Caveat", "background result"]) expect(text).not.toContain(left);
   });
 
   test("a file that cannot be read has size 0, and the script writes the text to a file", () => {
@@ -50,5 +51,8 @@ describe("the transcript reader", () => {
     const out = JSON.parse(r.stdout.toString());
     expect(out).toMatchObject({ prompts: 2 });
     expect(readFileSync(out.file, "utf8")).toBe(readConversation(path).text);
+    // The user's own words can hold a secret: only the user reads the file and its folder.
+    expect(statSync(out.file).mode & 0o777).toBe(0o600);
+    expect(statSync(dirname(out.file)).mode & 0o777).toBe(0o700);
   });
 });

@@ -87,10 +87,11 @@ highest.
   transcript on disk. So a session that ends with `/clear` and no checkpoint is recorded, and each
   new session in that checkout says in one line that `/kb:recover` saves it. `/kb:recover` hands
   what the user and the agent said, without tool output, to a Sonnet subagent. The subagent runs
-  the checkpoint steps and shows the usual report. `/kb:recover forget` stops the line. A session
-  with fewer than 2 prompts is not reported, and a record goes after 7 days. Nothing runs in the
-  background. Before a compaction, a hook tells the summary what to keep, and the next start says
-  once that no checkpoint ran.
+  the checkpoint steps and shows the usual report. It writes no instruction file: it lists each
+  rule it found, and you say which still hold. `/kb:recover forget` stops the line. A session
+  with fewer than 2 prompts or 3000 characters is not reported, and a record goes after 7 days.
+  Nothing runs in the background. Before a compaction, a hook tells the summary what to keep, and
+  the next start says once that no checkpoint ran.
 - **Sync.** If the store has a git remote, each write starts a background pull and push, and
   each session start does the same at most once per 5 minutes. Usage counters live in one file
   per machine, so two machines never edit the same file.
