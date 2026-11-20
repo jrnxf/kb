@@ -86,7 +86,19 @@ code { font: .87em var(--f-mono); color: var(--ink); background: var(--sunk); bo
 .cmds b { font: 500 13.5px var(--f-mono); color: var(--ink); }
 .cmds span { color: var(--mute); font-size: 14.5px; text-wrap: pretty; }
 pre { margin: 0; font: 13px/1.8 var(--f-mono); overflow-x: auto; color: var(--soft); }
-pre .c { color: var(--faint); } pre .i { color: var(--index); } pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; } pre .li { display: block; padding-left: 2ch; text-indent: -2ch; }
+pre .c { color: var(--faint); } pre .i { color: var(--index); } pre .e { color: var(--gone); } pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; } pre .li { display: block; padding-left: 2ch; text-indent: -2ch; }
+
+/* life: the stages of a note, and the path of a rule. Two drawings, one per width, so the labels keep their size. */
+.tool > .b.life { display: grid; gap: 16px; }
+.life svg { display: block; width: 100%; height: auto; }
+.life .narrow { display: none; max-width: 320px; margin: 0 auto; }
+.lf-b { fill: var(--sunk); stroke: var(--line2); stroke-width: 1.2; }
+.lf-b.lf-you { stroke: color-mix(in oklab, var(--body) 55%, var(--line2)); } .lf-b.lf-gone { stroke: color-mix(in oklab, var(--gone) 55%, var(--line2)); }
+.lf-t { font: 600 13px var(--f-body); fill: var(--ink); } .lf-s { font: 10.5px var(--f-mono); fill: var(--mute); } .lf-l { font: 11px var(--f-mono); fill: var(--soft); }
+.lf-e { fill: none; stroke: var(--mute); stroke-width: 1.2; } .lf-e.lf-d { stroke-dasharray: 4 4; } .lf-a { fill: var(--mute); }
+.p-legend .l-you { box-shadow: inset 0 0 0 1.5px var(--body); } .p-legend .l-gone { box-shadow: inset 0 0 0 1.5px var(--gone); }
+.p-legend .l-back { width: 14px; height: 0; border-radius: 0; border-top: 1.5px dashed var(--mute); }
+@media (max-width: 720px) { .life .wide { display: none; } .life .narrow { display: block; } }
 
 /* the end: /clear, and the loop starts again */
 .turn.prompt .msg { background: transparent; border-color: var(--line2); }
@@ -142,10 +154,12 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
       <div class="tool"><div class="h"><b>SessionStart</b><span class="args">kb context</span><span class="ok">✓ 8,157 ch</span></div><div class="b flush" data-w="term"></div></div>
     </div></li>
 
-    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how did you know to run the migrations first?</div></li>
+    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how did you know what that seed error meant?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
-      <p>A session last week found it out and saved a note. <b>The note loaded when I ran the seed command.</b></p>
-      <div class="tool"><div class="h"><b>Bash</b><span class="args">bun db:seed</span><span class="ok">✓ 1 note</span></div><div class="b"><pre class="wrap"><span class="c">PreToolUse:Bash · kb</span>
+      <p>A session last week had the same error and saved a note. <b>The note came with the result of my seed command.</b></p>
+      <div class="tool"><div class="h"><b>Bash</b><span class="args">bun db:seed</span><span class="ok">✓ 1 note</span></div><div class="b"><pre class="wrap"><span class="e">error: relation "users" does not exist</span>
+
+<span class="c">PreToolUse:Bash · kb</span>
 kb has a note for this command.
 
 <span class="i">### run-migrations-before-seeding-or-the-seed-script [gotcha]</span> Run migrations before seeding, or the seed script fails on a missing table
@@ -153,8 +167,8 @@ kb has a note for this command.
 The seed script inserts into tables that only the latest migration creates. On a fresh database, run `bun db:migrate` first. The error is "relation users does not exist". It looks like a connection problem, but it is not.</pre></div></div>
       <p>A note carries its triggers, and a hook loads it at the moment it applies.</p>
       <div class="cmds">
-        <div><b>cmd: bun db:seed</b><span>Loads the note before I run the command. The command still runs.</span></div>
-        <div><b>stop: git push --force</b><span>Refuses the first run once, and gives the note as the reason.</span></div>
+        <div><b>cmd: bun db:seed</b><span>The command runs, and the note comes with its result. I read the result with the note in hand.</span></div>
+        <div><b>stop: git push --force</b><span>Refuses the first run once, with the note as the reason. Only this trigger comes before the run.</span></div>
         <div><b>err: address already in use</b><span>Loads the note after a tool call fails with that text.</span></div>
         <div><b>anchors: scripts/seed.ts</b><span>Loads the note when I read or change the file, or a command names it.</span></div>
       </div>
@@ -163,8 +177,28 @@ The seed script inserts into tables that only the latest migration creates. On a
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">who writes the notes?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>I do. When you state a rule, I write it to CLAUDE.md in that turn. <b>What I learn goes to kb.</b></p>
-      <p><code>kb add</code> names the close notes before it writes, so I update a note and add no twin. It refuses a note that looks like it holds a secret. Before /clear, <code>/kb:checkpoint</code> saves the rest. If a session ends with no checkpoint, <code>/kb:recover</code> saves its knowledge later, and <code>/kb:recover all</code> sweeps every directory.</p>
+      <p><code>kb add</code> names the close notes before it writes, so I update a note and add no twin. It refuses a note that looks like it holds a secret. Before /clear, <code>/kb:checkpoint</code> saves the rest.</p>
       <div class="tool"><div class="h"><b>loop</b><span class="args">how a note gets here</span></div><div class="b" data-w="loop"></div></div>
+    </div></li>
+
+    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">what if I forget the checkpoint?</div></li>
+    <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
+      <p>Then the session stays recoverable for 7 days. <b>Its transcript is still on disk, and kb has a record of it.</b></p>
+      <div class="tool"><div class="h"><b>SessionStart</b><span class="args">the next session in ~/acme/shop</span><span class="ok">✓ 1 to recover</span></div><div class="b"><pre class="wrap"><span class="c">SessionStart · kb</span>
+An earlier session here ended with no /kb:checkpoint.
+
+<span class="c">you type</span>
+/kb:recover
+
+<span class="i">Recovered the session of 2026-11-16 in ~/acme/shop</span> - 2 saved, 1 updated</pre></div></div>
+      <div class="cmds">
+        <div><b>at the end</b><span>A hook records each session that ends with no checkpoint: a /clear, an exit, or a headless run.</span></div>
+        <div><b>at the next start</b><span>I tell you in one line, once per day. A session too short to hold a lesson is forgotten.</span></div>
+        <div><b>/kb:recover</b><span>A subagent reads what we said, and each tool call that failed. No output of a call that worked reaches it.</span></div>
+        <div><b>the notes</b><span>Each one gets low confidence and the time the old session ended. So a later change to the code flags it.</span></div>
+        <div><b>/kb:recover all</b><span>Sweeps every directory, at most 10 sessions per run.</span></div>
+        <div><b>nothing in the background</b><span>Recovery runs only when you type it. The rules it finds wait for your yes.</span></div>
+      </div>
     </div></li>
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">do all the notes load every time?</div></li>
@@ -179,7 +213,13 @@ The seed script inserts into tables that only the latest migration creates. On a
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>The store grows. <b>The session does not.</b> A note below the line is one <code>kb search</code> away, and a word finds its other forms: "retry" finds "retries".</p>
       <div class="tool"><div class="h"><b>growth</b><span class="args">store vs session</span></div><div class="b" data-w="growth"></div></div>
-      <p>Notes also go stale, and the store says so.</p>
+      <p>Notes also go stale, and the store says so. <b>You decide how a note ends.</b></p>
+      <div class="tool"><div class="h"><b>life</b><span class="args">of a note, and of a rule</span></div><div class="b life">
+        <svg class="wide" viewBox="0 0 744 292" role="img" aria-label="A rule that you state goes to CLAUDE.md with /kb:note, in the same turn. A fact that the agent learns goes through six stages: write, store, load, judge, go stale, audit. In the audit you pick: keep, rewrite or merge sends the note back to the store, promote moves a rule to CLAUDE.md, and trash moves the note to the trash. After 30 days in the trash, the note is deleted. Until then, kb restore brings it back."><defs><marker id="lfw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path class="lf-a" d="M0 0 10 5 0 10z"/></marker></defs><g><rect class="lf-b lf-you" x="0" y="4" width="104" height="48" rx="8"/><text class="lf-t" x="52" y="25" text-anchor="middle">A rule</text><text class="lf-s" x="52" y="41" text-anchor="middle">you state it</text></g><path class="lf-e" d="M104 28H636" marker-end="url(#lfw)"/><text class="lf-l" x="370" y="20" text-anchor="middle">/kb:note, in the same turn</text><g><rect class="lf-b lf-you" x="640" y="4" width="104" height="48" rx="8"/><text class="lf-t" x="692" y="25" text-anchor="middle">CLAUDE.md</text><text class="lf-s" x="692" y="41" text-anchor="middle">every session</text></g><g><rect class="lf-b" x="0" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="52" y="131" text-anchor="middle">Write</text><text class="lf-s" x="52" y="147" text-anchor="middle">kb add</text></g><g><rect class="lf-b" x="128" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="180" y="131" text-anchor="middle">Store</text><text class="lf-s" x="180" y="147" text-anchor="middle">~/.kb + git</text></g><g><rect class="lf-b" x="256" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="308" y="131" text-anchor="middle">Load</text><text class="lf-s" x="308" y="147" text-anchor="middle">each session</text></g><g><rect class="lf-b" x="384" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="436" y="131" text-anchor="middle">Judge</text><text class="lf-s" x="436" y="147" text-anchor="middle">verdicts</text></g><g><rect class="lf-b" x="512" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="564" y="131" text-anchor="middle">Go stale</text><text class="lf-s" x="564" y="147" text-anchor="middle">kb stale</text></g><g><rect class="lf-b lf-you" x="640" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="692" y="131" text-anchor="middle">Audit</text><text class="lf-s" x="692" y="147" text-anchor="middle">you pick</text></g><path class="lf-e" d="M104 134H124" marker-end="url(#lfw)"/><path class="lf-e" d="M232 134H252" marker-end="url(#lfw)"/><path class="lf-e" d="M360 134H380" marker-end="url(#lfw)"/><path class="lf-e" d="M488 134H508" marker-end="url(#lfw)"/><path class="lf-e" d="M616 134H636" marker-end="url(#lfw)"/><path class="lf-e" d="M652 110V98Q652 92 646 92H186Q180 92 180 98V106" marker-end="url(#lfw)"/><text class="lf-l" x="416" y="84" text-anchor="middle">keep, rewrite, merge</text><path class="lf-e" d="M716 110V56" marker-end="url(#lfw)"/><text class="lf-l" x="708" y="78" text-anchor="end">promote</text><path class="lf-e" d="M692 158V208" marker-end="url(#lfw)"/><text class="lf-l" x="700" y="188" text-anchor="start">trash</text><g><rect class="lf-b lf-gone" x="640" y="212" width="104" height="48" rx="8"/><text class="lf-t" x="692" y="233" text-anchor="middle">Trash</text><text class="lf-s" x="692" y="249" text-anchor="middle">kb trash</text></g><path class="lf-e" d="M640 236H492" marker-end="url(#lfw)"/><text class="lf-l" x="566" y="228" text-anchor="middle">after 30 days</text><g><rect class="lf-b lf-gone" x="384" y="212" width="104" height="48" rx="8"/><text class="lf-t" x="436" y="233" text-anchor="middle">Deleted</text><text class="lf-s" x="436" y="249" text-anchor="middle">for good</text></g><path class="lf-e lf-d" d="M692 260V276Q692 282 686 282H186Q180 282 180 276V162" marker-end="url(#lfw)"/><text class="lf-l" x="282" y="274" text-anchor="middle">kb restore</text></svg>
+        <svg class="narrow" viewBox="0 0 320 540" role="img" aria-label="A rule that you state goes to CLAUDE.md with /kb:note, in the same turn. A fact that the agent learns goes through six stages: write, store, load, judge, go stale, audit. In the audit you pick: keep, rewrite or merge sends the note back to the store, promote moves a rule to CLAUDE.md, and trash moves the note to the trash. After 30 days in the trash, the note is deleted. Until then, kb restore brings it back."><defs><marker id="lfn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path class="lf-a" d="M0 0 10 5 0 10z"/></marker></defs><g><rect class="lf-b lf-you" x="30" y="4" width="104" height="48" rx="8"/><text class="lf-t" x="82" y="25" text-anchor="middle">A rule</text><text class="lf-s" x="82" y="41" text-anchor="middle">you state it</text></g><path class="lf-e" d="M134 28H212" marker-end="url(#lfn)"/><text class="lf-l" x="173" y="20" text-anchor="middle">/kb:note</text><g><rect class="lf-b lf-you" x="216" y="4" width="104" height="48" rx="8"/><text class="lf-t" x="268" y="25" text-anchor="middle">CLAUDE.md</text><text class="lf-s" x="268" y="41" text-anchor="middle">every session</text></g><g><rect class="lf-b" x="30" y="84" width="104" height="48" rx="8"/><text class="lf-t" x="82" y="105" text-anchor="middle">Write</text><text class="lf-s" x="82" y="121" text-anchor="middle">kb add</text></g><g><rect class="lf-b" x="30" y="148" width="104" height="48" rx="8"/><text class="lf-t" x="82" y="169" text-anchor="middle">Store</text><text class="lf-s" x="82" y="185" text-anchor="middle">~/.kb + git</text></g><g><rect class="lf-b" x="30" y="212" width="104" height="48" rx="8"/><text class="lf-t" x="82" y="233" text-anchor="middle">Load</text><text class="lf-s" x="82" y="249" text-anchor="middle">each session</text></g><g><rect class="lf-b" x="30" y="276" width="104" height="48" rx="8"/><text class="lf-t" x="82" y="297" text-anchor="middle">Judge</text><text class="lf-s" x="82" y="313" text-anchor="middle">verdicts</text></g><g><rect class="lf-b" x="30" y="340" width="104" height="48" rx="8"/><text class="lf-t" x="82" y="361" text-anchor="middle">Go stale</text><text class="lf-s" x="82" y="377" text-anchor="middle">kb stale</text></g><g><rect class="lf-b lf-you" x="30" y="404" width="104" height="48" rx="8"/><text class="lf-t" x="82" y="425" text-anchor="middle">Audit</text><text class="lf-s" x="82" y="441" text-anchor="middle">you pick</text></g><path class="lf-e" d="M82 132V144" marker-end="url(#lfn)"/><path class="lf-e" d="M82 196V208" marker-end="url(#lfn)"/><path class="lf-e" d="M82 260V272" marker-end="url(#lfn)"/><path class="lf-e" d="M82 324V336" marker-end="url(#lfn)"/><path class="lf-e" d="M82 388V400" marker-end="url(#lfn)"/><path class="lf-e" d="M134 416H170Q176 416 176 410V178Q176 172 170 172H138" marker-end="url(#lfn)"/><text class="lf-l" x="184" y="286" text-anchor="start">keep,</text><text class="lf-l" x="184" y="300" text-anchor="start">rewrite,</text><text class="lf-l" x="184" y="314" text-anchor="start">merge</text><path class="lf-e" d="M134 440H254Q260 440 260 434V56" marker-end="url(#lfn)"/><text class="lf-l" x="266" y="250" text-anchor="start">promote</text><path class="lf-e" d="M82 452V480" marker-end="url(#lfn)"/><text class="lf-l" x="90" y="470" text-anchor="start">trash</text><g><rect class="lf-b lf-gone" x="30" y="484" width="104" height="48" rx="8"/><text class="lf-t" x="82" y="505" text-anchor="middle">Trash</text><text class="lf-s" x="82" y="521" text-anchor="middle">kb trash</text></g><path class="lf-e" d="M134 508H212" marker-end="url(#lfn)"/><text class="lf-l" x="173" y="500" text-anchor="middle">30 days</text><g><rect class="lf-b lf-gone" x="216" y="484" width="104" height="48" rx="8"/><text class="lf-t" x="268" y="505" text-anchor="middle">Deleted</text><text class="lf-s" x="268" y="521" text-anchor="middle">for good</text></g><path class="lf-e lf-d" d="M30 508H12Q6 508 6 502V178Q6 172 12 172H26" marker-end="url(#lfn)"/><text class="lf-l" x="20" y="340" text-anchor="middle" transform="rotate(-90 20 340)">kb restore</text></svg>
+        <div class="p-legend"><span><i class="l-you"></i>you decide</span><span><i class="l-gone"></i>gone</span><span><i class="l-back"></i>back from the trash</span></div>
+      </div></div>
+      <p>A note goes round until an audit ends it. A rule that you state never enters the store.</p>
       <div class="cmds">
         <div><b>kb context</b><span>A note whose file or symbol is gone is flagged at session start, before I act on it.</span></div>
         <div><b>/kb:audit</b><span>Changed anchors and notes with no activity and no check in 90 days go up for review. Rules move into CLAUDE.md.</span></div>
