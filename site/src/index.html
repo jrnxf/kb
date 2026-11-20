@@ -88,7 +88,7 @@ code { font: .87em var(--f-mono); color: var(--ink); background: var(--sunk); bo
 pre { margin: 0; font: 13px/1.8 var(--f-mono); overflow-x: auto; color: var(--soft); }
 pre .c { color: var(--faint); } pre .i { color: var(--index); } pre .e { color: var(--gone); } pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; } pre .li { display: block; padding-left: 2ch; text-indent: -2ch; }
 
-/* life: the stages of a note, and the path of a rule. Two drawings, one per width, so the labels keep their size. */
+/* life: the stages of a note, and the path of a rule. Two drawings, so the labels keep their size at every width. */
 .tool > .b.life { display: grid; gap: 16px; }
 .life svg { display: block; width: 100%; height: auto; }
 .life .narrow { display: none; max-width: 320px; margin: 0 auto; }
@@ -98,7 +98,8 @@ pre .c { color: var(--faint); } pre .i { color: var(--index); } pre .e { color: 
 .lf-e { fill: none; stroke: var(--mute); stroke-width: 1.2; } .lf-e.lf-d { stroke-dasharray: 4 4; } .lf-a { fill: var(--mute); }
 .p-legend .l-you { box-shadow: inset 0 0 0 1.5px var(--body); } .p-legend .l-gone { box-shadow: inset 0 0 0 1.5px var(--gone); }
 .p-legend .l-back { width: 14px; height: 0; border-radius: 0; border-top: 1.5px dashed var(--mute); }
-@media (max-width: 720px) { .life .wide { display: none; } .life .narrow { display: block; } }
+/* The wide drawing has its full size from 854 px on. Below that it would shrink its labels, so the narrow one shows. */
+@media (max-width: 853px) { .life .wide { display: none; } .life .narrow { display: block; } }
 
 /* the end: /clear, and the loop starts again */
 .turn.prompt .msg { background: transparent; border-color: var(--line2); }
@@ -184,7 +185,7 @@ The seed script inserts into tables that only the latest migration creates. On a
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">what if I forget the checkpoint?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>Then the session stays recoverable for 7 days. <b>Its transcript is still on disk, and kb has a record of it.</b></p>
-      <div class="tool"><div class="h"><b>SessionStart</b><span class="args">the next session in ~/acme/shop</span><span class="ok">✓ 1 to recover</span></div><div class="b"><pre class="wrap"><span class="c">SessionStart · kb</span>
+      <div class="tool"><div class="h"><b>SessionStart</b><span class="args">next session</span><span class="ok">✓ 1 unsaved</span></div><div class="b"><pre class="wrap"><span class="c">SessionStart · kb</span>
 An earlier session here ended with no /kb:checkpoint.
 
 <span class="c">you type</span>

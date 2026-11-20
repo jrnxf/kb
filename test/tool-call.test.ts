@@ -80,7 +80,7 @@ const titles = (text: string | undefined) => [...(text ?? "").matchAll(/^- (\S+)
 
 const start = (home: string, cwd: string, source: string, session = "s1") => expect(run(START_HOOK, home, { session_id: session, cwd, hook_event_name: "SessionStart", source }).code).toBe(0);
 
-describe("a cmd trigger loads its note before the command", () => {
+describe("a cmd trigger loads its note at the command", () => {
   test("the agent gets the id, the kind, the title and the body, and the command still runs", () => {
     const { store, repo } = fixture();
     putNote(store, { id: "zorp-wipe", title: "zorp --wipe removes the cache of every project", triggers: ["cmd: zorp --wipe"], body: "Pass --project <name>.\nA wipe with no project takes ten minutes to rebuild." });
