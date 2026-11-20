@@ -1,0 +1,3 @@
+[test]
+# bun test runs the CLI and hook tests. claude plugin test hooks runs the mod test in hooks/.
+root = "test"

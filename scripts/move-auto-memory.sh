@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Move Claude Code's auto memory into kb, one project at a time, with /kb:checkpoint <folder>.
+# Move Claude Code's auto memory into kb, one project at a time, with /kb:save <folder>.
 #
 #   scripts/move-auto-memory.sh --dry-run           list the folders and where each one runs
 #   scripts/move-auto-memory.sh                     move every folder
@@ -37,8 +37,8 @@ done
 if [ -z "$plugin" ]; then
   plugin="$(grep -A3 '"kb@' "$config/plugins/installed_plugins.json" 2>/dev/null | grep -m1 -o '"installPath": *"[^"]*"' | cut -d'"' -f4 || true)"
 fi
-if ! grep -q 'ARGUMENTS' "$plugin/skills/checkpoint/SKILL.md" 2>/dev/null; then
-  echo "the kb plugin at ${plugin:-(not found)} is too old: its /kb:checkpoint takes no folder." >&2
+if ! grep -q 'ARGUMENTS' "$plugin/skills/save/SKILL.md" 2>/dev/null; then
+  echo "the kb plugin at ${plugin:-(not found)} is too old: its /kb:save takes no folder." >&2
   echo "update it (claude plugin update kb@jrnxf), or pass -- --plugin-dir <kb checkout>." >&2
   exit 1
 fi
@@ -109,7 +109,7 @@ for memory in "${folders[@]}"; do
   printf '[%d/%d] %s ... ' "$i" "${#folders[@]}" "$name"
   # Auto memory is off for the run, so it cannot write a new memory while it moves the old ones.
   # Only user settings load: a project's own hooks (a Stop hook that waits, for one) can hang -p.
-  if (cd "${dir:-$HOME}" && CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude -p "/kb:checkpoint $memory" --setting-sources user ${claude_args[@]+"${claude_args[@]}"} </dev/null >"$log" 2>&1); then
+  if (cd "${dir:-$HOME}" && CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude -p "/kb:save $memory" --setting-sources user ${claude_args[@]+"${claude_args[@]}"} </dev/null >"$log" 2>&1); then
     after="$(count "$memory")"
     # claude exits 0 also when a write or an rm was refused, so the files left are the real check.
     [ "$after" -lt "$before" ] || untouched=$((untouched + 1))

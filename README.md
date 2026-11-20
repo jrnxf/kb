@@ -135,10 +135,14 @@ notes, and a note loads when it applies.
   `kb.config.json` names (`~/.claude/CLAUDE.md`). kb writes the file at the end of its links, so
   a dotfiles repo that links it gets the change. A repo rule goes into the repo's `CLAUDE.md` or
   `AGENTS.md` after you say yes. Nothing is committed for you.
-- **Before `/clear`** you run `/kb:checkpoint`. The agent saves what the session learned,
+- **Before `/clear`** you run `/kb:clear`. The agent saves what the session learned,
   updates notes instead of duplicating them, writes stated rules to instruction files, trashes
   finished open work, empties Claude Code's auto memory, and gives a verdict on the notes it got with `kb verdict`.
-  The session start asks the agent to say in one line when it is a good time to checkpoint: when
+  Then the session clears, but only when the save fully succeeded: the turn finished, `kb checkpointed`
+  recorded the save, and the report starts with **Safe to clear**. Otherwise you get a toast with
+  the reason, and the session stays. `/kb:save` does the same save and never clears.
+  `/kb:checkpoint` is the old name of `/kb:save`, and it still works.
+  The session start asks the agent to say "Good time to /kb:clear." in one line: when
   a task landed or the context is large, and the session learned something. Only you start it. A
   headless run and a subagent do not get this rule.
 - **A trash that clears itself.** `kb trash` moves a note to `trash/`, and `kb restore` brings it
@@ -241,7 +245,7 @@ notes, and a note loads when it applies.
     From 5 sessions in other directories on, an interactive start says so once per day. Only
     that start measures the sessions of other directories.
   - The report starts with "Recovered" and the date and directory of the old session. It says
-    nothing about the session you are in, which still needs its own `/kb:checkpoint`.
+    nothing about the session you are in, which still needs its own `/kb:save`.
   - A recovered note is verified at the time the old session ended (`kb add --as-of`), with low
     confidence. So `kb stale` sees the changes made since then. A note that somebody checked after
     that time stays as it is: the report lists what the old session adds under "Check by hand".
@@ -424,7 +428,7 @@ and the text or rule of an audit Apply. It knows the shape of common tokens and 
 Anthropic, Slack and more), a password in a URL, and a long random value given to a name such as
 `API_KEY`. The error names the kind and the place, never the secret. Write a placeholder instead.
 
-Skills: `/kb:checkpoint`, `/kb:recover`, `/kb:audit`. Only you can start them. `/kb:note` writes a rule the
+Skills: `/kb:clear`, `/kb:save`, `/kb:recover`, `/kb:audit`. Only you can start them. `/kb:note` writes a rule the
 user states to an instruction file, and the agent starts it on its own.
 
 `kb log` prints one row per note: how often a session got it as a body, as a brief, as an index line
@@ -477,7 +481,7 @@ Then two settings in `~/.claude/settings.json`:
 - `autoMemoryEnabled` turns off Claude Code's auto memory. It is a second store with the same job,
   and its system prompt tells the agent to save preferences there. While it is on, the first start
   of each session asks the agent to tell you, and every session start tells the agent to save
-  nothing there. With it off, that rule is not sent. `/kb:checkpoint` empties it: rules go to
+  nothing there. With it off, that rule is not sent. `/kb:save` empties it: rules go to
   instruction files, and facts go to kb.
 - The allow rules let the agent read and save notes with no question. The session start and the
   hooks tell it to run these commands. The skills allow their own commands. Without the rules, the
@@ -513,7 +517,7 @@ git clone <your-private-repo-url> ~/.kb
 
 ```bash
 bun install && bunx playwright install chromium-headless-shell
-bun test && bun run typecheck && claude plugin validate .
+bun test && bun run test:mod && bun run typecheck && claude plugin validate .
 ```
 
 `test/keys.test.ts` presses the page's keys in a headless Chromium, at desktop and phone width.

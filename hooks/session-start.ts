@@ -72,8 +72,8 @@ try {
       // A checkpoint before the compaction saves only what came before it.
       const at = savedAt(store, input.session_id);
       const went = at !== null && typeof input.transcript_path === "string" && promptAfter(input.transcript_path, at) !== null;
-      if (at === null) notices.push("This session was compacted and /kb:checkpoint has not run in it. Knowledge from before the compaction now exists only in the summary. Tell the user once that /kb:checkpoint saves it.");
-      else if (went) notices.push("This session was compacted, and the user typed more after its last /kb:checkpoint. Knowledge from that part now exists only in the summary. Tell the user once that /kb:checkpoint saves it.");
+      if (at === null) notices.push("This session was compacted and /kb:save has not run in it. Knowledge from before the compaction now exists only in the summary. Tell the user once that /kb:save saves it.");
+      else if (went) notices.push("This session was compacted, and the user typed more after its last /kb:save. Knowledge from that part now exists only in the summary. Tell the user once that /kb:save saves it.");
     }
 
     // The stale checks run git once per commit, so they never run here. This reads the last

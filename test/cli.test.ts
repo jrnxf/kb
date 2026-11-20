@@ -1045,7 +1045,7 @@ describe("the log of a recovery", () => {
     expect(kb(store, ["log"]).stdout).toContain("0 worth a recovery, 1 recovered, 0 forgotten");
   });
 
-  // A session that ended, was resumed and then ran /kb:checkpoint saved itself.
+  // A session that ended, was resumed and then ran /kb:save saved itself.
   test("a session that saves itself after a resume is checkpointed, and a session with no mark too", () => {
     const store = tempStore();
     const dir = tempDir();

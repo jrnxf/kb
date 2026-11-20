@@ -151,7 +151,7 @@ describe("the transcript reader", () => {
       says(report),
       agent([{ type: "tool_use", id: "q1", name: "AskUserQuestion", input: { questions: [{ question: "Does this rule still hold: no deploy on a Friday?" }] } }]),
       user([{ type: "tool_result", tool_use_id: "q1", content: "User has answered your questions." }], { toolUseResult: { questions: [], answers: { "Does this rule still hold: no deploy on a Friday?": "Still holds" } } }),
-      says("I wrote the rule. This session still needs its own /kb:checkpoint if it did other work."),
+      says("I wrote the rule. This session still needs its own /kb:save if it did other work."),
     ];
 
     test("counts for nothing and leaves no text", () => {
