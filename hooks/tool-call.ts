@@ -1,8 +1,9 @@
 // Reads the JSON of a tool call on stdin: PreToolUse of Bash, Edit, Write or NotebookEdit, or
 // PostToolUseFailure of any tool. When a note of kb applies to the call and this session, or this
-// subagent, has not got it yet, the agent gets it now: before a command that a `cmd` trigger names,
-// after an error that an `err` trigger names, and on a file that an anchor names. A `stop` trigger
-// refuses the command once, with the note as the reason. Each note is one `fire` in the event log.
+// subagent, has not got it yet, the agent gets it now: at a command that a `cmd` trigger names
+// (the command still runs, and the note comes with its result), after an error that an `err`
+// trigger names, and on a file that an anchor names. A `stop` trigger refuses the command once,
+// with the note as the reason. Each note is one `fire` in the event log.
 // Most calls match nothing: then this reads one small table and prints nothing.
 
 import { type Fired, afterFailure, beforeCommand, beforeEdit } from "../cli/fire.ts";

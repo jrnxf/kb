@@ -15,8 +15,9 @@ export interface Note {
   verified_at_commit?: string;
   anchors: string[];
   /**
-   * When the note loads outside the session start, each `<kind>: <text>`: `cmd` and `stop` before
-   * a shell command, `err` after an error. trigger.ts reads them. A path is an anchor, not a trigger.
+   * When the note loads outside the session start, each `<kind>: <text>`: `cmd` and `stop` at a
+   * shell command (only `stop` comes before the run), `err` after an error. trigger.ts reads them.
+   * A path is an anchor, not a trigger.
    */
   triggers?: string[];
   confidence: Confidence;

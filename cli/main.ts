@@ -112,9 +112,10 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
   anchors: repo-relative paths, or path#symbol. A repo note loads when the agent reads or changes
     a file that an anchor names, or runs a command that names it.
   triggers: when the note loads outside the session start, each "<kind>: <text>":
-    "cmd: pkill -f"  before a shell command that runs it. One simple command of the line must
-      hold the words in order, as whole words, the first as its command word. One word that is
-      a common command (ls, git, bun, ...) needs a second word.
+    "cmd: pkill -f"  at a shell command that runs it. The command still runs, and the agent
+      gets the note with its result. One simple command of the line must hold the words in
+      order, as whole words, the first as its command word. One word that is a common command
+      (ls, git, bun, ...) needs a second word.
     "stop: git push --force"  the same match, and kb refuses the command once, with the note
       as the reason. A run 3 seconds later passes. For a command where one run does damage.
     "err: address already in use"  after a tool call that failed with this text in its error.

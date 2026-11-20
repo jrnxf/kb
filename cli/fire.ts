@@ -1,8 +1,9 @@
 // Notes at their trigger: what a tool call loads. A session start gives notes before the task is
-// known. Here a note comes at the moment it applies: before a shell command that a `cmd` or a
-// `stop` trigger names, after an error that an `err` trigger names, and when the agent works on a
-// file that an anchor names. Each reader gets each note once. The caller is a hook: this file knows
-// no harness, only a command, a file, an error text and who asks.
+// known. Here a note comes at the moment it applies: at a shell command that a `cmd` or a
+// `stop` trigger names (only `stop` comes before the run), after an error that an `err` trigger
+// names, and when the agent works on a file that an anchor names. Each reader gets each note once.
+// The caller is a hook: this file knows no harness, only a command, a file, an error text and who
+// asks.
 
 import { readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";

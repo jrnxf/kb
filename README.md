@@ -51,7 +51,8 @@ notes, and a note loads when it applies.
 - **Notes load at their trigger.** A session start gives notes before the task is known, and most
   tool calls are shell commands. So a note can carry `triggers`, and a hook loads the note at the
   moment it applies:
-  - `cmd: pkill -f` loads the note before a shell command that runs `pkill -f`. The command still runs.
+  - `cmd: pkill -f` loads the note at a shell command that runs `pkill -f`. The command still runs, and
+    Claude Code gives the agent the note with its result. So the note cannot change that run.
   - `stop: git push --force` refuses the command once, with the note as the reason. It is for a
     command where one run does damage. It refuses the first run in a session also when the
     session has the note from a file or an error. An agent can send several calls in one message,
