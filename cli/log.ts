@@ -90,7 +90,7 @@ export type LogEvent = Who &
     | { ev: "checkpoint" }
     /**
      * A session ended. `reason` is the word of the harness: clear, other, and so on. `checkpoint`
-     * says if /kb:checkpoint had run in it. A session that is resumed ends more than once.
+     * says if /kb:save had run in it. A session that is resumed ends more than once.
      */
     | { ev: "ended"; reason: string; checkpoint: boolean }
     /**

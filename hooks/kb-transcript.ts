@@ -3,7 +3,7 @@
 // store's per-machine state folder. `kb-transcript --measure` measures every unsaved session that
 // no session start measured yet, and forgets the short ones, so `kb unsaved` lists only sessions
 // that are worth a recovery. Both read a transcript, so they live here and not in the CLI.
-// `kb-transcript --memory` names Claude Code's auto memory folder of this project, for /kb:checkpoint.
+// `kb-transcript --memory` names Claude Code's auto memory folder of this project, for /kb:save.
 
 import { readdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -68,7 +68,7 @@ function write(store: Store, session: string): void {
     const head = maskSecrets(
       [
         `# Session that ended ${mark.ended} in ${mark.cwd}\n`,
-        ...(mark.since ? [`It ran /kb:checkpoint at ${mark.since}, and what came before is saved. Below is only what it said after.\n`] : []),
+        ...(mark.since ? [`It ran /kb:save at ${mark.since}, and what came before is saved. Below is only what it said after.\n`] : []),
         `${commitsSince(mark)}\n`,
         `Notes that an earlier /kb:recover of this session saved:\n${savedBefore(store, mark.notes)}\n`,
       ].join("\n"),

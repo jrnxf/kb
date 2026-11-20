@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
+    "test:mod": "scripts/test-mod.sh",
     "typecheck": "tsc --noEmit && bun run --cwd web typecheck",
     "build": "bun run --cwd web build"
   },

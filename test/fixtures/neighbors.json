@@ -1,5 +1,5 @@
 {
-  "about": "Notes for the seeded store of scripts/seed.ts. `rewrites` say a fact of one seeded note again in other words: `original` is the id of that note. `unrelated` are new facts that no seeded note holds. `session` are notes that an agent wrote in two headless /kb:checkpoint runs on this store: one is a twin of `original`, and two say one new fact, each in the words of its run. A repo is the folder name under repos/, or null for a global note.",
+  "about": "Notes for the seeded store of scripts/seed.ts. `rewrites` say a fact of one seeded note again in other words: `original` is the id of that note. `unrelated` are new facts that no seeded note holds. `session` are notes that an agent wrote in two headless /kb:save runs on this store: one is a twin of `original`, and two say one new fact, each in the words of its run. A repo is the folder name under repos/, or null for a global note.",
   "rewrites": [
     {
       "original": "never-run-the-migration-tool-against-the-shared",

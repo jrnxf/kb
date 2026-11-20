@@ -1,5 +1,8 @@
 {
-  "description": "Inject saved kb notes at every session start, load a note at its trigger (a command, an error or a file), protect the notes through compaction, and record a session that ends with no checkpoint.",
+  "description": "Inject saved kb notes at every session start. Load a note at its trigger (a command, an error or a file), protect the notes through compaction, record a session that ends with no save, and clear the session after a /kb:clear whose save succeeded.",
+  "modules": [
+    "./clear-after-save.ts"
+  ],
   "hooks": {
     "SessionStart": [
       {

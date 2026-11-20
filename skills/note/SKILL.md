@@ -6,7 +6,7 @@ allowed-tools: Bash(kb *), Read, Edit, Write
 
 # kb note
 
-The user just stated a rule, a preference or a correction. Write it now, before you answer the rest. Do not wait for /kb:checkpoint.
+The user just stated a rule, a preference or a correction. Write it now, before you answer the rest. Do not wait for /kb:save.
 A rule goes to an instruction file, which every session loads whole. kb keeps what agents learn (gotchas, decisions, how-tos, open work), not the user's rules.
 `kb` is on PATH. Run every `kb` command from the session's project directory, so the repo resolves.
 Never write it to Claude Code's auto memory (`~/.claude/projects/*/memory/`, `MEMORY.md`).

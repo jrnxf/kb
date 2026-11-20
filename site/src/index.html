@@ -178,22 +178,22 @@ The seed script inserts into tables that only the latest migration creates. On a
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">who writes the notes?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>I do. When you state a rule, I write it to CLAUDE.md in that turn. <b>What I learn goes to kb.</b></p>
-      <p><code>kb add</code> names the close notes before it writes, so I update a note and add no twin. It refuses a note that looks like it holds a secret. Before /clear, <code>/kb:checkpoint</code> saves the rest, and I say in one line when it is a good time.</p>
+      <p><code>kb add</code> names the close notes before it writes, so I update a note and add no twin. It refuses a note that looks like it holds a secret. When you are done, <code>/kb:clear</code> saves the rest and clears the session, but only if the save worked. I say in one line when it is a good time.</p>
       <div class="tool"><div class="h"><b>loop</b><span class="args">how a note gets here</span></div><div class="b" data-w="loop"></div></div>
     </div></li>
 
-    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">what if I forget the checkpoint?</div></li>
+    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">what if I forget to save?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>Then the session stays recoverable for 7 days. <b>Its transcript is still on disk, and kb has a record of it.</b></p>
       <div class="tool"><div class="h"><b>SessionStart</b><span class="args">next session</span><span class="ok">✓ 1 unsaved</span></div><div class="b"><pre class="wrap"><span class="c">SessionStart · kb</span>
-An earlier session here ended with no /kb:checkpoint.
+An earlier session here ended with no /kb:save.
 
 <span class="c">you type</span>
 /kb:recover
 
 <span class="i">Recovered the session of 2026-11-16 in ~/acme/shop</span> - 2 saved, 1 updated</pre></div></div>
       <div class="cmds">
-        <div><b>at the end</b><span>A hook records each session that ends with no checkpoint: a /clear, an exit, or a headless run. A prompt after a checkpoint counts from that checkpoint on.</span></div>
+        <div><b>at the end</b><span>A hook records each session that ends with no save: a /clear, an exit, or a headless run. A prompt after a save counts from that checkpoint on.</span></div>
         <div><b>at the next start</b><span>I tell you in one line, once per day. A session too short to hold a lesson is forgotten.</span></div>
         <div><b>/kb:recover</b><span>A subagent reads what we said, and each tool call that failed. No output of a call that worked reaches it.</span></div>
         <div><b>the notes</b><span>Each one gets low confidence and the time the old session ended. So a later change to the code flags it.</span></div>
@@ -224,7 +224,7 @@ An earlier session here ended with no /kb:checkpoint.
       <div class="cmds">
         <div><b>kb context</b><span>A note whose file or symbol is gone is flagged at session start, before I act on it.</span></div>
         <div><b>/kb:audit</b><span>Changed anchors and notes with no activity and no check in 90 days go up for review. Rules move into CLAUDE.md.</span></div>
-        <div><b>kb verdict</b><span>At the checkpoint I say if a note helped, was not needed or was wrong. The audit reads the verdicts.</span></div>
+        <div><b>kb verdict</b><span>At the save I say if a note helped, was not needed or was wrong. The audit reads the verdicts.</span></div>
         <div><b>kb log</b><span>A log on each machine records what every session got. No use count ranks a note.</span></div>
         <div><b>kb trash</b><span>Restore in one command. Gone after 30 days.</span></div>
         <div><b>kb sync</b><span>Give the store a remote. Every machine shares it.</span></div>

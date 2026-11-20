@@ -53,7 +53,7 @@ function mountLoop(root) {
   root.classList.add("loop");
   root.innerHTML = `<div class="orbit"></div><div class="hub"><b>every session</b>also after /clear, resume, compaction and fork</div>
     <div class="node n-top" data-a="270"><span class="when">during a session</span><b>I learn a fact</b><code>kb add --file</code></div>
-    <div class="node n-right" data-a="0"><span class="when">before /clear</span><b>Checkpoint</b><code>/kb:checkpoint</code></div>
+    <div class="node n-right" data-a="0"><span class="when">when you are done</span><b>Save + clear</b><code>/kb:clear</code></div>
     <div class="node n-bottom" data-a="90"><span class="when">on disk</span><b>One file per note</b><code>~/.kb/notes/&lt;scope&gt;/</code></div>
     <div class="node n-left" data-a="180"><span class="when">session start</span><b>The index</b><code>kb context</code></div>
     <div class="comet" aria-hidden="true"></div>`;

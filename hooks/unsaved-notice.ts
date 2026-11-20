@@ -124,14 +124,14 @@ export function unsavedNotice(store: Store, cwd: string, root: string | null, { 
       const what = one ? "An earlier session here" : `${lost} earlier sessions here`;
       lines.push(
         attended && firstToday(store, root ?? cwd, today)
-          ? `${what} ended with no /kb:checkpoint. Tell the user in one line, in your first reply, that /kb:recover saves ${one ? "its" : "their"} knowledge or forgets ${one ? "it" : "them"}.`
+          ? `${what} ended with no /kb:save. Tell the user in one line, in your first reply, that /kb:recover saves ${one ? "its" : "their"} knowledge or forgets ${one ? "it" : "them"}.`
           : `${what} ${one ? "has" : "have"} unsaved knowledge. The user can run /kb:recover.`,
       );
     }
     if (attended && startup && !claimedToday(store, ELSEWHERE, today)) {
       const elsewhere = settle(store, all.filter((entry) => !here(entry)), inTime).worth;
       if (elsewhere >= ELSEWHERE_FLOOR && firstToday(store, ELSEWHERE, today)) {
-        lines.push(`${elsewhere} sessions in other directories ended with no /kb:checkpoint. Tell the user in one line, in your first reply, that /kb:recover all saves their knowledge.`);
+        lines.push(`${elsewhere} sessions in other directories ended with no /kb:save. Tell the user in one line, in your first reply, that /kb:recover all saves their knowledge.`);
       }
     }
     return lines.length > 0 ? lines.join("\n") : null;
