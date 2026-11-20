@@ -43,6 +43,13 @@ export interface UnsavedSession {
   logged?: true;
   /** The notes that a recovery of this session wrote: `kb add --recovered-from`. */
   notes?: string[];
+  /**
+   * The session saved its knowledge at this time, and the user typed more after it. Only the
+   * part after it is unsaved, so a measure and a recovery read only that part.
+   */
+  since?: string;
+  /** The byte in the transcript where the part after `since` starts, when the end found it. */
+  offset?: number;
 }
 
 const safe = (session: string) => session.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 100);
@@ -86,17 +93,37 @@ export function isSaved(store: Store, session: string): boolean {
   return existsSync(store.statePath(`saved-${safe(session)}`));
 }
 
+/** When the session last saved its knowledge, or null. A record with no time it can read says "". */
+export function savedAt(store: Store, session: string): string | null {
+  try {
+    return readFileSync(store.statePath(`saved-${safe(session)}`), "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The session saved its knowledge, and the user typed more after it: the record that it is saved
+ * goes. The end writes the new mark first, so a hook that is killed in between loses nothing.
+ */
+export function unsave(store: Store, session: string): void {
+  rmSync(store.statePath(`saved-${safe(session)}`), { force: true });
+}
+
 /**
  * Record a session that ended with no checkpoint. A session can end twice: it ends, the user
  * resumes it, and it ends again. The new mark keeps the notes that a recovery wrote in between,
- * and the word that the log has its `unsaved` line. It loses the size, which is measured again.
+ * the word that the log has its `unsaved` line, and the time of a checkpoint that came before. It loses the size, which is measured again.
  */
 export function recordUnsaved(store: Store, entry: UnsavedSession): void {
   store.ensure();
   const before = unsavedSession(store, entry.session) ?? readMark(livePath(store, entry.session));
   const notes = entry.notes ?? before?.notes;
   const logged = entry.logged ?? before?.logged;
-  writeAtomic(markPath(store, entry.session), JSON.stringify({ ...entry, ...(notes ? { notes } : {}), ...(logged ? { logged } : {}) }));
+  // A session that saved, went on, ended and was resumed: what it saved is still saved.
+  const since = entry.since ?? before?.since;
+  const offset = entry.since ? entry.offset : before?.offset;
+  writeAtomic(markPath(store, entry.session), JSON.stringify({ ...entry, ...(notes ? { notes } : {}), ...(logged ? { logged } : {}), ...(since ? { since } : {}), ...(since && offset !== undefined ? { offset } : {}) }));
   rmSync(livePath(store, entry.session), { force: true });
 }
 

@@ -62,11 +62,13 @@ function write(store: Store, session: string): void {
   const mark = store.exists() ? unsavedSession(store, session) : null;
   if (!mark) fail(`no unsaved session ${session}. \`kb unsaved\` lists them.`);
   try {
-    const conversation = readConversation(mark.transcript);
+    // A session that went on after a checkpoint: what came before it is saved, so only the rest is read.
+    const conversation = readConversation(mark.transcript, false, mark);
     // A commit subject is text that kb did not write, so the head is masked as the turns are.
     const head = maskSecrets(
       [
         `# Session that ended ${mark.ended} in ${mark.cwd}\n`,
+        ...(mark.since ? [`It ran /kb:checkpoint at ${mark.since}, and what came before is saved. Below is only what it said after.\n`] : []),
         `${commitsSince(mark)}\n`,
         `Notes that an earlier /kb:recover of this session saved:\n${savedBefore(store, mark.notes)}\n`,
       ].join("\n"),

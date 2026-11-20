@@ -138,6 +138,9 @@ notes, and a note loads when it applies.
 - **Before `/clear`** you run `/kb:checkpoint`. The agent saves what the session learned,
   updates notes instead of duplicating them, writes stated rules to instruction files, trashes
   finished open work, empties Claude Code's auto memory, and gives a verdict on the notes it got with `kb verdict`.
+  The session start asks the agent to say in one line when it is a good time to checkpoint: when
+  a task landed or the context is large, and the session learned something. Only you start it. A
+  headless run and a subagent do not get this rule.
 - **A trash that clears itself.** `kb trash` moves a note to `trash/`, and `kb restore` brings it
   back. A note in the trash for more than `trashDays` (30) is deleted for good, before the next
   command. `kb delete` removes a note now, and `kb empty-trash` removes the whole trash. If the
@@ -194,6 +197,10 @@ notes, and a note loads when it applies.
   a script or a second window does not get the same sentence each time. A headless run
   (`claude -p`, or a run of the Agent SDK) gets only the short line for the agent, and does not
   use up the sentence of the day. Recovery runs only when you type `/kb:recover`.
+  - A checkpoint saves what came before it. When you type a prompt after it, in the same session
+    or in a resume of it, the end of the session records it again, from the time of the
+    checkpoint on. The end reads only the last 256 KB of the transcript for this. A later measure
+    and `/kb:recover` read only the part after the checkpoint.
   - A session that you resume is live again. Its record goes at its start, so no other session
     recovers it while it works, and its next end records it again. `kb unsaved` and the line
     never name the session that asks. A recovery marks a session with the end time that it
@@ -311,7 +318,7 @@ or a how-to has no trigger and no anchor, when a session in a repo saves open wo
 - `PreToolUse` on Bash, Edit, Write and NotebookEdit loads the notes of a `cmd` or a `stop` trigger, and the notes on a path.
 - `PostToolUseFailure` loads the notes of an `err` trigger. Claude Code sends the output of a failed call only there.
 - `PostToolUse` on Read loads the notes on the file.
-- `PreCompact` tells the summary what to keep, and `SessionEnd` on `/clear` records a session with no checkpoint.
+- `PreCompact` tells the summary what to keep, and `SessionEnd` records a session with no checkpoint, or with a prompt after its last one.
 
 No hook can break or slow a session: on any failure it prints nothing and exits 0. The two hooks for
 tool calls have 2 and 3 seconds.
