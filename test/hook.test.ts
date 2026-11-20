@@ -2,11 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { SAVE_RULE } from "../cli/context.ts";
+import { CHECKPOINT_RULE } from "../hooks/checkpoint-rule.ts";
 import { RUN_ENV } from "../cli/audit-run.ts";
 import { rememberRepo } from "../cli/repos.ts";
 import { forgetUnsaved, isLive, isSaved, markSaved, recordRecovered, recordWorth, recordUnsaved, unsavedSession } from "../cli/session.ts";
 import { MEMORY_ON_NOTICE, MEMORY_RULE } from "../hooks/auto-memory.ts";
-import { OUTPUT_CLOSE, OUTPUT_OPEN } from "../hooks/transcript.ts";
+import { OUTPUT_CLOSE, OUTPUT_OPEN, TAIL_BYTES } from "../hooks/transcript.ts";
 import { BUDGET_MS, ELSEWHERE_FLOOR, MIN_FAILED, PARSE_LIMIT, unsavedNotice } from "../hooks/unsaved-notice.ts";
 import { ROOT, kb, logged, plain, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
@@ -29,8 +30,8 @@ function runHook(options: { home: string; stdin: string; path?: string; env?: Re
   return { code: r.exitCode, stdout: r.stdout.toString(), stderr: r.stderr.toString(), ms: performance.now() - started };
 }
 
-// Auto memory is off in QUIET_CONFIG, so its rule is not there.
-const SAVING = `# kb\n${SAVE_RULE}\n`;
+// Auto memory is off in QUIET_CONFIG, so its rule is not there. A start with a person there gets the checkpoint rule.
+const SAVING = `# kb\n${SAVE_RULE}\n${CHECKPOINT_RULE}\n`;
 
 const input = (cwd: string, source = "startup") => JSON.stringify({ session_id: "abc", transcript_path: "/home/user/t.jsonl", cwd, hook_event_name: "SessionStart", source });
 
@@ -235,6 +236,17 @@ describe("SessionStart hook", () => {
     expect(first.stdout).toContain("\n- repo-note [gotcha]");
   });
 
+  test("the rule to suggest a checkpoint comes only to a session with a person there", () => {
+    const store = tempStore();
+    putNote(store, { id: "g" });
+    const repo = tempRepo();
+    expect(runHook({ home: store.home, stdin: input(repo) }).stdout).toContain(`${SAVE_RULE}\n${CHECKPOINT_RULE}\n`);
+    // A headless run has nobody to read it, and a subagent does not end the session.
+    for (const entrypoint of ["sdk-cli", "sdk-ts"]) expect(runHook({ home: store.home, stdin: input(repo), env: { CLAUDE_CODE_ENTRYPOINT: entrypoint } }).stdout).not.toContain("/kb:checkpoint, then /clear");
+    const sub = JSON.stringify({ ...JSON.parse(input(repo)), agent_id: "a1" });
+    expect(runHook({ home: store.home, stdin: sub }).stdout).not.toContain("/kb:checkpoint, then /clear");
+  });
+
   test("stays under the 10,000 character limit at the largest budget, with every notice", () => {
     const store = tempStore();
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 20000 } }));
@@ -253,6 +265,8 @@ describe("SessionStart hook", () => {
     const out = runHook({ home: store.home, stdin: input(repo), env: { CLAUDE_CONFIG_DIR: tempDir("kb-claude-") } }).stdout;
     expect(out).toContain("20 earlier sessions here ended with no /kb:checkpoint");
     expect(out).toContain("The global kb notes do not fit the index");
+    // Both fixed rules are in, and the notices still fit.
+    expect(out).toContain(`${SAVE_RULE}\n${CHECKPOINT_RULE}\n${MEMORY_RULE}`);
     expect(out.length).toBeGreaterThan(8800);
     expect(out.length).toBeLessThan(10000);
   });
@@ -1096,6 +1110,153 @@ describe("session notices", () => {
   });
 
   // The user resumes a session that ended with no checkpoint. It works again, and what it learns from now on is in no recovery.
+  // A checkpoint saves what came before it. What the user typed after it is unsaved again.
+  describe("a session that goes on after its checkpoint", () => {
+    const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+    const said = (type: string, text: string, time: string) => JSON.stringify({ type, timestamp: time, message: { content: [{ type: "text", text }] } });
+    const result = (time: string) => JSON.stringify({ type: "user", timestamp: time, message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "recorded s" }] } });
+    const clear = (time: string) => said("user", "<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>", time);
+    /** What came before the checkpoint: three long prompts, an hour ago. */
+    const before = (prompts = 3, words = 300) => Array.from({ length: prompts }, (_, i) => [said("user", `old prompt ${i} ${"before ".repeat(words)}`, at(-3_600_000 + i * 1000)), said("assistant", "old answer", at(-3_600_000 + i * 1000 + 500))]).flat();
+    const write = (session: string, lines: string[]) => {
+      const path = join(transcripts, `${session}.jsonl`);
+      writeFileSync(path, `${lines.join("\n")}\n`);
+      return path;
+    };
+    const recover = (store: ReturnType<typeof tempStore>, session: string) =>
+      JSON.parse(Bun.spawnSync([join(ROOT, "bin", "kb-transcript"), session], { cwd: plain(), env: { ...process.env, KB_HOME: store.home }, stdout: "pipe" }).stdout.toString());
+
+    test("the report of the checkpoint and a /clear after it keep the session saved", () => {
+      const store = tempStore();
+      const repo = tempRepo();
+      markSaved(store, "s");
+      const path = write("s", [...before(), result(at(1000)), said("assistant", "**Safe to clear**", at(2000)), clear(at(3000))]);
+      end(store.home, endInput(repo, "s", "clear", path));
+      expect(isSaved(store, "s")).toBe(true);
+      expect(unsavedSession(store, "s")).toBeNull();
+      expect(logged(store).at(-1)).toMatchObject({ ev: "ended", session: "s", checkpoint: true });
+    });
+
+    test("prompts after it make the session unsaved from the checkpoint on, and a recovery reads only that part", () => {
+      const store = tempStore();
+      const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
+      markSaved(store, "s");
+      const later = [said("user", `new prompt one ${"after ".repeat(300)}`, at(5000)), said("assistant", "new answer", at(6000)), said("user", `new prompt two ${"after ".repeat(300)}`, at(7000))];
+      const path = write("s", [...before(), result(at(1000)), said("assistant", "**Safe to clear**", at(2000)), ...later]);
+      end(store.home, endInput(repo, "s", "other", path));
+      expect(isSaved(store, "s")).toBe(false);
+      const mark = unsavedSession(store, "s")!;
+      // The place is written after the record of the save went, so it reaches the mark.
+      expect({ scope: mark.scope, root: mark.root, since: typeof mark.since, offset: typeof mark.offset }).toEqual({ scope: "github.com/acme/billing", root: repo, since: "string", offset: "number" });
+      // The part after the checkpoint starts at its first line: the result of `kb checkpointed`.
+      const part = readFileSync(path, "utf8").slice(mark.offset!);
+      expect(part).toStartWith('{"type":"user"');
+      expect(part).toContain(later[0]!);
+      expect(part).not.toContain("old prompt");
+      expect(logged(store).at(-1)).toMatchObject({ ev: "ended", session: "s", checkpoint: false });
+      expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(NOTICE);
+      expect(logged(store).filter((event) => event.ev === "unsaved")).toEqual([expect.objectContaining({ session: "s", prompts: 2 })]);
+
+      const read = recover(store, "s");
+      expect(read).toMatchObject({ prompts: 2 });
+      const text = readFileSync(read.file, "utf8");
+      expect(text).toContain(`It ran /kb:checkpoint at ${mark.since}`);
+      expect(text).toContain("new prompt one");
+      expect(text).not.toContain("old prompt");
+      // The report of the checkpoint comes after it, and tells the recovery what is saved already.
+      expect(text).toContain("Safe to clear");
+    });
+
+    test("a resume and a second end keep the time of the checkpoint", () => {
+      const store = tempStore();
+      const repo = tempRepo();
+      markSaved(store, "s");
+      const lines = [...before(), result(at(1000)), said("user", `new prompt one ${"after ".repeat(300)}`, at(5000)), said("user", `new prompt two ${"after ".repeat(300)}`, at(6000))];
+      end(store.home, endInput(repo, "s", "other", write("s", lines)));
+      const first = unsavedSession(store, "s")!;
+      expect(first.since).toBeDefined();
+      runHook({ home: store.home, stdin: startInput(repo, "resume", "s") });
+      expect(isLive(store, "s")).toBe(true);
+      end(store.home, endInput(repo, "s", "other", write("s", [...lines, said("user", "one more", at(9000))])));
+      expect(unsavedSession(store, "s")).toMatchObject({ since: first.since, offset: first.offset });
+    });
+
+    test("a resume of a saved session is saved again only by its own checkpoint", () => {
+      const store = tempStore();
+      const repo = tempRepo();
+      markSaved(store, "s");
+      const lines = [...before(), result(at(1000))];
+      // Resumed, and ended with nothing typed: still saved.
+      runHook({ home: store.home, stdin: startInput(repo, "resume", "s") });
+      end(store.home, endInput(repo, "s", "other", write("s", lines)));
+      expect(isSaved(store, "s")).toBe(true);
+      // Resumed again, with work this time.
+      runHook({ home: store.home, stdin: startInput(repo, "resume", "s") });
+      const more = [said("user", `resumed prompt one ${"after ".repeat(300)}`, at(5000)), said("user", `resumed prompt two ${"after ".repeat(300)}`, at(6000))];
+      end(store.home, endInput(repo, "s", "other", write("s", [...lines, ...more])));
+      expect(isSaved(store, "s")).toBe(false);
+      expect(unsavedSession(store, "s")?.since).toBeDefined();
+      // Resumed a third time, it runs /kb:checkpoint itself: saved, with no mark.
+      runHook({ home: store.home, stdin: startInput(repo, "resume", "s") });
+      expect(kb(store, ["checkpointed", "s", "--json"], { env: { KB_SESSION: "s" } }).json).toEqual({ session: "s", recorded: true });
+      expect(isSaved(store, "s")).toBe(true);
+      expect(unsavedSession(store, "s")).toBeNull();
+    });
+
+    test("a long session with one short prompt after its checkpoint is measured by that part, and is too short to recover", () => {
+      const store = tempStore();
+      const repo = tempRepo();
+      markSaved(store, "s");
+      // Far over the size above which a start counts a transcript as worth it, unread.
+      const old = before(Math.ceil(PARSE_LIMIT / 2000) + 10);
+      const path = write("s", [...old, result(at(1000)), said("user", "thanks", at(5000))]);
+      expect(statSync(path).size).toBeGreaterThan(PARSE_LIMIT);
+      end(store.home, endInput(repo, "s", "other", path));
+      expect(unsavedSession(store, "s")?.offset).toBeGreaterThan(PARSE_LIMIT);
+      expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).not.toContain("/kb:recover");
+      expect(unsavedSession(store, "s")).toBeNull();
+    });
+
+    test("work past the part that the end reads is unsaved, with no start byte", () => {
+      const store = tempStore();
+      const repo = tempRepo();
+      markSaved(store, "s");
+      const lines = Array.from({ length: Math.ceil(TAIL_BYTES / 1500) + 5 }, (_, i) => said("assistant", `step ${i} ${"work ".repeat(300)}`, at(5000 + i)));
+      const path = write("s", [...before(), result(at(1000)), said("user", `go on ${"after ".repeat(300)}`, at(2000)), ...lines]);
+      end(store.home, endInput(repo, "s", "other", path));
+      expect(isSaved(store, "s")).toBe(false);
+      const mark = unsavedSession(store, "s")!;
+      expect(mark.since).toBeDefined();
+      expect(mark.offset).toBeUndefined();
+      // The recovery finds the start by the time of each line.
+      const text = readFileSync(recover(store, "s").file, "utf8");
+      expect(text).toContain("go on");
+      expect(text).not.toContain("old prompt");
+    });
+
+    test("the start byte is right when the part that the end reads cuts a character", () => {
+      const store = tempStore();
+      const repo = tempRepo();
+      markSaved(store, "s");
+      // Lines of three-byte characters before the checkpoint, so the cut lands inside one.
+      const old = Array.from({ length: Math.ceil(TAIL_BYTES / 3000) + 5 }, (_, i) => said("assistant", `${i} ${"€".repeat(1000)}`, at(-3_600_000 + i)));
+      const later = said("user", `new prompt one ${"after ".repeat(300)}`, at(5000));
+      const path = write("s", [...old, result(at(1000)), later, said("user", `new prompt two ${"after ".repeat(300)}`, at(6000))]);
+      end(store.home, endInput(repo, "s", "other", path));
+      const offset = unsavedSession(store, "s")!.offset!;
+      expect(readFileSync(path).subarray(offset).toString("utf8")).toStartWith('{"type":"user"');
+    });
+
+    test("a transcript with no times keeps the checkpoint as it is", () => {
+      const store = tempStore();
+      const repo = tempRepo();
+      markSaved(store, "s");
+      end(store.home, endInput(repo, "s", "other"));
+      expect(isSaved(store, "s")).toBe(true);
+      expect(unsavedSession(store, "s")).toBeNull();
+    });
+  });
+
   describe("a session that starts again", () => {
     const note = JSON.stringify({ title: "The queue drops a job", kind: "gotcha", body: "x", scope: "global" });
 
@@ -1397,6 +1558,14 @@ describe("session notices", () => {
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup", "s1") }).stdout).not.toContain(line);
     kb(store, ["checkpointed", "s1"]);
     expect(runHook({ home: store.home, stdin: startInput(repo, "compact", "s1") }).stdout).not.toContain(line);
+    // The user typed more after the checkpoint, and then the session was compacted.
+    const path = join(tempDir("kb-transcripts-"), "s1.jsonl");
+    const later = new Date(Date.now() + 5000).toISOString();
+    writeFileSync(path, `${JSON.stringify({ type: "user", timestamp: later, message: { content: "one more task" } })}\n`);
+    const compact = JSON.stringify({ ...JSON.parse(startInput(repo, "compact", "s1")), transcript_path: path });
+    const out = runHook({ home: store.home, stdin: compact }).stdout;
+    expect(out).toContain("This session was compacted, and the user typed more after its last /kb:checkpoint.");
+    expect(out).not.toContain(line);
   });
 
   test("more than 5 stale notes give one line, from the cache, and the cache fills in the background", async () => {
@@ -1447,19 +1616,19 @@ describe("session notices", () => {
     for (const source of ["startup", "resume", "clear", "compact", "fork"]) {
       // Off: the fixed text is the header, the format line and the save rule.
       expect(start(source)).not.toContain(MEMORY_RULE);
-      expect(start(source)).toContain(`${SAVE_RULE}\n\n## Index`);
+      expect(start(source)).toContain(`${SAVE_RULE}\n${CHECKPOINT_RULE}\n\n## Index`);
       // On: the rule is right under the save rule, also after a compaction.
-      expect(start(source, { CLAUDE_CONFIG_DIR: on })).toContain(`${SAVE_RULE}\n${MEMORY_RULE}\n\n## Index`);
+      expect(start(source, { CLAUDE_CONFIG_DIR: on })).toContain(`${SAVE_RULE}\n${CHECKPOINT_RULE}\n${MEMORY_RULE}\n\n## Index`);
     }
     expect(start("compact", { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "0" })).toContain(MEMORY_RULE);
     expect(start("compact", { CLAUDE_CONFIG_DIR: on, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" })).not.toContain(MEMORY_RULE);
     // The text for a missing or a broken store follows the same setting.
     const missing = join(tempDir(), "missing");
-    expect(start("resume", { CLAUDE_CONFIG_DIR: on }, missing)).toBe(`# kb\n${SAVE_RULE}\n${MEMORY_RULE}\n`);
+    expect(start("resume", { CLAUDE_CONFIG_DIR: on }, missing)).toBe(`# kb\n${SAVE_RULE}\n${CHECKPOINT_RULE}\n${MEMORY_RULE}\n`);
     expect(start("resume", {}, missing)).toBe(SAVING);
     const broken = join(tempDir(), "file");
     writeFileSync(broken, "x");
-    expect(start("resume", { CLAUDE_CONFIG_DIR: on }, broken)).toBe(`# kb\n${SAVE_RULE}\n${MEMORY_RULE}\n`);
+    expect(start("resume", { CLAUDE_CONFIG_DIR: on }, broken)).toBe(`# kb\n${SAVE_RULE}\n${CHECKPOINT_RULE}\n${MEMORY_RULE}\n`);
     expect(start("resume", {}, broken)).toBe(SAVING);
   });
 

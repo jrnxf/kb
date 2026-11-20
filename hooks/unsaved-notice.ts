@@ -42,7 +42,8 @@ function worthIt(store: Store, entry: UnsavedSession, inTime: () => boolean): bo
   }
   let bytes: number;
   try {
-    bytes = statSync(entry.transcript).size;
+    // A session that went on after a checkpoint: only the part after it counts.
+    bytes = statSync(entry.transcript).size - (entry.offset ?? 0);
   } catch {
     return null;
   }
@@ -52,7 +53,7 @@ function worthIt(store: Store, entry: UnsavedSession, inTime: () => boolean): bo
   }
   // Out of time: the mark stays as it is, and a later start measures it.
   if (!inTime()) return null;
-  const size = worthRecovering(entry.transcript);
+  const size = worthRecovering(entry.transcript, entry);
   // The transcript is there and this read failed. Keep the mark: a later start measures it.
   if (!size) return null;
   if (worth(size)) recordWorth(store, entry.session, size);

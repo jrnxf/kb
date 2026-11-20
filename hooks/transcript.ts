@@ -6,7 +6,7 @@
 // wider masks for tool text. An error is text that a tool wrote, so it stands in a marked block.
 // `kb-transcript <session id>` (hooks/kb-transcript.ts) writes the result for /kb:recover.
 
-import { readFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { maskKeys, maskSecrets, maskToolText } from "../cli/secrets.ts";
 
 /** How much a session holds. A later session start measures it once, and the mark keeps it. */
@@ -33,6 +33,8 @@ type Line = {
   isMeta?: boolean;
   isSidechain?: boolean;
   isCompactSummary?: boolean;
+  /** When Claude Code wrote the line, as an ISO time. */
+  timestamp?: string;
   toolUseResult?: unknown;
   message?: { id?: string; content?: string | Block[] };
 };
@@ -251,7 +253,7 @@ function userSaid(line: Line, asked: Set<string>): Said[] {
  * Throws when the file cannot be read. With `measure`, it only counts: no text is kept and no
  * mask runs, so a session start pays for one pass over the file and no more.
  */
-export function readConversation(path: string, measure = false): Conversation {
+export function readConversation(path: string, measure = false, part: Part = {}): Conversation {
   const turns: { role: "user" | "agent"; text: string }[] = [];
   const asked = new Set<string>();
   /** Each tool call that waits for its result, by its id, so a result that failed can name its call. */
@@ -279,7 +281,10 @@ export function readConversation(path: string, measure = false): Conversation {
     if (last?.role === role) last.text += `\n\n${text}`;
     else turns.push({ role, text });
   };
-  for (const raw of readFileSync(path, "utf8").split("\n")) {
+  const since = part.since ? Date.parse(part.since) : Number.NaN;
+  // From the byte that the end found, every line is after the checkpoint.
+  let after = Number.isNaN(since) || part.offset !== undefined;
+  for (const raw of readFrom(path, part.offset ?? 0).split("\n")) {
     if (!raw.trim()) continue;
     let line: Line | null;
     try {
@@ -290,6 +295,12 @@ export function readConversation(path: string, measure = false): Conversation {
     // A line can parse to null or to a bare value.
     if (!line || typeof line !== "object") continue;
     lines++;
+    // What came before a checkpoint is saved. A line with no time belongs where the last time was.
+    if (!after) {
+      const at = typeof line.timestamp === "string" ? Date.parse(line.timestamp) : Number.NaN;
+      if (Number.isNaN(at) || at <= since) continue;
+      after = true;
+    }
     // A compaction summary repeats turns the file still holds. A sidechain is a subagent's own work.
     if ((line.type !== "user" && line.type !== "assistant") || line.isMeta || line.isSidechain || line.isCompactSummary) continue;
     if (line.type === "assistant") {
@@ -356,11 +367,106 @@ export function readConversation(path: string, measure = false): Conversation {
  * The size of a transcript's conversation, or null when the file cannot be read now.
  * Null is not "empty": the caller keeps the session and measures it at a later start.
  */
-export function worthRecovering(path: string): Size | null {
+export function worthRecovering(path: string, part: Part = {}): Size | null {
   try {
-    const { prompts, chars, failed } = readConversation(path, true);
+    const { prompts, chars, failed } = readConversation(path, true, part);
     return { prompts, chars, failed };
   } catch {
     return null;
   }
+}
+
+/** The part of a transcript to read: what came after a checkpoint. With neither field, all of it. */
+export interface Part {
+  /** The time of the checkpoint. Lines at this time or before are skipped. */
+  since?: string;
+  /** The byte where the part after the checkpoint starts. */
+  offset?: number;
+}
+
+/** The bytes of a file from a byte on. */
+function readBytes(path: string, offset: number): Buffer {
+  const file = openSync(path, "r");
+  try {
+    const size = fstatSync(file).size;
+    const start = Math.min(Math.max(0, offset), size);
+    const bytes = Buffer.alloc(size - start);
+    let read = 0;
+    while (read < bytes.length) {
+      const n = readSync(file, bytes, read, bytes.length - read, start + read);
+      if (n === 0) break;
+      read += n;
+    }
+    return bytes.subarray(0, read);
+  } finally {
+    closeSync(file);
+  }
+}
+
+/** The text of a file from a byte on. The byte must start a line. */
+const readFrom = (path: string, offset: number) => readBytes(path, offset).toString("utf8");
+
+/** How much of the end of a transcript the end of a session reads. A session end has 1.5 seconds. */
+export const TAIL_BYTES = 256 * 1024;
+
+/**
+ * If the user typed a prompt after a checkpoint at `since`, and where the part after it starts.
+ * Null when nothing was typed after it, and also for a transcript with no times, or one that
+ * cannot be read: then the checkpoint stands, as before. It reads only the last TAIL_BYTES. When
+ * even the first line there is after the checkpoint, the session went on far past it, so it is
+ * unsaved, and the start of that part is not known.
+ */
+export function promptAfter(path: string, since: string): { offset?: number } | null {
+  const at = Date.parse(since);
+  if (Number.isNaN(at)) return null;
+  let bytes: Buffer;
+  let start: number;
+  try {
+    start = Math.max(0, statSync(path).size - TAIL_BYTES);
+    // Bytes, not text: a cut in a character would change the length of the text, and so each offset.
+    bytes = readBytes(path, start);
+  } catch {
+    return null;
+  }
+  let pos = 0;
+  // A cut in the middle of a line: that line is not whole, so the read starts at the next one.
+  if (start > 0) {
+    const nl = bytes.indexOf(10);
+    pos = nl < 0 ? bytes.length : nl + 1;
+  }
+  let timed = false;
+  let before = false;
+  /** The byte of the first line after the last line at or before `since`. */
+  let first: number | undefined;
+  let typed = false;
+  const none = new Set<string>();
+  while (pos < bytes.length) {
+    const nl = bytes.indexOf(10, pos);
+    const end = nl < 0 ? bytes.length : nl;
+    const lineStart = pos;
+    pos = end + 1;
+    let line: Line | null;
+    try {
+      line = JSON.parse(bytes.subarray(lineStart, end).toString("utf8")) as Line | null;
+    } catch {
+      continue;
+    }
+    if (!line || typeof line !== "object" || typeof line.timestamp !== "string") continue;
+    const time = Date.parse(line.timestamp);
+    if (Number.isNaN(time)) continue;
+    timed = true;
+    if (time <= at) {
+      before = true;
+      first = undefined;
+      typed = false;
+      continue;
+    }
+    first ??= start + lineStart;
+    if (line.type !== "user" || line.isMeta || line.isSidechain || line.isCompactSummary) continue;
+    // A tool result, such as the one of `kb checkpointed`, is no prompt. Nor is a bare slash command, such as /clear.
+    if (userSaid(line, none).some((said) => said.kind === "prompt" || (said.kind === "command" && said.args !== "" && said.name !== RECOVER))) typed = true;
+  }
+  if (!timed) return null;
+  if (!before && start > 0) return {};
+  return typed ? { offset: first } : null;
 }

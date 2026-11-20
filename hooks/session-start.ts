@@ -8,11 +8,13 @@ import { forgetSeen } from "../cli/by-path.ts";
 import { SAVE_RULE, buildContext, contextFor } from "../cli/context.ts";
 import { hookWho, logEvent } from "../cli/log.ts";
 import { resolveRepo } from "../cli/scope.ts";
-import { isSaved, reopenSession } from "../cli/session.ts";
+import { reopenSession, savedAt } from "../cli/session.ts";
 import { cachedStaleCount } from "../cli/stale.ts";
 import { Store } from "../cli/store.ts";
 import { detached, kickSync } from "../cli/sync.ts";
 import { MEMORY_ON_NOTICE, MEMORY_RULE, autoMemoryOn } from "./auto-memory.ts";
+import { CHECKPOINT_RULE } from "./checkpoint-rule.ts";
+import { promptAfter } from "./transcript.ts";
 import { unsavedNotice } from "./unsaved-notice.ts";
 
 const STALE_NOTICE_ABOVE = 5;
@@ -44,6 +46,8 @@ try {
   }
   const memoryOn = autoMemoryOn(process.env, process.env.CLAUDE_PROJECT_DIR || cwd);
   if (!memoryOn) rules = SAVE_RULE;
+  // Nobody reads the line in a headless run, and a subagent does not end the session.
+  if (attended() && !input.agent_id) rules = rules.replace(SAVE_RULE, `${SAVE_RULE}\n${CHECKPOINT_RULE}`);
   const store = new Store();
   // The notes a trigger loaded before a compaction or a /clear are gone from the context, so they may load again.
   if (input.source === "compact" || input.source === "clear") forgetSeen(store, input.session_id);
@@ -64,8 +68,12 @@ try {
     const lost = input.source === "startup" || input.source === "clear" ? unsavedNotice(store, cwd, repo.root, { session, attended: attended(), startup: input.source === "startup" }) : null;
     if (lost) notices.push(lost);
 
-    if (input.source === "compact" && typeof input.session_id === "string" && !isSaved(store, input.session_id)) {
-      notices.push("This session was compacted and /kb:checkpoint has not run in it. Knowledge from before the compaction now exists only in the summary. Tell the user once that /kb:checkpoint saves it.");
+    if (input.source === "compact" && typeof input.session_id === "string") {
+      // A checkpoint before the compaction saves only what came before it.
+      const at = savedAt(store, input.session_id);
+      const went = at !== null && typeof input.transcript_path === "string" && promptAfter(input.transcript_path, at) !== null;
+      if (at === null) notices.push("This session was compacted and /kb:checkpoint has not run in it. Knowledge from before the compaction now exists only in the summary. Tell the user once that /kb:checkpoint saves it.");
+      else if (went) notices.push("This session was compacted, and the user typed more after its last /kb:checkpoint. Knowledge from that part now exists only in the summary. Tell the user once that /kb:checkpoint saves it.");
     }
 
     // The stale checks run git once per commit, so they never run here. This reads the last

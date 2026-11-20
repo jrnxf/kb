@@ -178,7 +178,7 @@ The seed script inserts into tables that only the latest migration creates. On a
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">who writes the notes?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>I do. When you state a rule, I write it to CLAUDE.md in that turn. <b>What I learn goes to kb.</b></p>
-      <p><code>kb add</code> names the close notes before it writes, so I update a note and add no twin. It refuses a note that looks like it holds a secret. Before /clear, <code>/kb:checkpoint</code> saves the rest.</p>
+      <p><code>kb add</code> names the close notes before it writes, so I update a note and add no twin. It refuses a note that looks like it holds a secret. Before /clear, <code>/kb:checkpoint</code> saves the rest, and I say in one line when it is a good time.</p>
       <div class="tool"><div class="h"><b>loop</b><span class="args">how a note gets here</span></div><div class="b" data-w="loop"></div></div>
     </div></li>
 
@@ -193,7 +193,7 @@ An earlier session here ended with no /kb:checkpoint.
 
 <span class="i">Recovered the session of 2026-11-16 in ~/acme/shop</span> - 2 saved, 1 updated</pre></div></div>
       <div class="cmds">
-        <div><b>at the end</b><span>A hook records each session that ends with no checkpoint: a /clear, an exit, or a headless run.</span></div>
+        <div><b>at the end</b><span>A hook records each session that ends with no checkpoint: a /clear, an exit, or a headless run. A prompt after a checkpoint counts from that checkpoint on.</span></div>
         <div><b>at the next start</b><span>I tell you in one line, once per day. A session too short to hold a lesson is forgotten.</span></div>
         <div><b>/kb:recover</b><span>A subagent reads what we said, and each tool call that failed. No output of a call that worked reaches it.</span></div>
         <div><b>the notes</b><span>Each one gets low confidence and the time the old session ended. So a later change to the code flags it.</span></div>
