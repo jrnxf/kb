@@ -88,6 +88,9 @@ code { font: .87em var(--f-mono); color: var(--ink); background: var(--sunk); bo
 pre { margin: 0; font: 13px/1.8 var(--f-mono); overflow-x: auto; color: var(--soft); }
 pre .c { color: var(--faint); } pre .i { color: var(--index); } pre .e { color: var(--gone); } pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; } pre .li { display: block; padding-left: 2ch; text-indent: -2ch; }
 
+/* a picture of the kb serve page. The phone layout shows on a narrow screen, so the text stays readable. */
+.tool .shot { display: block; width: 100%; height: auto; }
+
 /* life: the stages of a note, and the path of a rule. Two drawings, so the labels keep their size at every width. */
 .tool > .b.life { display: grid; gap: 16px; }
 .life svg { display: block; width: 100%; height: auto; }
@@ -243,6 +246,18 @@ Check the signature before any JSON parse. A parsed body fails the check, and th
 
 Before you change this file, read the notes that apply with `kb show &lt;id&gt;`:<span class="li"><span class="i">- refunds-reuse-the-charge-id-of-the-order [decision]</span> Refunds reuse the charge id of the order</span></pre></div></div>
       <p>A gotcha comes whole, and another kind comes as its title. A note on a folder covers every file in it. Each note comes once per session, and again after a compaction or a /clear.</p>
+    </div></li>
+
+    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">can I read the notes myself?</div></li>
+    <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
+      <p>Yes. <code>kb serve</code> opens the store as a page in your browser. <b>You read, edit and trash notes there.</b></p>
+      <div class="tool"><div class="h"><b>kb serve</b><span class="args">on this machine</span><span class="ok">✓ 166 notes</span></div><div class="b flush"><picture><source media="(max-width: 640px)" srcset="{{serve-phone.webp}}" width="1170" height="1690"><img class="shot" src="{{serve.webp}}" width="2200" height="1360" loading="lazy" decoding="async" alt="The kb serve page. A sidebar lists the scopes and the kinds with their counts. A list shows 166 notes. The open note is a gotcha: it shows its id, its trigger and its body, with an Edit button and a Trash button."></picture></div></div>
+      <div class="cmds">
+        <div><b>scopes and kinds</b><span>The sidebar filters the list by project and by kind.</span></div>
+        <div><b>keys</b><span>The arrow keys move through the list. <code>e</code> edits the open note, and <code>?</code> lists every key.</span></div>
+        <div><b>the same code</b><span>Each change goes through the same code as the CLI, so it is validated, committed and synced.</span></div>
+        <div><b>this machine only</b><span>The server listens on this machine, and stops with Ctrl+C.</span></div>
+      </div>
     </div></li>
 
     <li class="turn you" id="install"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how do I install it?</div></li>
