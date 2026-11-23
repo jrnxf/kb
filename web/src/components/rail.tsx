@@ -73,7 +73,7 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
         <h1 className="text-xl/none font-bold tracking-[-0.01em]">kb</h1>
       </header>
       {/* A short window scrolls the scopes and kinds between the logo and the buttons, with the shadcn edge fade. */}
-      <ScrollArea fade className="min-h-0 flex-1 max-wide:contents" viewportClassName="max-wide:contents" contentClassName="max-wide:contents">
+      <ScrollArea fade className="min-h-0 flex-1 max-wide:contents" viewportClassName="max-wide:contents" contentClassName="!min-w-0 max-wide:contents">
         <nav className="pr-3 max-wide:pr-0">
           {heading("Scopes", true)}
           <div className={strip} data-strip="scopes">
