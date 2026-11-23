@@ -31,12 +31,23 @@ for (const pkg of FONTS) {
   }
 }
 
+// Pictures. Each name gets a content hash, like the fonts, and {{name}} in index.html becomes its path.
+const IMAGES = ["serve.webp", "serve-phone.webp"];
+const pictures = new Map<string, string>();
+for (const file of IMAGES) {
+  const bytes = readFileSync(join(here, "src", file));
+  const hashed = file.replace(/\.webp$/, `-${createHash("sha256").update(bytes).digest("hex").slice(0, 10)}.webp`);
+  copyFileSync(join(here, "src", file), join(dist, "assets", hashed));
+  pictures.set(file, `/assets/${hashed}`);
+}
+
 const sess = src("session.js").replace(/^if \(typeof module.*$/m, "");
 const js = src("shared.js").replace("/*SESSION*/", () => sess).replace("/*RANK*/", () => src("kbrank.json").trim());
 const html = src("index.html")
   .replace("<!--FONT_PRELOADS-->", () => preloads.map((h) => `<link rel="preload" href="${h}" as="font" type="font/woff2" crossorigin>`).join("\n"))
   .replace("/*FONT_FACES*/", () => faces.join("\n"))
   .replace("/*SHARED_CSS*/", () => src("shared.css"))
+  .replace(/\{\{([\w.-]+)\}\}/g, (all, name) => pictures.get(name) ?? all)
   .replace("/*SHARED_JS*/", () => js.replace(/<\/script/g, "<\\/script"));
 writeFileSync(join(dist, "index.html"), html);
 copyFileSync(join(here, "src", "favicon.svg"), join(dist, "favicon.svg"));
@@ -58,6 +69,7 @@ const fail = (why: string) => { console.error(`build: ${why}`); process.exit(1);
 if (preloads.length !== 2) fail(`expected 2 latin font preloads, found ${preloads.length}`);
 if (faces.length !== 4) fail(`expected 4 @font-face rules (2 fonts x latin, latin-ext), found ${faces.length}`);
 for (const left of ["<!--FONT_PRELOADS-->", "/*FONT_FACES*/", "/*SHARED_CSS*/", "/*SHARED_JS*/", "/*SESSION*/", "/*RANK*/"]) if (html.includes(left)) fail(`placeholder ${left} is still in index.html`);
+if (/\{\{[\w.-]+\}\}/.test(html)) fail("a {{picture}} in index.html names no file in IMAGES");
 if (/fonts\.googleapis|fonts\.gstatic/.test(html)) fail("index.html still loads Google Fonts");
 // The site is public: no LAN hosts, private IPs or local paths.
 if (/\.lan\.|\/Users\/|127\.0\.0\.1|192\.168\.|\b10\.\d+\.\d+\.\d+/.test(html)) fail("index.html has a local host, IP or path");
