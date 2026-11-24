@@ -88,6 +88,11 @@ describe("a check of a note records the hashes of its anchors", () => {
     expect(parseNote(readFileSync(note.path, "utf8")).anchor_hashes).toEqual(note.anchor_hashes);
     // The hashes at the commit are the hashes of the files, so a check at an earlier time compares the same way.
     expect(hashAnchorsAt(["src/ledger.ts#append", "src/rates.ts", "src", "../x"], repo, "HEAD")).toEqual(note.anchor_hashes!);
+    // A file over the read limit has no hash from either source: a load could never compare it.
+    writeFileSync(join(repo, "huge.txt"), "x".repeat(2_000_001));
+    commit(repo, "add a huge file");
+    expect(hashAnchors(["huge.txt"], repo)).toEqual({});
+    expect(hashAnchorsAt(["huge.txt"], repo, "HEAD")).toEqual({});
   });
 
   test("a global note, and a note saved from outside its repo, get none", () => {

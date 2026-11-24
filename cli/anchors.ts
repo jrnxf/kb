@@ -118,15 +118,21 @@ export function hashAnchors(anchors: string[], root: string, read: AnchorReader 
   });
 }
 
-/** The hashes of the anchors as the files were at a commit, for a check that is recorded at that commit and not now. */
+/**
+ * The hashes of the anchors as the files were at a commit, for a check that is recorded at that
+ * commit and not now. A later load reads the file in the checkout, so the text here must be the
+ * text that a checkout gives: `--filters` runs the filters of a checkout, and a file over the read
+ * limit gets no hash here either. Else such an anchor has a hash that no load can compare.
+ */
 export function hashAnchorsAt(anchors: string[], root: string, commit: string): AnchorHashes {
   const texts = new Map<string, string | null>();
   return hashEach(anchors, (path) => {
     if (!texts.has(path)) {
       // A path that leaves the repo, or names a folder, gives no blob.
       const clean = path.replace(/^(\.\/)+/, "");
-      const shown = clean && !clean.split("/").includes("..") ? git(root, "cat-file", "blob", `${commit}:${clean}`) : null;
-      texts.set(path, shown?.ok ? shown.out : null);
+      const blob = clean !== "" && !clean.split("/").includes("..") && git(root, "cat-file", "-t", `${commit}:${clean}`).out === "blob";
+      const shown = blob ? git(root, "cat-file", "--filters", `${commit}:${clean}`) : null;
+      texts.set(path, shown?.ok && Buffer.byteLength(shown.out) <= READ_MAX_BYTES ? shown.out : null);
     }
     return texts.get(path)!;
   });
