@@ -180,7 +180,7 @@ export function proposeAudit(store: Store, input: unknown, repo: RepoInfo): Audi
 }
 
 /** What the page shows: each card with its note as it is now, and the index as it is now. */
-export function auditData(store: Store, scope: string, token: string): AuditData {
+export function auditData(store: Store, scope: string): AuditData {
   const audit = readAudit(store, scope);
   if (!audit) throw new KbError(`no audit for ${scope}. Run /kb:audit ${scope === "global" ? "outside any repo" : "in that repo"}.`);
   const active = activeNotes(store);
@@ -237,7 +237,6 @@ export function auditData(store: Store, scope: string, token: string): AuditData
       ...(item.action === "promote" ? { promote: promote(item) } : {}),
     }));
   return {
-    token,
     scope: audit.scope,
     created: audit.created,
     cards,

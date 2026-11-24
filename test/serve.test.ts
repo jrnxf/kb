@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type Served, serve } from "../cli/serve.ts";
-import type { Store } from "../cli/store.ts";
+import { Store } from "../cli/store.ts";
 import { MAIN, daysAgo, kb, plain, putNote, sh, tempDir, tempStore } from "./helpers.ts";
 
 describe("kb serve", () => {
@@ -216,9 +216,80 @@ describe("kb serve", () => {
     expect(existsSync(join(store.home, "index.html"))).toBe(false);
   });
 
-  test("fails with a clear message when there is no store", () => {
-    const result = kb(join(tempDir(), "none"), ["serve", "--no-open"], { cwd: plain() });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("kb add");
+  test("no answer gives the key away: the link carries it, and /api/state says whether a page has it", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    const { call } = start(store);
+    expect(served!.link).toBe(`${served!.url}#token=${served!.token}`);
+    const page = await fetch(new URL("/api/page", served!.url));
+    expect(await page.text()).not.toContain(served!.token);
+    // A page with no key still reads, and learns that it cannot write.
+    expect((await call("GET", "/api/page", undefined, {})).status).toBe(200);
+    expect((await call("GET", "/api/state", undefined, {})).json.write).toBe(false);
+    expect((await call("GET", "/api/state")).json.write).toBe(true);
+    const refused = await call("POST", "/api/notes/a/trash", undefined, {});
+    expect(refused.json.error).toContain("Open the link that `kb serve` printed");
+  });
+
+  test("the key stays the same after a restart, so an open page keeps working, and only the user can read it", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    start(store);
+    const first = served!.token;
+    served!.stop();
+    const { call } = start(store);
+    expect(served!.token).toBe(first);
+    expect((await call("POST", "/api/notes/a/trash")).status).toBe(200);
+    expect(statSync(store.statePath("serve-token")).mode & 0o777).toBe(0o600);
+  });
+
+  test("a server that started before the store existed keeps its key once the first note is in", async () => {
+    const store = new Store(join(tempDir(), "late"));
+    start(store);
+    expect(existsSync(store.home)).toBe(false);
+    putNote(store, { id: "a" });
+    await fetch(new URL("/api/page", served!.url));
+    expect(readFileSync(store.statePath("serve-token"), "utf8").trim()).toBe(served!.token);
+  });
+
+  test("a path that does not decode is a bad request, not a crash", async () => {
+    start(tempStore());
+    const response = await fetch(new URL("/%zz", served!.url));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "bad path" });
+  });
+
+  test("starts on a store that does not exist yet, shows no notes, and creates nothing", async () => {
+    const home = join(tempDir(), "none");
+    const result = Bun.spawn([process.execPath, MAIN, "serve", "--port", "0", "--json"], { cwd: plain(), env: { ...process.env, KB_HOME: home }, stdout: "pipe", stderr: "pipe" });
+    try {
+      let text = "";
+      const reader = result.stdout.getReader();
+      while (!text.includes("}")) text += new TextDecoder().decode((await reader.read()).value);
+      const { url, started } = JSON.parse(text);
+      expect(started).toBe(true);
+      const page = (await (await fetch(new URL("/api/page", url))).json()) as { notes: unknown[] };
+      expect(page.notes).toEqual([]);
+      // A folder in place of the store would stop a later `git clone` into it.
+      expect(existsSync(home)).toBe(false);
+    } finally {
+      result.kill();
+    }
+  });
+
+  test("a second kb serve on a port that serves another store says so", async () => {
+    const store = tempStore();
+    const first = Bun.spawn([process.execPath, MAIN, "serve", "--port", "0", "--json"], { cwd: plain(), env: { ...process.env, KB_HOME: store.home }, stdout: "pipe", stderr: "pipe" });
+    try {
+      let text = "";
+      const reader = first.stdout.getReader();
+      while (!text.includes("}")) text += new TextDecoder().decode((await reader.read()).value);
+      const { url } = JSON.parse(text);
+      const other = kb(tempStore(), ["serve", "--port", new URL(url).port, "--no-open"]);
+      expect(other.code).toBe(1);
+      expect(other.stderr).toContain("serves another kb store");
+    } finally {
+      first.kill();
+    }
   });
 });

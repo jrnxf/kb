@@ -14,7 +14,7 @@ import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isVali
 import { commitAt, resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
-import { DEFAULT_PORT, isKbServer, runningPort, serve } from "./serve.ts";
+import { DEFAULT_PORT, isKbServer, kbServerAt, linkWithKey, runningPort, serve, serveToken, storeId } from "./serve.ts";
 import { resultGroups } from "./wire.ts";
 import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, isLive, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
@@ -780,27 +780,35 @@ function openInBrowser(url: string): void {
   }
 }
 
-/** Start the page server and stay up until the process is stopped. */
+/**
+ * Start the page server and stay up until the process is stopped. A store that does not exist yet
+ * shows as an empty page, and the first note creates it.
+ */
 async function cmdServe(store: Store, args: Args, json: boolean): Promise<never> {
-  if (!store.exists()) throw new KbError("the store does not exist yet. `kb add` creates it.");
   const flag = args.flags.get("port");
   const port = flag === undefined ? DEFAULT_PORT : Number(flag);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new KbError("--port needs a number from 0 to 65535");
   const open = !args.flags.has("no-open") && !json;
+  // The link carries the key that lets the page change notes. It is in the fragment, so no server or proxy log sees it.
   let url: string;
   try {
-    url = serve(store, { port }).url;
+    url = serve(store, { port }).link;
   } catch (error) {
     if ((error as { code?: string })?.code !== "EADDRINUSE") throw error;
-    if (!(await isKbServer(port))) throw new KbError(`port ${port} is in use by another program. Pass --port.`);
+    const running = await kbServerAt(port);
+    if (!running) throw new KbError(`port ${port} is in use by another program. Pass --port.`);
+    // A kb older than this one does not name its store.
+    if (running.store !== undefined && running.store !== storeId(store)) throw new KbError(`port ${port} serves another kb store. Stop that kb serve, or pass --port.`);
     // One server per port is enough: show the one that is already up.
-    url = `http://127.0.0.1:${port}/`;
+    const token = serveToken(store);
+    url = token ? linkWithKey(`http://127.0.0.1:${port}/`, token) : `http://127.0.0.1:${port}/`;
     if (open) openInBrowser(url);
     console.log(json ? JSON.stringify({ url, started: false }, null, 2) : `kb serve is already running at ${url}`);
     process.exit(0);
   }
   console.log(json ? JSON.stringify({ url, started: true }, null, 2) : `kb serve: ${url}
-Press Ctrl+C to stop.`);
+Open this link to read and change notes. Without its key the page is read only.
+Press Ctrl+C to stop. \`kb help\` lists the commands.`);
   if (open) openInBrowser(url);
   return new Promise<never>(() => {});
 }
@@ -905,7 +913,7 @@ async function main(): Promise<number> {
       setActor(() => (who ??= { session: sessionOf(args.flags.get("session")), scope: resolveRepo(String(args.flags.get("repo") ?? "."), store, { record: false }).scope ?? "global" }));
     }
     // A person who types only `kb` in a terminal wants to see the notes. A script gets the help.
-    if (!command && process.stdout.isTTY && store.exists()) await cmdServe(store, args, json);
+    if (!command && process.stdout.isTTY) await cmdServe(store, args, json);
     if (!command || command === "help" || command === "--help" || command === "-h" || args.flags.has("help")) {
       console.log(USAGE);
       return 0;

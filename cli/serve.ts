@@ -1,6 +1,7 @@
 // `kb serve`: the store as a local page, where a person can read, edit, trash and delete notes, and trash a project.
 // It listens on this machine only. The page is the React app built into web/dist, and it reads
-// the store from /api/page.
+// the store from /api/page. Anyone who can reach the server can read. Only a page opened with the
+// link that `kb serve` prints can write: the link carries the key, as a Jupyter link does.
 
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -24,12 +25,17 @@ export const DIST = join(import.meta.dir, "..", "web", "dist");
 export interface Served {
   url: string;
   port: number;
-  /** Every request that changes the store must carry this. Only the served page knows it. */
+  /** Every request that changes the store must carry this. Only the link knows it. */
   token: string;
+  /** The page with the key in its fragment: the address to open. A fragment never reaches a server or a proxy log. */
+  link: string;
   stop(): void;
 }
 
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "cache-control": "no-store" } });
+
+/** The answer to a change that comes without the key. The page shows it as it is. */
+export const NO_KEY = "this page has no key to change notes. Open the link that `kb serve` printed.";
 
 /** The fields a person may change in the page. The rest of a note belongs to the CLI. */
 const EDITABLE = ["title", "kind", "confidence", "body"] as const;
@@ -60,20 +66,25 @@ async function handle(store: Store, token: string, port: number, request: Reques
   const host = request.headers.get("host") ?? "";
   if (!allowedHost(host, port)) return json({ error: "wrong host" }, 403);
 
-  if (request.method === "GET" && url.pathname === "/api/state") return json({ kb: true, version: storeVersion(store) });
-  // Another site cannot read this answer, so it cannot learn the token.
+  // `write` tells the page whether its key is right, so it can say that it is read only.
+  // `store` tells `kb serve` whether the server on a port serves the same store.
+  if (request.method === "GET" && url.pathname === "/api/state") {
+    return json({ kb: true, version: storeVersion(store), store: storeId(store), write: request.headers.get("x-kb-token") === token });
+  }
+  // No answer carries the key: a process that can reach the server can read, and cannot write.
   if (request.method === "GET" && url.pathname === "/api/page") {
     // A note whose time in the trash is up goes before the page shows it.
     tidy(store);
-    return json(pageData(store, token));
+    keepToken(store, token);
+    return json(pageData(store));
   }
   if ((request.method === "GET" || request.method === "HEAD") && !url.pathname.startsWith("/api/")) return staticFile(url.pathname);
 
   // An audit: the agent's proposal as cards, and Apply, which makes the user's picks.
-  if (request.method === "GET" && url.pathname === "/api/audit") return json(auditData(store, url.searchParams.get("scope") ?? "", token));
+  if (request.method === "GET" && url.pathname === "/api/audit") return json(auditData(store, url.searchParams.get("scope") ?? ""));
   // The page's Audit button: one agent audits the repo in its checkout, and the page opens its cards.
   if (url.pathname === "/api/audit/start") {
-    if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
+    if (request.headers.get("x-kb-token") !== token) return json({ error: NO_KEY }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
     const scope = (await body(request))?.scope;
     if (typeof scope !== "string") throw new KbError("scope: must be a repo id or global");
@@ -84,7 +95,7 @@ async function handle(store: Store, token: string, port: number, request: Reques
     return json(startRun(store, scope, root));
   }
   if (url.pathname === "/api/audit/apply") {
-    if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
+    if (request.headers.get("x-kb-token") !== token) return json({ error: NO_KEY }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
     const input = await body(request);
     if (typeof input?.scope !== "string") throw new KbError("scope: must be a repo id or global");
@@ -92,7 +103,7 @@ async function handle(store: Store, token: string, port: number, request: Reques
   }
 
   if (url.pathname === "/api/trash/empty") {
-    if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
+    if (request.headers.get("x-kb-token") !== token) return json({ error: NO_KEY }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
     // With a scope, only the trash of that project: the list shows only its notes.
     const scope = (await body(request))?.scope;
@@ -103,7 +114,7 @@ async function handle(store: Store, token: string, port: number, request: Reques
   // A project goes to the trash whole, and comes back whole. The page deletes it for good only from the trash.
   const project = url.pathname.match(/^\/api\/projects\/(trash|restore)$/);
   if (project) {
-    if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
+    if (request.headers.get("x-kb-token") !== token) return json({ error: NO_KEY }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
     const scope = (await body(request))?.scope;
     if (typeof scope !== "string") throw new KbError("scope: must be a repo id");
@@ -118,8 +129,8 @@ async function handle(store: Store, token: string, port: number, request: Reques
     const { path: _path, ...note } = requireNote(store, id);
     return json(note);
   }
-  // Another site cannot read the page, so it cannot know the token.
-  if (request.headers.get("x-kb-token") !== token) return json({ error: "wrong token. Reload the page." }, 403);
+  // Only the link that `kb serve` printed holds the key.
+  if (request.headers.get("x-kb-token") !== token) return json({ error: NO_KEY }, 403);
 
   if (request.method === "POST" && action) {
     moveNotes(store, [id], action === "trash");
@@ -154,7 +165,13 @@ async function staticFile(pathname: string): Promise<Response> {
     if (!(await page.exists())) return json({ error: "the page is not built. Run `bun run build` in web/." }, 500);
     return new Response(page, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
   }
-  const path = normalize(join(DIST, decodeURIComponent(pathname)));
+  let name: string;
+  try {
+    name = decodeURIComponent(pathname);
+  } catch {
+    return json({ error: "bad path" }, 400);
+  }
+  const path = normalize(join(DIST, name));
   const file = Bun.file(path);
   if (!path.startsWith(DIST + sep) || path.endsWith(sep + "index.html") || !(await file.exists())) return json({ error: "not found" }, 404);
   // Vite puts a hash of the content in each asset's name, so an asset never changes.
@@ -171,8 +188,47 @@ function tidy(store: Store): void {
   }
 }
 
+/** Names the store without saying where it is: a proxy can show /api/state to people other than the user. */
+export const storeId = (store: Store) => Bun.hash(store.home).toString(36);
+
+const TOKEN_FILE = "serve-token";
+
+/**
+ * The key to change notes, kept from the last start. It stays the same across restarts, so an open
+ * page keeps working after a plugin update restarts the server. Only the user can read the file.
+ * Delete it to make a new key.
+ */
+export function serveToken(store: Store): string | undefined {
+  try {
+    return readFileSync(store.statePath(TOKEN_FILE), "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Keep the key for the next start. A store that does not exist yet gets no file: a folder in its
+ * place would stop a `git clone` into it. The page load after the first note keeps it then.
+ */
+function keepToken(store: Store, token: string): void {
+  try {
+    if (store.exists() && serveToken(store) !== token) writeAtomic(store.statePath(TOKEN_FILE), `${token}\n`, 0o600);
+  } catch {
+    // the key lasts until the server stops
+  }
+}
+
+function makeToken(store: Store): string {
+  const token = serveToken(store) ?? randomBytes(16).toString("hex");
+  keepToken(store, token);
+  return token;
+}
+
+/** The page's address with the key in its fragment. */
+export const linkWithKey = (url: string, token: string) => `${url}#token=${token}`;
+
 export function serve(store: Store, options: { port?: number } = {}): Served {
-  const token = randomBytes(16).toString("hex");
+  const token = makeToken(store);
   tidy(store);
   const timer = setInterval(() => tidy(store), TIDY_MS);
   const server = Bun.serve({
@@ -193,7 +249,8 @@ export function serve(store: Store, options: { port?: number } = {}): Served {
   } catch {
     // the link falls back to the default port
   }
-  return { url: `http://127.0.0.1:${server.port}/`, port: server.port!, token, stop: () => {
+  const url = `http://127.0.0.1:${server.port}/`;
+  return { url, link: linkWithKey(url, token), port: server.port!, token, stop: () => {
     clearInterval(timer);
     server.stop(true);
   } };
@@ -214,10 +271,16 @@ export async function runningPort(store: Store): Promise<number | undefined> {
 
 /** True when a kb server already answers on this port. */
 export async function isKbServer(port: number): Promise<boolean> {
+  return (await kbServerAt(port)) !== undefined;
+}
+
+/** The kb server that answers on this port, with the id of its store, or undefined. */
+export async function kbServerAt(port: number): Promise<{ store?: string } | undefined> {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/api/state`, { signal: AbortSignal.timeout(1000) });
-    return ((await response.json()) as { kb?: boolean }).kb === true;
+    const state = (await response.json()) as { kb?: boolean; store?: string };
+    return state.kb === true ? { store: state.store } : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }

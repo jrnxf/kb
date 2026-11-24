@@ -356,12 +356,19 @@ and Empty trash clears it all, or with a scope picked only that scope's trash. W
 synced. The server listens on this machine only, and stops with Ctrl+C. To reach it through a
 reverse proxy, name the proxy's host in `KB_SERVE_HOSTS`, split by commas. A name that starts with a
 dot, such as `.example.com`, takes that domain and every name under it, so one setting covers a
-proxy that gives each port its own name. Everybody who can open that name can change notes.
+proxy that gives each port its own name. Everybody who can open that name can read notes.
+
+Only a page opened with the link that `kb serve` prints can change notes. The link ends in
+`#token=...`, the key, as a Jupyter link does. The fragment never reaches a server or a proxy log.
+The page keeps the key in the browser and takes it out of the address. The key stays the same
+when `kb serve` restarts, so an open page keeps working. A page with no key reads, and its banner
+says how to get the key. Delete `.state/serve-token` in the store to make a new key.
 
 The page is a React app in `web/` (Vite, Tailwind and shadcn/ui on Base UI). Its build in `web/dist` is
 committed. After a change to `web/` or `cli/wire.ts`, run `bun install` and `bun run build` in `web/`, and
 commit `web/dist` with the change. A test fails while the build is older than its sources.
-`bun run dev` in `web/` serves the page with hot reload against a `kb serve` on port 4810.
+`bun run dev` in `web/` serves the page with hot reload against a `kb serve` on port 4810. Add the
+`#token=...` part of the link that `kb serve` printed to the dev page's address to change notes there.
 
 `kb search` finds the notes that have every word of the query, in any order, in the title or the
 body. A word also finds its other forms: "retry" finds "retries" and "retrying", and "migrations"
