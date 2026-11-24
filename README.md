@@ -513,28 +513,19 @@ With auto-update on for the marketplace, each machine follows the default branch
 sets no `version`, so every commit is a release.
 
 The plugin puts `kb` on the PATH of Claude Code's shell only. For `kb serve` and the other commands
-in your own terminal, add this function to `~/.bashrc` or `~/.zshrc`. It reads Claude Code's list of
-installed plugins and runs the `kb@` install of your user scope. Failing that, it runs a project
-install whose folder holds the current directory:
+in your own terminal, add this function to `~/.bashrc` or `~/.zshrc`. It finds the installed plugin
+and hands your arguments to `bin/kb-run.ts`. That file picks the install like Claude Code does: a
+local install, then a project install that holds the current directory, then your user install.
+The function only finds the file, so a plugin update can change the lookup and you keep the same function.
 
 ```bash
 kb() {
-  bun -e '
-    const { readFileSync } = require("node:fs"), { homedir } = require("node:os"), { join } = require("node:path");
-    const env = process.env, cwd = process.cwd();
-    const file = join(env.CLAUDE_CONFIG_DIR || join(env.HOME || homedir(), ".claude"), "plugins", "installed_plugins.json");
-    const fail = (why) => { console.error(`kb: ${why}`); process.exit(1); };
-    let plugins;
-    try { plugins = JSON.parse(readFileSync(file, "utf8")).plugins ?? {}; }
-    catch (e) { fail(e.code === "ENOENT" ? `the kb plugin is not in ${file}. Run: claude plugin install kb@jrnxf` : `cannot read ${file}: ${e.message}`); }
-    const keys = Object.keys(plugins).filter((k) => k.startsWith("kb@")).sort((a, b) => (b === "kb@jrnxf") - (a === "kb@jrnxf"));
-    const installs = keys.flatMap((k) => [plugins[k]].flat()).filter((i) => i?.installPath);
-    const inside = (i) => i.scope === "project" && i.projectPath && (cwd + "/").startsWith(i.projectPath.replace(/\/$/, "") + "/");
-    const install = installs.find((i) => (i.scope ?? "user") === "user") ?? installs.find(inside);
-    if (!install) fail(`no user install of the kb plugin in ${file}. Run: claude plugin install kb@jrnxf`);
-    process.argv = [process.argv[0], "kb", ...process.argv.slice(1)];
-    await import(join(install.installPath, "cli", "main.ts"));
-  ' -- "$@"
+  local p
+  while IFS= read -r p; do
+    [ -f "$p/bin/kb-run.ts" ] && { bun "$p/bin/kb-run.ts" "$@"; return; }
+  done < <(grep -o '"installPath": *"[^"]*"' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json" 2>/dev/null | cut -d'"' -f4)
+  echo "kb: no installed kb plugin has bin/kb-run.ts. Run: claude plugin install kb@jrnxf" >&2
+  return 1
 }
 ```
 
