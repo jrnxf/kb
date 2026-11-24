@@ -178,7 +178,7 @@ describe("kb add", () => {
         expect(store.find(made.json.id)!.last_verified).toBe(stored);
         kb(store, ["delete", made.json.id]);
       }
-      expect(kb(store, ["add", "--as-of"], { stdin: "{}" })).toMatchObject({ code: 1, stderr: "--as-of needs a value\n" });
+      expect(kb(store, ["add", "--as-of"], { stdin: "{}" })).toMatchObject({ code: 2, stderr: "--as-of needs a value\n" });
       expect(store.notes().map((n) => n.id)).toEqual([note.id]);
     });
   });
@@ -442,7 +442,7 @@ describe("--file", () => {
     expect(missing.stderr.trim()).toBe(`cannot read --file ${join(dir, "none.json")}: no such file`);
     expect(kb(store, ["add", "--json", "--file", dir]).json).toEqual({ error: `cannot read --file ${dir}: it is a directory` });
     writeFileSync(join(dir, "bad.json"), "{ not json");
-    expect(kb(store, ["add", "--file", join(dir, "bad.json")]).stderr.trim()).toBe("kb add reads one JSON object, from --file <path> or on stdin");
+    expect(kb(store, ["add", "--file", join(dir, "bad.json")]).stderr.trim()).toStartWith("kb add reads one JSON object, from --file <path> or on stdin. The input is not valid JSON (10 characters): JSON Parse error");
     expect(kb(store, ["add", "--file"]).stderr.trim()).toBe("--file needs a value");
     expect(kb(store, ["audit", "propose", "--file", join(dir, "none.json")]).stderr.trim()).toBe(`cannot read --file ${join(dir, "none.json")}: no such file`);
     expect(store.notes()).toHaveLength(0);
@@ -573,14 +573,16 @@ describe("kb add with triggers", () => {
     for (const scope of ["global", undefined]) {
       const outside = add(store, { ...gotcha, title: `Set up the printer ${scope}`, kind: "open-work", scope });
       expect(outside.json.status).toBe("created");
-      expect(outside.json.warnings).toBeUndefined();
+      // A note with no scope outside any repo is global with a warning, as it may be meant for a repo.
+      if (scope) expect(outside.json.warnings).toBeUndefined();
+      else expect(outside.json.warnings).toEqual([expect.stringContaining("so the note is global: it loads in every repo.")]);
       expect(store.find(outside.json.id)!.scope).toBe("global");
     }
     // A body of 700 characters is fine: a trigger loads it whole. One more is worth a second look.
     expect(add(store, { ...gotcha, title: "At the aim", kind: "decision", body: "x".repeat(700) }).json.warnings).toBeUndefined();
     const long = add(store, { ...gotcha, title: "Over the aim", body: "x".repeat(701) });
     expect(long.json.status).toBe("created");
-    expect(long.json.warnings).toEqual([expect.stringContaining(none), "the body has 701 characters. A trigger loads at most 700, and cuts the rest. Keep the fact, why it matters, and how to apply it."]);
+    expect(long.json.warnings).toEqual([expect.stringContaining(none), "the body has 701 characters, not counting the spaces and newlines at its ends, which kb removes. A trigger loads at most 700, and cuts the rest. Keep the fact, why it matters, and how to apply it."]);
     // An update answers for the note as it is stored now, and the text form prints each warning on a line.
     expect(add(store, { id: bare.json.id, confidence: "high" }).json.warnings).toHaveLength(1);
     expect(add(store, { id: bare.json.id, triggers: ["cmd: zorp --wipe"] }).json).toEqual({ status: "updated", id: bare.json.id, path: bare.json.path });
@@ -1252,8 +1254,18 @@ describe("kb show", () => {
     const several = kb(store, ["show", "amounts"]);
     expect(several.code).toBe(1);
     expect(several.stderr).toContain("atlas-amounts-are-integer-cents, ferry-amounts-are-integer-cents");
-    // A command that changes a note never guesses.
-    expect(kb(store, ["trash", "atlas-amounts"]).code).toBe(1);
+    // kb trash takes a part as kb show does, but never guesses between two notes.
+    const twoTrash = kb(store, ["trash", "amounts"]);
+    expect(twoTrash.code).toBe(1);
+    expect(twoTrash.stderr).toContain("2 notes have \"amounts\" in their id");
+    expect(store.notes()).toHaveLength(2);
+    expect(kb(store, ["trash", "atlas-amounts", "--json"]).json).toEqual({ trashed: ["atlas-amounts-are-integer-cents"] });
+    // kb restore looks in the trash only, and kb verify in the active notes only.
+    expect(kb(store, ["restore", "amounts", "--json"]).json).toEqual({ restored: ["atlas-amounts-are-integer-cents"] });
+    // A delete is for good: a part is never enough, also when one note has it.
+    const part = kb(store, ["delete", "atlas-amounts"]);
+    expect(part.code).toBe(1);
+    expect(part.stderr).toContain("kb delete removes notes for good, so it takes whole ids only. Nothing was deleted.");
     expect(store.notes()).toHaveLength(2);
   });
 });
@@ -1336,5 +1348,147 @@ describe("kb search", () => {
     expect(kb(store, ["search", "retry", "days"]).stdout.trimEnd().split("\n")).toEqual(["retries | global | The provider retries a webhook for 3 days", "  11: Each retry has the same event id."]);
     // The closest-match answer counts a form as the word.
     expect(kb(store, ["search", "webhook", "retry", "zebra"]).stdout).toStartWith("no note has every word. Closest:\nretries | ");
+  });
+});
+
+/** kb run in a terminal: stdin, stdout and stderr are one pseudo-terminal, so all output comes in one text. */
+async function kbTty(home: string, args: string[], cwd: string): Promise<{ code: number; out: string }> {
+  let out = "";
+  const decoder = new TextDecoder();
+  const proc = Bun.spawn([process.execPath, join(ROOT, "cli", "main.ts"), ...args], {
+    cwd,
+    env: { ...process.env, KB_HOME: home, NO_COLOR: "1" },
+    terminal: { cols: 200, rows: 24, data: (_t: unknown, data: Uint8Array) => (out += decoder.decode(data)) },
+  } as Parameters<typeof Bun.spawn>[1]);
+  // The run ends at once: kb never waits on the terminal.
+  const code = await Promise.race([proc.exited, Bun.sleep(10_000).then(() => (proc.kill(), -1))]);
+  return { code, out: out.replace(/\r\n/g, "\n") };
+}
+
+describe("the flags of a command", () => {
+  test("a flag that the command does not take is an error with exit code 2, and names the closest flag", () => {
+    const store = tempStore();
+    putNote(store, { id: "first" });
+    const typo = kb(store, ["list", "--scop", "global"]);
+    expect(typo).toMatchObject({ code: 2, stdout: "", stderr: "unknown flag --scop for kb list. Did you mean --scope? Nothing ran.\n" });
+    expect(kb(store, ["list", "--bogus-flag"]).stderr).toStartWith("unknown flag --bogus-flag for kb list. It takes: --help, --json, --quiet, --repo, --scope, --session, --trash.");
+    expect(kb(store, ["list", "--bogus", "--json"])).toMatchObject({ code: 2, json: { error: expect.stringContaining("unknown flag --bogus for kb list") } });
+    // An audit that a typo would start never starts.
+    expect(kb(store, ["audit", "--bogus", "--no-wait"], { env: { KB_AUDIT_AGENT: "/usr/bin/true" } }).code).toBe(2);
+    expect(existsSync(join(store.home, "audits"))).toBe(false);
+    // A switch takes no value, and a value flag needs one.
+    expect(kb(store, ["list", "--trash=yes"])).toMatchObject({ code: 2, stderr: "--trash takes no value. Nothing ran.\n" });
+    expect(kb(store, ["list", "--scope"])).toMatchObject({ code: 2, stderr: "--scope needs a value\n" });
+    // A flag of another command is unknown here.
+    expect(kb(store, ["show", "first", "--trash"]).code).toBe(2);
+  });
+
+  test("after -- every word is plain text, and an unknown command is named before its flags", () => {
+    const store = tempStore();
+    putNote(store, { id: "force", title: "Use --force with care", body: "Push --force rewrites history." });
+    expect(kb(store, ["search", "--", "--force"]).stdout).toStartWith("force | global | Use --force with care");
+    expect(kb(store, ["lsit", "--scope", "global"])).toMatchObject({ code: 2, stderr: 'unknown command "lsit". Run `kb help`.\n' });
+  });
+
+  test("every flag that the docs and the skills name still parses", () => {
+    const docs = ["README.md", ...new Bun.Glob("skills/*/SKILL.md").scanSync({ cwd: ROOT })].map((file) => readFileSync(join(ROOT, file), "utf8")).join("\n");
+    const used = [...docs.matchAll(/\bkb ([a-z-]+)([^`|)\n]*)/g)].flatMap(([, command, rest]) => [...rest!.split(" -- ")[0]!.matchAll(/(?:^|\s)--([a-z-]+)/g)].map(([, flag]) => `${command} --${flag}`));
+    expect(used.length).toBeGreaterThan(10);
+    const store = tempStore();
+    for (const pair of new Set(used)) {
+      const [command, flag] = pair.split(" ") as [string, string];
+      const result = kb(store, [command, flag, "x", "--help"]);
+      expect({ pair, error: result.stderr.includes("unknown flag") ? result.stderr : "" }).toEqual({ pair, error: "" });
+    }
+  });
+});
+
+describe("kb version", () => {
+  test("prints the commit that kb runs from", () => {
+    const store = tempStore();
+    for (const args of [["--version"], ["version"]]) expect(kb(store, args).stdout).toMatch(/^kb ([0-9a-f]{12}|unknown) \(pre-release\)\n$/);
+    const { commit, from } = kb(store, ["version", "--json"]).json;
+    expect(commit === null || /^[0-9a-f]{12}$/.test(commit)).toBe(true);
+    expect([null, "git", "plugin"]).toContain(from);
+    expect(kb(store, ["help"]).stdout).toContain("kb version");
+  });
+
+  test("an installed plugin is named by its folder, a folder with no git by unknown", async () => {
+    const { version, versionText } = await import("../cli/version.ts");
+    const plugin = join(tempDir(), "cache", "market", "kb", "0123456789ab");
+    mkdirSync(plugin, { recursive: true });
+    expect(version(plugin)).toEqual({ commit: "0123456789ab", from: "plugin" });
+    expect(versionText(version(plugin))).toBe("kb 0123456789ab (pre-release)");
+    // A plugin folder inside another repo is not named by the commit of that repo.
+    const repo = tempRepo();
+    mkdirSync(join(repo, "kb"));
+    expect(version(join(repo, "kb"))).toEqual({ commit: null, from: null });
+    expect(version(repo)).toEqual({ commit: sh(repo, "git", "rev-parse", "--short=12", "HEAD"), from: "git" });
+    expect(versionText(version(tempDir()))).toBe("kb unknown (pre-release)");
+  });
+});
+
+describe("kb add outside a repo", () => {
+  test("a note with anchors and no scope is refused, and a note with no anchors is global with a warning", () => {
+    const store = tempStore();
+    const dir = tempDir();
+    const anchored = kb(store, ["add", "--json"], { cwd: dir, stdin: JSON.stringify({ title: "Pay rounds down", kind: "gotcha", body: "x", anchors: ["src/a.ts"] }) });
+    expect(anchored.code).toBe(1);
+    expect(anchored.json.error).toStartWith(`kb found no git repo at ${dir}, so this note would be global, and its anchors name files of a repo.`);
+    expect(store.notes()).toEqual([]);
+    // "scope": "global" says the note is meant for every repo.
+    expect(kb(store, ["add", "--json"], { cwd: dir, stdin: JSON.stringify({ title: "Pay rounds down", kind: "gotcha", body: "x", anchors: ["src/a.ts"], scope: "global" }) }).json.status).toBe("created");
+    const plain = add(store, { title: "Prefer tabs", kind: "convention", body: "x" }, dir);
+    expect(plain.json.status).toBe("created");
+    expect(plain.json.warnings).toEqual([expect.stringContaining(`kb found no git repo at ${dir}, so the note is global: it loads in every repo.`)]);
+  });
+
+  test("a title that is there already names the id to update it with", () => {
+    const store = tempStore();
+    const note = { title: "Prefer tabs", kind: "convention", body: "x", scope: "global" };
+    add(store, note);
+    expect(kb(store, ["add"], { stdin: JSON.stringify(note) }).stdout).toBe('exists prefer-tabs\nA note with this title is in global. To update it, pass "id": "prefer-tabs" and no "scope".\n');
+  });
+
+  test("bad input says what is wrong with it", () => {
+    const store = tempStore();
+    expect(kb(store, ["add"], { stdin: "" }).stderr).toBe("kb add reads one JSON object, from --file <path> or on stdin. The input is empty.\n");
+    expect(kb(store, ["add"], { stdin: "[1]" }).stderr).toBe("kb add reads one JSON object, from --file <path> or on stdin. The input is an array.\n");
+    expect(kb(store, ["add"], { stdin: '{"title": ' }).stderr).toStartWith("kb add reads one JSON object, from --file <path> or on stdin. The input is not valid JSON (10 characters): ");
+    expect(kb(store, ["audit", "propose"], { stdin: "  " }).stderr).toBe('kb audit propose reads {"items": [...]}, from --file <path> or on stdin. The input is empty.\n');
+  });
+});
+
+describe("kb in a terminal", () => {
+  test("kb add with stdin on a terminal says how to give the JSON, and does not wait", async () => {
+    const store = tempStore();
+    const result = await kbTty(store.home, ["add"], tempDir());
+    expect(result.code).toBe(2);
+    expect(result.out).toContain("kb add reads JSON from --file <path> or from stdin, and stdin is a terminal. Pass --file, or pipe the JSON in.");
+  });
+
+  test("an empty kb context says so in one line, and a hook that reads stdout gets nothing", async () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/web.git" });
+    expect(kb(store, ["context"], { cwd: repo })).toMatchObject({ code: 0, stdout: "", stderr: "" });
+    const result = await kbTty(store.home, ["context"], repo);
+    expect(result).toEqual({ code: 0, out: "kb context: no note loads at a session start in github.com/acme/web.\n" });
+  });
+});
+
+describe("kb list --trash and kb budget", () => {
+  test("the trash names the day a note is purged", () => {
+    const store = tempStore();
+    putNote(store, { id: "old" });
+    kb(store, ["trash", "old"]);
+    expect(kb(store, ["list", "--trash"]).stdout).toMatch(/Title of old \(purges \d{4}-\d{2}-\d{2}\)/);
+  });
+
+  test("before the store exists, kb budget names the scope that kb scope names", () => {
+    const home = join(tempDir(), "none");
+    const repo = tempRepo({ remote: "git@github.com:acme/web.git" });
+    expect(kb(home, ["scope"], { cwd: repo }).stdout).toBe("github.com/acme/web\n");
+    expect(kb(home, ["budget", "--json"], { cwd: repo }).json.scope).toBe("github.com/acme/web");
+    expect(existsSync(home)).toBe(false);
   });
 });

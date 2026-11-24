@@ -567,7 +567,7 @@ describe("session notices", () => {
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain("2 earlier sessions here ended with no /kb:save. Tell the user in one line, in your first reply, that /kb:recover saves their knowledge or forgets them.");
     expect(kb(store, ["unsaved", "--forget", "one", "--json"], { cwd: repo }).json).toEqual({ session: "one", forgotten: true });
     expect(kb(store, ["unsaved", "--forget", "one", "--json"], { cwd: repo }).json).toEqual({ session: "one", forgotten: false });
-    expect(kb(store, ["unsaved", "--forget"], { cwd: repo })).toMatchObject({ code: 1, stderr: "--forget needs a value\n" });
+    expect(kb(store, ["unsaved", "--forget"], { cwd: repo })).toMatchObject({ code: 2, stderr: "--forget needs a value\n" });
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup") }).stdout).toContain(QUIET);
     expect(unsaved(store, repo)).toEqual(["two"]);
   });

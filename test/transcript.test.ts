@@ -665,7 +665,7 @@ describe("kb-transcript", () => {
     const note = JSON.stringify({ title: "Never written", kind: "gotcha", body: "x", scope: "global" });
     const result = kb(store, ["add", "--json", "--recovered-from", "nobody"], { stdin: note, cwd: dir });
     expect(result).toMatchObject({ code: 1, json: { error: "no unsaved session nobody. `kb unsaved` lists them." } });
-    expect(kb(store, ["add", "--recovered-from"], { stdin: note })).toMatchObject({ code: 1, stderr: "--recovered-from needs a value\n" });
+    expect(kb(store, ["add", "--recovered-from"], { stdin: note })).toMatchObject({ code: 2, stderr: "--recovered-from needs a value\n" });
     expect(store.notes()).toEqual([]);
     // The mark keeps its age, so a record of a note does not keep the session for 7 more days.
     lost(store, "s1", dir);

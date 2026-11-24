@@ -233,7 +233,8 @@ interface Start {
 }
 
 function startAt(store: Store, repoPath: string, session?: string): Start {
-  if (!store.exists()) return startOf(store, null);
+  // No store yet: no note loads, but the scope is still the repo here, as `kb scope` says.
+  if (!store.exists()) return startOf(store, resolveRepo(repoPath, store, { record: false }).scope);
   const { scope, root } = resolveRepo(repoPath, store);
   if (scope && root) rememberRepo(store, scope, root);
   return startOf(store, scope, root, session);
@@ -259,7 +260,7 @@ interface Session {
 
 function startOf(store: Store, scope: string | null, root: string | null = null, session?: string): Start {
   const config = store.config();
-  if (!store.exists()) return { context: EMPTY, ranked: [], config };
+  if (!store.exists()) return { context: { ...EMPTY, scope }, ranked: [], config };
   // HOLDBACK: a share of the sessions keeps the old policy. `kb budget` passes no session, so it shows the new one.
   const holdback = inHoldback(session, config.holdback);
 

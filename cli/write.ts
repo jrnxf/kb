@@ -41,6 +41,26 @@ export function closeIds(store: Store, part: string): string[] {
   return [...store.notes(), ...store.notes({ trashed: true })].filter((n) => n.id.includes(text)).map((n) => n.id).sort();
 }
 
+/**
+ * The note of a whole id, or of a part of one that exactly one note has. `trashed` limits the part
+ * to the notes in the trash (true) or the active notes (false), so `kb trash` never picks a note
+ * that is in the trash already. Two notes with the part are an error that names both: a command
+ * never guesses which note it changes.
+ */
+export function requireIdOrPart(store: Store, given: string, trashed?: boolean): StoredNote {
+  const exact = store.find(given);
+  if (exact) return exact;
+  const text = given.toLowerCase();
+  const pool = trashed === undefined ? [...store.notes(), ...store.notes({ trashed: true })] : store.notes({ trashed });
+  const matches = text ? pool.filter((n) => n.id.includes(text)) : [];
+  if (matches.length === 1) return matches[0]!;
+  if (matches.length > 1) {
+    const ids = matches.map((n) => n.id).sort();
+    throw new KbError(`${ids.length} notes have "${given}" in their id: ${ids.slice(0, 8).join(", ")}${ids.length > 8 ? `, and ${ids.length - 8} more` : ""}. Pass the whole id.`);
+  }
+  return requireNote(store, given);
+}
+
 export function requireNote(store: Store, id: string): StoredNote {
   const note = store.find(id);
   if (note) return note;
@@ -109,7 +129,7 @@ export function noteWarnings(note: Pick<Note, "kind" | "scope" | "body" | "ancho
     warnings.push(`open work belongs to a repo. With the scope global it is one index line in every repo session, and none shows its next step. Trash this note and save it in the repo of the work, with "scope": "repo".`);
   }
   const chars = note.body.trim().length;
-  if (chars > BODY_CHARS) warnings.push(`the body has ${chars} characters. A trigger loads at most ${BODY_CHARS}, and cuts the rest. Keep the fact, why it matters, and how to apply it.`);
+  if (chars > BODY_CHARS) warnings.push(`the body has ${chars} characters, not counting the spaces and newlines at its ends, which kb removes. A trigger loads at most ${BODY_CHARS}, and cuts the rest. Keep the fact, why it matters, and how to apply it.`);
   return warnings;
 }
 

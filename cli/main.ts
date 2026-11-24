@@ -3,6 +3,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { type Args, COMMANDS, USAGE_EXIT, UsageError, parseArgs } from "./args.ts";
 import { openAudits, proposeAudit, readAudit } from "./audit.ts";
 import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
@@ -21,7 +22,8 @@ import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
-import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+import { version, versionText } from "./version.ts";
+import { afterWrite, asOfTime, clearsAt, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireIdOrPart, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 /** `kb add` exits with this code when it wrote nothing because of close notes: an answer to read, not an error (1). */
 const NEIGHBORS_EXIT = 2;
@@ -52,9 +54,11 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          not-needed is only for a note that a trigger loaded in the
                                          session, never for a note from the session start
   kb trash <id>... | kb restore <id>...  trash retires a note: restore brings it back. A note in the
-                                         trash for more than trashDays (30) is deleted for good
+                                         trash for more than trashDays (30) is deleted for good. A part
+                                         of the id is enough when one note has it
   kb delete <id>...                      remove notes for good, active or in the trash. When the user
-                                         wants a note gone now. In a git store, the history keeps the file
+                                         wants a note gone now. In a git store, the history keeps the file.
+                                         Whole ids only
   kb empty-trash                         remove every note in the trash for good
   kb trash --scope <repo id>             move every note of a project to the trash. restore --scope
                                          brings that move back. delete --scope removes the project's
@@ -91,8 +95,11 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          kb alone in a terminal does the same. Behind a proxy, name it in
                                          KB_SERVE_HOSTS: kb.example.com, or .example.com for every name under it
   kb sync                                commit, pull and push the store
+  kb version                             the commit kb runs from. Also kb --version
 
 Every command accepts --json. The store is ~/.kb, or KB_HOME.
+A flag that the command does not take is an error, exit code ${USAGE_EXIT}: nothing ran. After --, every
+word is plain text: kb search -- --force.
 A read, a write and a verdict each add one line to a log on this machine. The line names the
 session: --session <id>, or KB_SESSION, or the id that Claude Code sets for the command.
 The log stays on its machine. A small roll-up of it syncs with the store, at most once per day.
@@ -146,34 +153,6 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
   Exit codes: 0 for "created", "updated", "exists" and "newer". ${NEIGHBORS_EXIT} for "neighbors": nothing was
   written, and the answer is on stdout as always. 1 for an error.`;
 
-interface Args {
-  positional: string[];
-  flags: Map<string, string | true>;
-}
-
-const VALUE_FLAGS = new Set(["as-of", "ended", "file", "forget", "recovered-from", "repo", "scope", "to", "port", "session", "since"]);
-
-function parseArgs(argv: string[]): Args {
-  const positional: string[] = [];
-  const flags = new Map<string, string | true>();
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (!arg.startsWith("--")) {
-      positional.push(arg);
-      continue;
-    }
-    const [name, inline] = arg.slice(2).split(/=(.*)/s) as [string, string | undefined];
-    if (VALUE_FLAGS.has(name)) {
-      const value = inline ?? argv[++i];
-      if (value === undefined) throw new KbError(`--${name} needs a value`);
-      flags.set(name, value);
-    } else {
-      flags.set(name, true);
-    }
-  }
-  return { positional, flags };
-}
-
 function uniqueId(base: string, taken: Set<string>): string {
   if (!taken.has(base)) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
@@ -191,7 +170,10 @@ function cmdContext(store: Store, args: Args): Output {
   // HOLDBACK: the arm comes from --session alone, so the command prints the new policy unless a session is named.
   const session = args.flags.get("session");
   const result = buildContext(store, String(args.flags.get("repo") ?? "."), typeof session === "string" ? session : undefined);
-  return { json: result, text: result.text.trimEnd() };
+  const text = result.text.trimEnd();
+  // A hook reads stdout, so an empty start stays empty there. A person at a terminal gets one line.
+  if (!text && process.stdout.isTTY && !args.flags.has("json")) console.error(`kb context: no note loads at a session start in ${result.scope ?? "global"}.`);
+  return { json: result, text };
 }
 
 function cmdScope(store: Store, args: Args): Output {
@@ -200,8 +182,10 @@ function cmdScope(store: Store, args: Args): Output {
 }
 
 /** The JSON a command reads: the file of --file, or stdin. A shell can refuse a heredoc. A file always passes. */
-async function inputText(args: Args): Promise<string> {
+async function inputText(args: Args, command: string): Promise<string> {
   const file = args.flags.get("file");
+  // A person at a terminal would wait on stdin with no prompt.
+  if (file === undefined && process.stdin.isTTY) throw new UsageError(`kb ${command} reads JSON from --file <path> or from stdin, and stdin is a terminal. Pass --file, or pipe the JSON in.`);
   if (file === undefined) return Bun.stdin.text();
   try {
     return readFileSync(resolve(String(file)), "utf8");
@@ -230,14 +214,19 @@ function neighborsHint(neighbors: Neighbor[], scope: string): string {
 
 const ADD_INPUT = "kb add reads one JSON object, from --file <path> or on stdin";
 
-function cmdAdd(store: Store, args: Args, text: string): Output {
-  let input: Record<string, unknown>;
+/** The JSON of a command's input, or an error that says what is wrong with it. */
+function parseInput(text: string, expected: string): unknown {
+  if (!text.trim()) throw new KbError(`${expected}. The input is empty.`);
   try {
-    input = JSON.parse(text);
-  } catch {
-    throw new KbError(ADD_INPUT);
+    return JSON.parse(text);
+  } catch (error) {
+    throw new KbError(`${expected}. The input is not valid JSON (${text.length} characters): ${(error as Error).message}`);
   }
-  if (input === null || typeof input !== "object" || Array.isArray(input)) throw new KbError(ADD_INPUT);
+}
+
+function cmdAdd(store: Store, args: Args, text: string): Output {
+  const input = parseInput(text, ADD_INPUT) as Record<string, unknown>;
+  if (input === null || typeof input !== "object" || Array.isArray(input)) throw new KbError(`${ADD_INPUT}. The input is ${Array.isArray(input) ? "an array" : input === null ? "null" : `a ${typeof input}`}.`);
 
   store.ensure();
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
@@ -276,6 +265,13 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   }
 
   const scope = resolveScopeInput(input.scope, repo.scope);
+  // No repo here, so a note with no scope is global, and loads in every repo. An anchor names a
+  // file of one repo, so such a note was meant for a repo: it is refused. Any other note is saved.
+  const looked = resolve(String(args.flags.get("repo") ?? "."));
+  const noRepo = input.scope === undefined && repo.scope === null;
+  if (noRepo && Array.isArray(input.anchors) && input.anchors.length > 0) {
+    throw new KbError(`kb found no git repo at ${looked}, so this note would be global, and its anchors name files of a repo. Run kb add inside the repo, or pass --repo <its directory>. For a fact of every repo, pass "scope": "global".`);
+  }
   // A scope that no repo resolves to never loads in a session. A typing error must not hide a note there.
   if (scope !== repo.scope && !knownScopes(store).includes(scope)) {
     throw new KbError(`${unknownScope(store, scope)} To start the notes of another repo, pass --repo <its directory>.`);
@@ -288,7 +284,10 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   // Same normalised title in the same scope: let the caller decide to update.
   const title = normalizeTitle(input.title);
   const twin = active.find((n) => n.scope === scope && (normalizeTitle(n.title) === title || n.id === title));
-  if (twin) return { json: { status: "exists", id: twin.id, path: twin.path }, text: `exists ${twin.id}` };
+  if (twin) {
+    const hint = `A note with this title is in ${scope}. To update it, pass "id": "${twin.id}" and no "scope".`;
+    return { json: { status: "exists", id: twin.id, path: twin.path, hint }, text: `exists ${twin.id}\n${hint}` };
+  }
 
   const raw: Record<string, unknown> = {
     confidence: "medium",
@@ -328,12 +327,13 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   afterWrite(store, `kb: add ${note.id}`);
   logWrites(store, "add", [note.id], shown, typeof from === "string" ? from : undefined);
   recovered(note.id);
-  return added("created", { id: note.id, path }, note, repo.scope !== null, neighbors);
+  const where = noRepo ? [`kb found no git repo at ${looked}, so the note is global: it loads in every repo. That is right for a fact of every repo. For a fact of one repo, trash this note and run kb add inside the repo, or pass --repo <its directory>. Pass "scope": "global" to save a global note with no warning.`] : [];
+  return added("created", { id: note.id, path }, note, repo.scope !== null, neighbors, where);
 }
 
 /** The result of a note that `kb add` saved, with what the writer should look at again. */
-function added(status: "created" | "updated", saved: { id: string; path: string }, note: Note, inRepo: boolean, neighbors: Neighbor[] = []): Output {
-  const warnings = noteWarnings(note, inRepo);
+function added(status: "created" | "updated", saved: { id: string; path: string }, note: Note, inRepo: boolean, neighbors: Neighbor[] = [], more: string[] = []): Output {
+  const warnings = [...more, ...noteWarnings(note, inRepo)];
   const close = neighbors.length > 0;
   return {
     json: { status, ...saved, ...(close ? { neighbors } : {}), ...(warnings.length > 0 ? { warnings } : {}) },
@@ -386,8 +386,7 @@ function cmdShow(store: Store, args: Args): Output {
   const given = args.positional[0];
   if (!given) throw new KbError("usage: kb show <id> [--check]");
   // Ids are long. A part of one is enough to read a note, when only one note has it.
-  const close = store.find(given) ? [] : closeIds(store, given);
-  const note = requireNote(store, close.length === 1 ? close[0]! : given);
+  const note = requireIdOrPart(store, given);
   // A read changes nothing in the store. The log on this machine records it. A look into the
   // trash is marked, so it never counts as activity of the note.
   logEvent(store, { ev: "show", note: note.id, why: whyOf(args), ...(note.trashed ? { trashed: true as const } : {}) });
@@ -450,7 +449,7 @@ function cmdList(store: Store, args: Args): Output {
   const text =
     rows.length === 0
       ? trash ? "the trash is empty" : "no notes"
-      : [line("id", "kind", "scope", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, r.last_verified.slice(0, 10), `${r.title}${r.clears_at ? ` (deleted ${r.clears_at.slice(0, 10)})` : ""}`))].join("\n");
+      : [line("id", "kind", "scope", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, r.last_verified.slice(0, 10), `${r.title}${r.clears_at ? ` (purges ${r.clears_at.slice(0, 10)})` : ""}`))].join("\n");
   return { json: rows, text };
 }
 
@@ -499,7 +498,8 @@ function cmdMove(store: Store, args: Args, toTrash: boolean): Output {
     return { json: { scope, [toTrash ? "trashed" : "restored"]: moved }, text: toTrash ? `moved ${count} of ${scope} to the trash: ${moved.join(", ")}` : `restored ${count} of ${scope}: ${moved.join(", ")}` };
   }
   if (args.positional.length === 0) throw new KbError(`usage: kb ${verb} <id>...`);
-  const moved = moveNotes(store, args.positional, toTrash);
+  // A part of an id is enough, as in kb show, when only one note it can move has it.
+  const moved = moveNotes(store, args.positional.map((given) => requireIdOrPart(store, given, !toTrash).id), toTrash);
   return { json: { [toTrash ? "trashed" : "restored"]: moved }, text: `${toTrash ? "moved to the trash:" : "restored"} ${moved.join(", ")}` };
 }
 
@@ -517,6 +517,17 @@ function cmdDelete(store: Store, args: Args): Output {
     return { json: { scope, deleted }, text: `deleted ${deleted.length} ${deleted.length === 1 ? "note" : "notes"} of ${scope}: ${deleted.join(", ")}` };
   }
   if (args.positional.length === 0) throw new KbError("usage: kb delete <id>...");
+  // A delete is for good, so a part of an id is never enough, also when only one note has it.
+  const missing = args.positional.find((id) => !store.find(id));
+  if (missing !== undefined) {
+    let why = `no note with id "${missing}"`;
+    try {
+      requireNote(store, missing);
+    } catch (error) {
+      why = (error as Error).message;
+    }
+    throw new KbError(`${why}. kb delete removes notes for good, so it takes whole ids only. Nothing was deleted.`);
+  }
   const deleted = deleteNotes(store, args.positional);
   return { json: { deleted }, text: `deleted ${deleted.join(", ")}` };
 }
@@ -532,7 +543,7 @@ function cmdVerify(store: Store, args: Args): Output {
   if (args.positional.length === 0) throw new KbError("usage: kb verify <id>... [--repo .]");
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
   const notes = args.positional.map((id) => {
-    const note = requireNote(store, id);
+    const note = requireIdOrPart(store, id, false);
     if (note.trashed) throw new KbError(`${id} is in the trash. Restore it first.`);
     if (note.scope !== "global" && note.scope !== repo.scope) throw new KbError(`${id} belongs to ${note.scope}. Run kb verify inside that repo, so the commit is recorded.`);
     return note;
@@ -826,13 +837,7 @@ async function cmdAudit(store: Store, args: Args, input: () => Promise<string>):
     text: `${lead}\n${(await served()) ? `open ${url}` : `kb serve is not running. Start it with \`kb serve\`, then open ${url}`}`,
   });
   if (sub === "propose") {
-    const text = await input();
-    let proposal: unknown;
-    try {
-      proposal = JSON.parse(text);
-    } catch {
-      throw new KbError('kb audit propose reads {"items": [...]}, from --file <path> or on stdin');
-    }
+    const proposal = parseInput(await input(), 'kb audit propose reads {"items": [...]}, from --file <path> or on stdin');
     store.ensure();
     const audit = proposeAudit(store, proposal, repo);
     return open(audit.items.length, `saved ${audit.items.length} cards for ${scope}`);
@@ -885,11 +890,13 @@ async function main(): Promise<number> {
   let json = false;
   try {
     const [command, ...rest] = process.argv.slice(2);
-    const args = parseArgs(rest);
-    json = args.flags.has("json");
+    // The flags are checked against the command, so an unknown command is named first.
+    json = rest.includes("--json");
+    if (command !== undefined && !COMMANDS.has(command)) throw new UsageError(`unknown command "${command}". Run \`kb help\`.`);
+    const args = parseArgs(rest, command);
     const store = new Store();
     // A note whose time in the trash is up is gone before any command reads the store.
-    if (command && store.exists() && !["help", "--help", "-h"].includes(command) && !args.flags.has("help")) {
+    if (command && store.exists() && !["help", "--help", "-h", "version", "--version"].includes(command) && !args.flags.has("help")) {
       // Housekeeping must never stop the command, above all a restore or a delete.
       try {
         tidyTrash(store);
@@ -910,11 +917,16 @@ async function main(): Promise<number> {
       console.log(USAGE);
       return 0;
     }
+    if (command === "version" || command === "--version") {
+      const v = version();
+      console.log(json ? JSON.stringify(v, null, 2) : versionText(v));
+      return 0;
+    }
     let out: Output;
     switch (command) {
       case "context": out = cmdContext(store, args); break;
       case "scope": out = cmdScope(store, args); break;
-      case "add": out = cmdAdd(store, args, await inputText(args)); break;
+      case "add": out = cmdAdd(store, args, await inputText(args, "add")); break;
       case "show": out = cmdShow(store, args); break;
       case "search": out = cmdSearch(store, args); break;
       case "list": out = cmdList(store, args); break;
@@ -932,7 +944,7 @@ async function main(): Promise<number> {
       case "checkpointed": out = cmdCheckpointed(store, args); break;
       case "unsaved": out = cmdUnsaved(store, args); break;
       case "serve": out = await cmdServe(store, args, json); break;
-      case "audit": out = await cmdAudit(store, args, () => inputText(args)); break;
+      case "audit": out = await cmdAudit(store, args, () => inputText(args, "audit propose")); break;
       case "sync": out = cmdSync(store); break;
       default: throw new KbError(`unknown command "${command}". Run \`kb help\`.`);
     }
@@ -943,7 +955,7 @@ async function main(): Promise<number> {
     const message = error instanceof KbError ? error.message : `kb failed: ${(error as Error)?.message ?? error}`;
     if (json) console.log(JSON.stringify({ error: message }));
     else console.error(message);
-    return 1;
+    return error instanceof UsageError ? USAGE_EXIT : 1;
   }
 }
 
