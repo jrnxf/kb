@@ -131,7 +131,8 @@ export function git(cwd: string, ...args: string[]): { ok: boolean; out: string 
 /** git with its output as git wrote it, for output where a leading space counts. */
 function gitRaw(cwd: string, ...args: string[]): { ok: boolean; out: string } {
   try {
-    const result = Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    // Bun gives a child the environment of the start without `env`, so a change to process.env would not reach git.
+    const result = Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore", env: process.env });
     return { ok: result.exitCode === 0, out: result.stdout.toString() };
   } catch {
     return { ok: false, out: "" };
