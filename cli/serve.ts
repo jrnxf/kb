@@ -154,10 +154,29 @@ async function body(request: Request): Promise<Record<string, unknown> | null> {
  * by its hash.
  */
 export function pagePolicy(html: string): string {
-  const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(([, code]) => ` 'sha256-${createHash("sha256").update(code!).digest("base64")}'`);
+  const hashes: string[] = [];
+  let code: string | undefined;
+  const flush = () => {
+    if (code !== undefined) hashes.push(` 'sha256-${createHash("sha256").update(code.replace(/\r\n?/g, "\n")).digest("base64")}'`);
+    code = undefined;
+  };
+  // A script with a src is no inline script. The browser hashes the text after its parser turns CRLF into LF.
+  new HTMLRewriter()
+    .on("script", {
+      element(script) {
+        flush();
+        if (!script.hasAttribute("src")) code = "";
+        script.onEndTag(flush);
+      },
+      text(chunk) {
+        if (code !== undefined) code += chunk.text;
+      },
+    })
+    .transform(html);
+  flush();
   return [
     "default-src 'none'",
-    `script-src 'self'${inline.join("")}`,
+    `script-src 'self'${hashes.join("")}`,
     "style-src 'self'",
     "img-src 'self' data:",
     "font-src 'self'",
@@ -181,13 +200,23 @@ function withSafety(response: Response): Response {
   return response;
 }
 
+/** The page and its policy, worked out again only when the file changes. The file is small, so each request reads it, and a copy that keeps the times is still seen. */
+let cached: { html: string; policy: string } | undefined;
+
+async function indexPage(): Promise<{ html: string; policy: string } | undefined> {
+  const file = Bun.file(join(DIST, "index.html"));
+  if (!(await file.exists())) return undefined;
+  const html = await file.text();
+  if (cached?.html !== html) cached = { html, policy: pagePolicy(html) };
+  return cached;
+}
+
 /** The page at /, and the files of the built page. The page keeps its view in the hash, so it has no other paths. */
 async function staticFile(pathname: string): Promise<Response> {
   if (pathname === "/") {
-    const page = Bun.file(join(DIST, "index.html"));
-    if (!(await page.exists())) return json({ error: "the page is not built. Run `bun run build` in web/." }, 500);
-    const html = await page.text();
-    return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": pagePolicy(html) } });
+    const page = await indexPage();
+    if (!page) return json({ error: "the page is not built. Run `bun run build` in web/." }, 500);
+    return new Response(page.html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": page.policy } });
   }
   const path = normalize(join(DIST, decodeURIComponent(pathname)));
   const file = Bun.file(path);
@@ -206,6 +235,16 @@ function tidy(store: Store): void {
   }
 }
 
+/** The answer to a request. An error becomes an answer too. */
+async function answer(store: Store, token: string, port: number, request: Request): Promise<Response> {
+  try {
+    return await handle(store, token, port, request);
+  } catch (error) {
+    if (error instanceof KbError) return json({ error: error.message }, error.message.startsWith("no note") ? 404 : 400);
+    return json({ error: `kb failed: ${(error as Error)?.message ?? error}` }, 500);
+  }
+}
+
 export function serve(store: Store, options: { port?: number } = {}): Served {
   const token = randomBytes(16).toString("hex");
   tidy(store);
@@ -214,12 +253,7 @@ export function serve(store: Store, options: { port?: number } = {}): Served {
     hostname: "127.0.0.1",
     port: options.port ?? DEFAULT_PORT,
     async fetch(request, self): Promise<Response> {
-      try {
-        return withSafety(await handle(store, token, self.port!, request));
-      } catch (error) {
-        if (error instanceof KbError) return withSafety(json({ error: error.message }, error.message.startsWith("no note") ? 404 : 400));
-        return withSafety(json({ error: `kb failed: ${(error as Error)?.message ?? error}` }, 500));
-      }
+      return withSafety(await answer(store, token, self.port!, request));
     },
   });
   // `kb audit` reads this to link to the server that is up, also one started with --port.
