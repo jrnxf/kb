@@ -6,6 +6,7 @@ import { KINDS, localDate, normalizeTitle } from "./note.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
 import { anchorReader, missingAnchors } from "./stale.ts";
+import { mergedNotices } from "./sync.ts";
 import { HARD_CONTEXT_CAP, type Config, type Store, type StoredNote } from "./store.ts";
 import { readTriggers } from "./trigger.ts";
 
@@ -253,6 +254,8 @@ interface Session {
   /** What is gone from a note, by id. */
   goneOf: Map<string, string>;
   syncError: string | null;
+  /** A line for each note that a sync merged, while its other copy is in the trash. */
+  merged: string[];
   charBudget: number;
   briefChars: number;
 }
@@ -266,7 +269,8 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
   // A promoted note loads from the instruction file that holds it now, so it is not here too.
   const visible = store.notes().filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === scope));
   const syncError = store.syncError();
-  if (visible.length === 0 && !syncError) return { context: { ...EMPTY, scope, holdback }, ranked: [], config };
+  const merged = mergedNotices(store);
+  if (visible.length === 0 && !syncError && merged.length === 0) return { context: { ...EMPTY, scope, holdback }, ranked: [], config };
 
   const ranked = rank(visible, lastActivity(store));
   const goneOf = new Map<string, string>();
@@ -278,7 +282,7 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
       if (missing) goneOf.set(note.id, missing.length > GONE_DETAIL_CHARS ? `${missing.slice(0, GONE_DETAIL_CHARS - 3)}...` : missing);
     }
   }
-  const laid: Session = { scope, ranked, goneOf, syncError, charBudget: contextBudget(config.budgets.contextChars), briefChars: config.budgets.briefChars };
+  const laid: Session = { scope, ranked, goneOf, syncError, merged, charBudget: contextBudget(config.budgets.contextChars), briefChars: config.budgets.briefChars };
   if (holdback) return { context: heldStart(laid), ranked, config }; // HOLDBACK
 
   const context = newStart(laid);
@@ -296,11 +300,16 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
  * index section of the notes listed, with a last line that counts the hidden ones. `goneIn` gives
  * what is gone from the notes shown.
  */
-function partsOf({ scope, goneOf, syncError }: Session, line: (note: StoredNote) => string) {
+const MERGED_LINES = 3;
+
+function partsOf({ scope, goneOf, syncError, merged }: Session, line: (note: StoredNote) => string) {
   const goneIn = (shown: StoredNote[]): ContextResult["gone"] => (goneOf.size === 0 ? [] : shown.filter((n) => goneOf.has(n.id)).map((n) => ({ id: n.id, detail: goneOf.get(n.id)! })));
   const head = (shown: StoredNote[]): string[] => {
     const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, FORMAT_LINE, SAVE_RULE];
-    if (syncError) lines.push(`kb sync did not finish: ${syncError} \`kb sync\` shows the detail.`);
+    // The error says what to do. A merged note is named while its other copy is in the trash.
+    if (syncError) lines.push(`kb sync did not finish: ${syncError}`);
+    lines.push(...merged.slice(0, MERGED_LINES));
+    if (merged.length > MERGED_LINES) lines.push(`kb sync merged ${merged.length - MERGED_LINES} more notes. \`kb list --trash\` shows each copy, with an id that ends in -conflict.`);
     // A note whose file or symbol is gone may be wrong now. The session checks it before it acts on it.
     const gone = goneIn(shown);
     if (gone.length > 0) {

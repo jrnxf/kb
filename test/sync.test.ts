@@ -145,28 +145,97 @@ describe("kb sync", () => {
     for (const store of [a, b]) expect(store.notes().map((n) => n.id).sort()).toEqual(["one", "three", "two"]);
   });
 
-  test("a conflict keeps local notes, reports one line, and clears after a fix", () => {
+  test("a note that both machines changed keeps both copies, and the sync goes on", () => {
+    const { a, b } = twoMachines();
+    putNote(a, { id: "same", body: "original" });
+    syncNow(a);
+    syncNow(b);
+    putNote(a, { id: "same", body: "edit from A", last_verified: "2026-02-01T00:00:00Z" });
+    putNote(b, { id: "same", body: "edit from B", last_verified: "2026-03-01T00:00:00Z" });
+    putNote(b, { id: "only-b" });
+    expect(syncNow(a).status).toBe("ok");
+
+    const result = syncNow(b);
+    expect(result.status).toBe("ok");
+    expect(result.merged).toEqual([{ id: "same", copy: "same-conflict", kept: "this machine" }]);
+    expect(result.detail).toContain("kb kept the copy verified last (from this machine) and put the other in the trash as same-conflict");
+    // B verified its copy last, so it stays. A's copy waits in the trash, and B's other note is pushed.
+    expect(b.find("same")!.body).toBe("edit from B");
+    expect(b.find("same-conflict")).toMatchObject({ trashed: true, body: "edit from A" });
+    expect(sh(b.home, "git", "status", "--porcelain")).toBe("");
+    expect(sh(b.home, "git", "rev-list", "--count", "origin/main..HEAD")).toBe("0");
+    expect(sh(b.home, "git", "rev-list", "--count", "HEAD..origin/main")).toBe("0");
+
+    // Each session start names it while the copy is in the trash.
+    const notice = "kb sync merged a note. Two machines changed same: kb kept the copy verified last (from this machine)";
+    expect(buildContext(b, plain()).text).toContain(notice);
+    expect(syncNow(a).status).toBe("ok");
+    expect(a.find("same")!.body).toBe("edit from B");
+    expect(buildContext(a, plain()).text).not.toContain("kb sync merged");
+    expect(kb(b, ["delete", "same-conflict"]).code).toBe(0);
+    expect(buildContext(b, plain()).text).not.toContain("kb sync merged");
+  });
+
+  test("on a tie the remote copy stays", () => {
     const { a, b } = twoMachines();
     putNote(a, { id: "same", body: "original" });
     syncNow(a);
     syncNow(b);
     putNote(a, { id: "same", body: "edit from A" });
     putNote(b, { id: "same", body: "edit from B" });
-    expect(syncNow(a).status).toBe("ok");
+    syncNow(a);
+    expect(syncNow(b).merged).toEqual([{ id: "same", copy: "same-conflict", kept: "the remote" }]);
+    expect(b.find("same")!.body).toBe("edit from A");
+    expect(b.find("same-conflict")!.body).toBe("edit from B");
+  });
 
-    const result = syncNow(b);
-    expect(result.status).toBe("conflict");
-    expect(b.find("same")?.body).toBe("edit from B");
+  test("a conflict kb cannot merge names the file, fails, and the steps it gives fix it", () => {
+    const { a, b } = twoMachines();
+    writeFileSync(join(a.home, "kb.config.json"), JSON.stringify({ trashDays: 7 }));
+    syncNow(a);
+    syncNow(b);
+    writeFileSync(join(a.home, "kb.config.json"), JSON.stringify({ trashDays: 9 }));
+    writeFileSync(join(b.home, "kb.config.json"), JSON.stringify({ trashDays: 14 }));
+    putNote(b, { id: "only-b" });
+    syncNow(a);
+
+    const result = kb(b, ["sync", "--json"]);
+    expect(result.code).toBe(1);
+    expect(result.json).toMatchObject({ ok: false, status: "conflict", files: ["kb.config.json"] });
+    expect(result.json.detail).toContain("two machines changed kb.config.json, and kb cannot merge it.");
+    // The home folder of the tests is the temp folder, so the store's path starts with ~.
+    expect(result.json.detail).toContain(`\`git -C ~${b.home.slice(process.env.HOME!.length)} rebase origin/main\``);
     expect(existsSync(join(b.home, ".git", "rebase-merge"))).toBe(false);
     expect(sh(b.home, "git", "status", "--porcelain")).toBe("");
+    expect(b.find("only-b")).toBeDefined();
     const context = buildContext(b, plain()).text;
-    expect(context).toContain("kb sync did not finish: two machines changed the same note.");
-    expect(context.match(/kb sync did not finish/g)).toHaveLength(1);
+    expect(context).toContain("kb sync did not finish: two machines changed kb.config.json");
+    expect(context).not.toContain("shows the detail");
+    expect(kb(b, ["sync"]).code).toBe(1);
 
-    // The user takes the remote copy. The next sync is clean and the line is gone.
-    sh(b.home, "git", "reset", "-q", "--hard", "origin/main");
-    expect(syncNow(b).status).toBe("ok");
+    // The steps of the message: rebase, keep what is right, continue, sync.
+    Bun.spawnSync(["git", "-C", b.home, "rebase", "origin/main"], { stdout: "pipe", stderr: "pipe" });
+    writeFileSync(join(b.home, "kb.config.json"), JSON.stringify({ trashDays: 14 }));
+    sh(b.home, "git", "add", "kb.config.json");
+    sh(b.home, "env", "GIT_EDITOR=true", "git", "rebase", "--continue");
+    expect(kb(b, ["sync", "--json"]).json).toMatchObject({ ok: true, status: "ok" });
     expect(buildContext(b, plain()).text).not.toContain("kb sync did not finish");
-    expect(b.find("same")?.body).toBe("edit from A");
+    syncNow(a);
+    expect(readFileSync(join(a.home, "kb.config.json"), "utf8")).toBe(JSON.stringify({ trashDays: 14 }));
+    expect(a.find("only-b")).toBeDefined();
+  });
+
+  test("a note that one machine trashed and the other changed goes to the trash with the change", () => {
+    const { a, b } = twoMachines();
+    putNote(a, { id: "same", body: "original" });
+    syncNow(a);
+    syncNow(b);
+    expect(kb(a, ["trash", "same"]).code).toBe(0);
+    putNote(b, { id: "same", body: "edit from B" });
+    syncNow(a);
+    // git follows the move, so the edit lands in the trashed note and nothing is lost.
+    expect(syncNow(b).status).toBe("ok");
+    expect(b.find("same")).toMatchObject({ trashed: true, body: "edit from B" });
+    expect(b.notes().map((n) => n.id)).not.toContain("same");
   });
 });

@@ -35,7 +35,7 @@ describe("a new store", () => {
     mkdirSync(join(home, "notes"), { recursive: true });
     expect(kb(home, ["add", "--json"], { stdin: note("Old stores have no history") }).json.status).toBe("created");
     expect(existsSync(join(home, ".git"))).toBe(false);
-    expect(kb(home, ["sync", "--json"]).json).toEqual({ status: "no-remote", detail: "the store has no git remote" });
+    expect(kb(home, ["sync", "--json"]).json).toEqual({ ok: true, status: "no-remote", detail: "the store has no git remote" });
     expect(kb(home, ["list", "--json"]).stdout).toContain("old-stores-have-no-history");
   });
 });

@@ -19,7 +19,7 @@ import { resultGroups } from "./wire.ts";
 import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, isLive, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
 import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
-import { syncNow } from "./sync.ts";
+import { syncFailed, syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
 import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
@@ -90,7 +90,8 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb serve [--port n] [--no-open]        the store as a local page: read, edit and trash notes
                                          kb alone in a terminal does the same. Behind a proxy, name it in
                                          KB_SERVE_HOSTS: kb.example.com, or .example.com for every name under it
-  kb sync                                commit, pull and push the store
+  kb sync                                commit, pull and push the store. Exits with 1 on a conflict it
+                                         cannot merge, and names each file
 
 Every command accepts --json. The store is ~/.kb, or KB_HOME.
 A read, a write and a verdict each add one line to a log on this machine. The line names the
@@ -878,7 +879,8 @@ function cmdInstructions(store: Store, args: Args): Output {
 
 function cmdSync(store: Store): Output {
   const result = syncNow(store);
-  return { json: result, text: `${result.status}: ${result.detail}` };
+  const ok = !syncFailed(result);
+  return { json: { ok, ...result }, text: `${result.status}: ${result.detail}`, code: ok ? 0 : 1 };
 }
 
 async function main(): Promise<number> {
