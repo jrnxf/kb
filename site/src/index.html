@@ -3,55 +3,47 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>kb - memory for coding agents</title>
-<meta name="description" content="kb keeps what your coding agent learns as plain markdown notes. Every session starts with a small index, and a note loads when it applies.">
+<title>kb - memory for Claude Code</title>
+<meta name="description" content="kb keeps what Claude Code learns as plain markdown notes. Every session starts with a small index, and a note loads only when it applies. Free and open source.">
 <link rel="canonical" href="https://kb.jrnxf.co/">
-<meta property="og:title" content="kb - memory for coding agents">
-<meta property="og:description" content="kb keeps what your coding agent learns as plain markdown notes. Every session starts with a small index, and a note loads when it applies.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kb">
+<meta property="og:title" content="kb - memory for Claude Code">
+<meta property="og:description" content="kb keeps what Claude Code learns as plain markdown notes. Every session starts with a small index, and a note loads only when it applies. Free and open source.">
 <meta property="og:url" content="https://kb.jrnxf.co/">
+<meta property="og:image" content="https://kb.jrnxf.co{{og.png}}">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Your agent forgets at /clear. kb does not. Memory for Claude Code, at kb.jrnxf.co.">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#0a0a0b">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <!--FONT_PRELOADS-->
 <style>
 /*FONT_FACES*/
 /*SHARED_CSS*/
-/* The page is one agent session. Prompts type out and replies fade in as they scroll into view, once each. Green is the main accent. Blue marks a note that is named but not loaded. */
-:root { color-scheme: dark; --bg: #0a0a0b; --surface: #111113; --ink: #ededee; --soft: #c9c9ce; --mute: #85858c; --faint: #55555b; --line: #1f1f23; --line2: #2a2a2f; --sunk: #161619;
-  --body: #6fd39c; --index: #93acff; --gone: #f39a5c; --r: 8px;
-  --f-body: "Geist Variable", system-ui, sans-serif; --f-mono: "Geist Mono Variable", ui-monospace, Menlo, monospace; --f-display: var(--f-mono); --term-bg: #0c0c0e; --term-line: var(--line);
-  --z-bar: 10; }
-* { box-sizing: border-box; }
-html { background: var(--bg); scroll-padding-top: 72px; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.65 var(--f-body); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
-::selection { background: color-mix(in oklab, var(--body) 30%, transparent); }
-a { color: inherit; }
-.pad { padding-inline: max(16px, env(safe-area-inset-left)) max(16px, env(safe-area-inset-right)); }
-.col { max-width: 820px; margin: 0 auto; }
-.num { font-variant-numeric: tabular-nums; }
-
-/* session bar */
-.bar { position: sticky; top: 0; z-index: var(--z-bar); background: color-mix(in oklab, var(--bg) 94%, transparent); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top); }
-.bar .col { display: flex; align-items: center; gap: 14px; height: 52px; font: 13px var(--f-mono); color: var(--mute); }
-.bar .brand { display: flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 600; text-decoration: none; }
-.bar .live { width: 7px; height: 7px; border-radius: 50%; background: var(--body); }
-.bar .path { color: var(--faint); }
-.bar .sp { flex: 1; }
-.meter { display: flex; align-items: center; gap: 8px; }
-.meter i { width: 64px; height: 4px; border-radius: 2px; background: var(--line2); overflow: hidden; display: block; }
-.meter i::before { content: ""; display: block; height: 100%; width: 100%; background: var(--body); transform-origin: left; transform: scaleX(.981); }
-.bar nav { display: flex; gap: 16px; }
-.bar nav a { text-decoration: none; transition: color 150ms ease; }
-@media (hover: hover) and (pointer: fine) { .bar nav a:hover { color: var(--ink); } }
-
+/*BASE_CSS*/
 /* hero */
 .hero { padding-block: 88px 24px; }
 h1 { font: 600 clamp(34px, 6vw, 60px)/1.04 var(--f-mono); margin: 0; text-wrap: balance; }
-h1 span { color: var(--faint); }
+h1 span { color: var(--hush); }
 .lede { color: var(--mute); font-size: 18px; max-width: 540px; text-wrap: pretty; margin: 22px 0 0; }
 .cta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 30px; align-items: center; }
 .cta .w-btn { height: 40px; padding: 0 16px; font-size: 14px; text-decoration: none; }
 .cta .w-btn kbd { font: 12px var(--f-mono); color: var(--mute); }
 .cta small { font: 12.5px var(--f-mono); color: var(--faint); margin-left: 6px; }
+.cta small a { text-underline-offset: 3px; }
+.nw { white-space: nowrap; }
+
+/* where kb fits, next to what Claude Code has */
+.fit { margin-top: 56px; display: grid; gap: 14px; }
+.fit h2 { font: 500 12px var(--f-mono); color: var(--faint); text-transform: uppercase; letter-spacing: .06em; margin: 0; }
+.fit > p { margin: 0; color: var(--mute); max-width: 64ch; text-wrap: pretty; }
+.fit .cmds { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+.fit .cmds .kb b { color: var(--body); }
 
 /* the log */
 .log { list-style: none; margin: 0; padding: 40px 0 0; }
@@ -88,6 +80,13 @@ code { font: .87em var(--f-mono); color: var(--ink); background: var(--sunk); bo
 pre { margin: 0; font: 13px/1.8 var(--f-mono); overflow-x: auto; color: var(--soft); }
 pre .c { color: var(--faint); } pre .i { color: var(--index); } pre .e { color: var(--gone); } pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; } pre .li { display: block; padding-left: 2ch; text-indent: -2ch; }
 
+/* install: each step has its own block and a copy button. A long line wraps, so a phone shows all of it. */
+.tool > .b.steps { display: grid; gap: 18px; }
+.step { display: grid; gap: 6px; min-width: 0; }
+.step .sh { display: flex; align-items: center; justify-content: space-between; gap: 12px; font: 13px/1.5 var(--f-mono); color: var(--faint); }
+.step .cp { flex: none; height: 28px; padding: 0 10px; font-size: 12.5px; }
+.step pre { background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 14px; }
+
 /* a picture of the kb serve page. The phone layout shows on a narrow screen, so the text stays readable. */
 .tool .shot { display: block; width: 100%; height: auto; }
 
@@ -115,7 +114,6 @@ footer { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-b
 footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { footer a:hover { color: var(--ink); } }
 
 /* Reveal. Only with JS, so the page reads fine without it. Opacity and transform only. */
-.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .js .turn > .g, .js .turn.ai .msg > *, .js .turn.you .msg { opacity: 0; transform: translateY(6px); transition: opacity 320ms var(--ease-out), transform 320ms var(--ease-out); transition-delay: calc(min(var(--i, 0), 4) * 45ms); }
 .js .turn.shown > .g, .js .turn.shown .msg, .js .turn.ai.shown .msg > * { opacity: 1; transform: none; }
 /* Typing: a character takes space only once typed, so the bubble grows with the text. The cursor leaves when the prompt "submits". */
@@ -125,12 +123,11 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
 .js .turn.you.done .msg .cur { display: none; }
 
 @media (max-width: 640px) {
-  .hero { padding-block: 48px 8px; } .lede { font-size: 17px; }
-  .bar .path, .bar nav .h { display: none; }
+  .hero { padding-block: 48px 8px; } .lede { font-size: 17px; } .cta small { margin-left: 0; }
   .turn { grid-template-columns: 14px minmax(0, 1fr); gap: 0 10px; }
   .tool > .b { padding: 14px; } .tool > .h { padding: 10px 12px; }
   .tool > .b.loop { padding: 0; --in: 14px; height: calc(420px + 2 * var(--in)); } .tool > .b.loop .orbit { top: calc(52px + var(--in)); bottom: calc(52px + var(--in)); }
-  .cmds { grid-template-columns: minmax(0, 1fr); }
+  .cmds, .fit .cmds { grid-template-columns: minmax(0, 1fr); } .fit { margin-top: 40px; }
   .term { font-size: 11.5px; }
 }
 </style>
@@ -140,22 +137,55 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
   <a class="brand" href="#top"><span class="live" aria-hidden="true"></span>kb</a>
   <span class="path">~/acme/shop</span>
   <span class="sp"></span>
-  <span class="meter num" title="Context loaded by kb at session start"><i aria-hidden="true"></i>8,157 / 8,313</span>
-  <nav><a class="h" href="#install">install</a><a href="https://github.com/jrnxf/kb">github</a></nav>
+  <span class="meter num" style="--fill: {{n.fill}}" title="Characters kb loads at session start, out of the hard budget"><span class="ml">context</span><i aria-hidden="true"></i><span class="sr">kb context: </span><span class="mv">{{n.chars}} / {{n.budget}}</span><span class="sr"> characters</span></span>
+  <nav><a href="#install">install</a><a href="https://github.com/jrnxf/kb">github</a></nav>
 </div></header>
 
 <main class="pad" id="top"><div class="col">
   <section class="hero">
     <h1>Your agent forgets at /clear. <span>kb does not.</span></h1>
-    <p class="lede">kb keeps what your coding agent learns as plain markdown notes, gives every new session a small index of them, and loads a note when it applies. This page is one session with it.</p>
-    <div class="cta"><a class="w-btn primary" href="#install">Install the plugin</a><a class="w-btn" href="#log">Read the session</a><small>Claude Code · Bun · git</small></div>
+    <p class="lede">kb keeps what Claude Code learns as plain markdown notes, gives every new session a small index of them, and loads a note when it applies. This page is one session with it.</p>
+    <div class="cta"><a class="w-btn primary" href="#install">Install the plugin</a><a class="w-btn" href="#log">Read the session</a><small>Free and open source (<a href="https://github.com/jrnxf/kb/blob/main/LICENSE">MIT</a>)</small></div>
+  </section>
+
+  <section class="fit" aria-labelledby="fit-h">
+    <h2 id="fit-h">Where kb fits</h2>
+    <p>kb is a plugin for Claude Code, and it is <span class="nw">pre-release</span>. Claude Code already has two places for memory. kb is the third, for what the agent learns.</p>
+    <div class="cmds">
+      <div><b>CLAUDE.md</b><span>Holds the rules that you state. Every session loads all of it.</span></div>
+      <div><b>auto memory</b><span>Holds what Claude Code saves by itself. It loads all of it at every start.</span></div>
+      <div class="kb"><b>kb</b><span>Keeps what the agent learns. A session gets a small index, and a note loads only when it applies.</span></div>
+    </div>
   </section>
 
   <ol class="log" id="log">
     <li class="sep">tuesday · new session in ~/acme/shop</li>
 
     <li class="turn ai" data-first><span class="g" aria-hidden="true">●</span><div class="msg">
-      <div class="tool"><div class="h"><b>SessionStart</b><span class="args">kb context</span><span class="ok">✓ 8,157 ch</span></div><div class="b flush" data-w="term"></div></div>
+      <div class="tool"><div class="h"><b>SessionStart</b><span class="args">kb context</span><span class="ok">✓ {{n.chars}} ch</span></div><div class="b flush term w" data-w="term"><div class="term-body">
+<div class="c-p">$ claude</div>
+<div class="c-dim">SessionStart hook ran: kb context</div>
+<div> </div>
+<div class="c-h"># kb: saved knowledge for github.com/acme/shop</div>
+<div class="c-dim">Each note is below once. An index line is the id, then "..." and the rest of the title.</div>
+<div class="c-dim">A stated rule goes to an instruction file, not to kb. Save what you learn with `kb add --file`. Run `kb search` first.</div>
+<div> </div>
+<div class="c-h">## Open work</div>
+<div class="c-b">### finish-the-webhook-retry-the-handler-still-drops [open-work] Finish the webhook retry: the handler still drops a 409</div>
+<div>Next: retry a 409 once after 2 s.</div>
+<div class="c-dim">Verified 2026-11-12. `kb show finish-the-webhook-retry-the-handler-still-drops` prints the rest.</div>
+<div> </div>
+<div class="c-h">## Index</div>
+<div class="c-dim">### github.com/acme/shop (3)</div>
+<div class="c-i">- run-migrations-before-seeding-or-the-seed-script [gotcha] ...fails on a missing table</div>
+<div class="c-i">- money-is-integer-cents-everywhere-never-floats [convention]</div>
+<div class="c-i">- why-orders-use-soft-delete-refunds-need-the-old [decision] ...row</div>
+<div class="c-dim">### global (2)</div>
+<div class="c-i">- pnpm-install-in-ci-needs-the-frozen-lockfile [gotcha]</div>
+<div class="c-i">- the-dev-proxy-drops-websocket-upgrades-so-hmr [gotcha] ...needs port 5173</div>
+<div> </div>
+<div class="c-dim">1 more global note loads only at its trigger, a command or an error. `kb show &lt;id&gt;` prints one note. `kb search &lt;words&gt;` searches every note.</div>
+</div></div></div>
     </div></li>
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how did you know what that seed error meant?</div></li>
@@ -182,7 +212,11 @@ The seed script inserts into tables that only the latest migration creates. On a
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>I do. When you state a rule, I write it to CLAUDE.md in that turn. <b>What I learn goes to kb.</b></p>
       <p><code>kb add</code> names the close notes before it writes, so I update a note and add no twin. It refuses a note that looks like it holds a secret. When you are done, <code>/kb:clear</code> saves the rest and clears the session, but only if the save worked. I say in one line when it is a good time.</p>
-      <div class="tool"><div class="h"><b>loop</b><span class="args">how a note gets here</span></div><div class="b" data-w="loop"></div></div>
+      <div class="tool"><div class="h"><b>loop</b><span class="args">how a note gets here</span></div><div class="b loop w" data-w="loop"><div class="orbit"></div><div class="hub"><b>every session</b>also after /clear, resume, compaction and fork</div>
+        <div class="node n-top" data-a="270"><span class="when">during a session</span><b>I learn a fact</b><code>kb add --file</code></div>
+        <div class="node n-right" data-a="0"><span class="when">when you are done</span><b>Save + clear</b><code>/kb:clear</code></div>
+        <div class="node n-bottom" data-a="90"><span class="when">on disk</span><b>One file per note</b><code>~/.kb/notes/&lt;scope&gt;/</code></div>
+        <div class="node n-left" data-a="180"><span class="when">session start</span><b>The index</b><code>kb context</code></div></div></div>
     </div></li>
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">what if I forget to save?</div></li>
@@ -196,7 +230,7 @@ An earlier session here ended with no /kb:save.
 
 <span class="i">Recovered the session of 2026-11-16 in ~/acme/shop</span> - 2 saved, 1 updated</pre></div></div>
       <div class="cmds">
-        <div><b>at the end</b><span>A hook records each session that ends with no save: a /clear, an exit, or a headless run. A prompt after a save counts from that checkpoint on.</span></div>
+        <div><b>at the end</b><span>A hook records each session that ends with no save: a /clear, an exit, or a headless run. A prompt after a save counts from that save on.</span></div>
         <div><b>at the next start</b><span>I tell you in one line, once per day. A session too short to hold a lesson is forgotten.</span></div>
         <div><b>/kb:recover</b><span>A subagent reads what we said, and each tool call that failed. No output of a call that worked reaches it.</span></div>
         <div><b>the notes</b><span>Each one gets low confidence and the time the old session ended. So a later change to the code flags it.</span></div>
@@ -208,15 +242,17 @@ An earlier session here ended with no /kb:save.
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">do all the notes load every time?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>No. A session start comes before the task is known, so no note loads its body there. The repo's open work gets a brief: the title and the next step. Each other note gets one index line: the id, the kind and the end of the title.</p>
-      <div class="tool"><div class="h"><b>note</b><span class="args">run-migrations-before-seeding-or-the-seed-script</span></div><div class="b" data-w="morph"></div></div>
+      <div class="tool"><div class="h"><b>note</b><span class="args">run-migrations-before-seeding-or-the-seed-script</span></div><div class="b w" data-w="morph"><div class="mcard"><div class="mline"><span class="dim swap pre">### </span>run-migrations-before-seeding-or-the-seed-script <span class="dim">[gotcha]</span><span class="swap rest"> Run migrations before seeding, or the seed script fails on a missing table</span></div>
+        <div class="mfold"><div><div class="mbody"><span class="dim">verified 2026-11-12 at 4f2c9e1 | confidence high | anchors: scripts/seed.ts</span><br><span class="txt">The seed script inserts into tables that only the latest migration creates. On a fresh database, run `bun db:migrate` first. The error is "relation users does not exist". It looks like a connection problem, but it is not.</span></div></div></div></div>
+        <div class="mfoot" hidden><div class="msize"><span class="w-tag t-body tag">full body</span><div class="track"><div class="fill" style="background:var(--body)"></div></div><b>0 ch</b></div><button class="w-btn" type="button">Shrink to index line</button></div></div></div>
       <p>I rank them: the repo's notes first, then the global notes. The character budget is the only limit. These are the sizes of a real store.</p>
-      <div class="tool" id="budget"><div class="h"><b>kb budget</b><span class="args">8,000 characters for the notes</span><span class="ok">✓ 1 brief · 71 lines</span></div><div class="b" data-w="packer"></div></div>
+      <div class="tool" id="budget"><div class="h"><b>kb budget</b><span class="args">8,000 characters for the notes</span><span class="ok">✓ {{n.briefs}} · {{n.lines}} lines</span></div><div class="b w" data-w="packer"><!--PACKER--></div></div>
     </div></li>
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">and when there are hundreds?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>The store grows. <b>The session does not.</b> A note below the line is one <code>kb search</code> away, and a word finds its other forms: "retry" finds "retries".</p>
-      <div class="tool"><div class="h"><b>growth</b><span class="args">store vs session</span></div><div class="b" data-w="growth"></div></div>
+      <div class="tool"><div class="h"><b>growth</b><span class="args">store vs session</span></div><div class="b w" data-w="growth"><!--GROWTH--></div></div>
       <p>Notes also go stale, and the store says so. <b>You decide how a note ends.</b></p>
       <div class="tool"><div class="h"><b>life</b><span class="args">of a note, and of a rule</span></div><div class="b life">
         <svg class="wide" viewBox="0 0 744 292" role="img" aria-label="A rule that you state goes to CLAUDE.md with /kb:note, in the same turn. A fact that the agent learns goes through six stages: write, store, load, judge, go stale, audit. In the audit you pick: keep, rewrite or merge sends the note back to the store, promote moves a rule to CLAUDE.md, and trash moves the note to the trash. After 30 days in the trash, the note is deleted. Until then, kb restore brings it back."><defs><marker id="lfw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path class="lf-a" d="M0 0 10 5 0 10z"/></marker></defs><g><rect class="lf-b lf-you" x="0" y="4" width="104" height="48" rx="8"/><text class="lf-t" x="52" y="25" text-anchor="middle">A rule</text><text class="lf-s" x="52" y="41" text-anchor="middle">you state it</text></g><path class="lf-e" d="M104 28H636" marker-end="url(#lfw)"/><text class="lf-l" x="370" y="20" text-anchor="middle">/kb:note, in the same turn</text><g><rect class="lf-b lf-you" x="640" y="4" width="104" height="48" rx="8"/><text class="lf-t" x="692" y="25" text-anchor="middle">CLAUDE.md</text><text class="lf-s" x="692" y="41" text-anchor="middle">every session</text></g><g><rect class="lf-b" x="0" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="52" y="131" text-anchor="middle">Write</text><text class="lf-s" x="52" y="147" text-anchor="middle">kb add</text></g><g><rect class="lf-b" x="128" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="180" y="131" text-anchor="middle">Store</text><text class="lf-s" x="180" y="147" text-anchor="middle">~/.kb + git</text></g><g><rect class="lf-b" x="256" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="308" y="131" text-anchor="middle">Load</text><text class="lf-s" x="308" y="147" text-anchor="middle">each session</text></g><g><rect class="lf-b" x="384" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="436" y="131" text-anchor="middle">Judge</text><text class="lf-s" x="436" y="147" text-anchor="middle">verdicts</text></g><g><rect class="lf-b" x="512" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="564" y="131" text-anchor="middle">Go stale</text><text class="lf-s" x="564" y="147" text-anchor="middle">kb stale</text></g><g><rect class="lf-b lf-you" x="640" y="110" width="104" height="48" rx="8"/><text class="lf-t" x="692" y="131" text-anchor="middle">Audit</text><text class="lf-s" x="692" y="147" text-anchor="middle">you pick</text></g><path class="lf-e" d="M104 134H124" marker-end="url(#lfw)"/><path class="lf-e" d="M232 134H252" marker-end="url(#lfw)"/><path class="lf-e" d="M360 134H380" marker-end="url(#lfw)"/><path class="lf-e" d="M488 134H508" marker-end="url(#lfw)"/><path class="lf-e" d="M616 134H636" marker-end="url(#lfw)"/><path class="lf-e" d="M652 110V98Q652 92 646 92H186Q180 92 180 98V106" marker-end="url(#lfw)"/><text class="lf-l" x="416" y="84" text-anchor="middle">keep, rewrite, merge</text><path class="lf-e" d="M716 110V56" marker-end="url(#lfw)"/><text class="lf-l" x="708" y="78" text-anchor="end">promote</text><path class="lf-e" d="M692 158V208" marker-end="url(#lfw)"/><text class="lf-l" x="700" y="188" text-anchor="start">trash</text><g><rect class="lf-b lf-gone" x="640" y="212" width="104" height="48" rx="8"/><text class="lf-t" x="692" y="233" text-anchor="middle">Trash</text><text class="lf-s" x="692" y="249" text-anchor="middle">kb trash</text></g><path class="lf-e" d="M640 236H492" marker-end="url(#lfw)"/><text class="lf-l" x="566" y="228" text-anchor="middle">after 30 days</text><g><rect class="lf-b lf-gone" x="384" y="212" width="104" height="48" rx="8"/><text class="lf-t" x="436" y="233" text-anchor="middle">Deleted</text><text class="lf-s" x="436" y="249" text-anchor="middle">for good</text></g><path class="lf-e lf-d" d="M692 260V276Q692 282 686 282H186Q180 282 180 276V162" marker-end="url(#lfw)"/><text class="lf-l" x="282" y="274" text-anchor="middle">kb restore</text></svg>
@@ -262,24 +298,27 @@ Before you change this file, read the notes that apply with `kb show &lt;id&gt;`
 
     <li class="turn you" id="install"><span class="g" aria-hidden="true">&gt;</span><div class="msg">how do I install it?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
-      <p>You need Bun and git. There is no build step and no dependency.</p>
-      <div class="tool"><div class="h"><b>install</b><span class="args">two steps</span></div><div class="b"><pre><span class="c"># in Claude Code</span>
-/plugin install kb --marketplace jrnxf/plugins
-
-<span class="c"># ~/.claude/settings.json: kb replaces auto memory,</span>
-<span class="c"># and the agent reads and saves notes with no question</span>
-{
+      <p>You need Claude Code 2.1.275 or later, Bun 1.x and git, on macOS or Linux. There is no build step and no dependency.</p>
+      <div class="tool"><div class="h"><b>install</b><span class="args">two steps</span></div><div class="b steps">
+        <div class="step"><div class="sh"><span># 1. in Claude Code</span><button class="w-btn cp" type="button" aria-label="Copy the install command" hidden>Copy</button></div><pre class="wrap">/plugin install kb --marketplace jrnxf/plugins</pre></div>
+        <div class="step"><div class="sh"><span># 2. ~/.claude/settings.json</span><button class="w-btn cp" type="button" aria-label="Copy the settings" hidden>Copy</button></div><pre class="wrap">{
   "autoMemoryEnabled": false,
-  "permissions": { "allow": [
-    "Bash(kb help)", "Bash(kb show *)",
-    "Bash(kb search *)", "Bash(kb add *)"
-  ] }
-}</pre></div></div>
+  "permissions": {
+    "allow": [
+      "Bash(kb help)",
+      "Bash(kb show *)",
+      "Bash(kb search *)",
+      "Bash(kb add *)"
+    ]
+  }
+}</pre></div>
+      </div></div>
+      <p>The settings turn off auto memory, since kb replaces it, and let me read and save notes with no question.</p>
     </div></li>
 
     <li class="turn you prompt"><span class="g" aria-hidden="true">&gt;</span><div class="msg">/clear</div></li>
     <li class="turn ai again"><span class="g" aria-hidden="true">●</span><div class="msg">
-      <p>SessionStart · kb context · the same <span class="num">8,157</span> characters come back.</p>
+      <p>SessionStart · kb context · the same <span class="num">{{n.chars}}</span> characters come back.</p>
     </div></li>
   </ol>
 
@@ -288,10 +327,17 @@ Before you change this file, read the notes that apply with `kb show &lt;id&gt;`
     <p>Plain files. A fixed budget. Nothing lost at /clear.</p>
     <div class="cta" style="margin:0"><a class="w-btn primary" href="#install">Install the plugin</a><a class="w-btn" href="https://github.com/jrnxf/kb">View on GitHub</a></div>
   </section>
-  <footer><span>kb · memory for coding agents · <a href="https://github.com/jrnxf/kb/blob/main/LICENSE">MIT license</a></span><a href="https://github.com/jrnxf/kb">github.com/jrnxf/kb</a></footer>
+  <footer><span>kb · memory for Claude Code · pre-release · <a href="https://github.com/jrnxf/kb/blob/main/LICENSE">MIT license</a></span><a href="https://github.com/jrnxf/kb">github.com/jrnxf/kb</a></footer>
 </div></main>
 <script>
 /*SHARED_JS*/
+
+// ---------- copy buttons: each copies the block under it. Without JavaScript or a clipboard they stay hidden. ----------
+if (navigator.clipboard) for (const b of document.querySelectorAll(".cp")) {
+  const pre = b.closest(".step").querySelector("pre"), label = b.textContent; let t;
+  b.hidden = false;
+  b.addEventListener("click", () => navigator.clipboard.writeText(pre.textContent).then(() => { b.textContent = "Copied"; clearTimeout(t); t = setTimeout(() => (b.textContent = label), 1600); }, () => {}));
+}
 
 // ---------- the session reveal ----------
 // Each prompt types out once when it scrolls into view, then the reply under it fades in with a short stagger.

@@ -1,4 +1,5 @@
 /* Shared widgets. Each page defines the tokens: --bg --surface --ink --mute --line --sunk --body --index --gone --f-body --f-mono --f-display --r */
+[hidden] { display: none !important; }
 :root { --ease-out: cubic-bezier(0.23, 1, 0.32, 1); --ease-io: cubic-bezier(0.77, 0, 0.175, 1); }
 .w-btn { font: 500 13.5px var(--f-body); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r, 8px); height: 32px; padding: 0 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: transform 120ms ease-out, background-color 120ms ease; }
 .w-btn:hover { background: var(--sunk); }
@@ -17,8 +18,11 @@
 .term-bar { display: flex; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--term-line, #262724); }
 .term-bar i { width: 10px; height: 10px; border-radius: 50%; background: #3a3b37; }
 .term-body { padding: 14px 16px 16px; height: var(--term-h, 360px); overflow: hidden; }
-.term-body div { white-space: pre-wrap; overflow-wrap: anywhere; opacity: 0; transform: translateY(4px); transition: opacity 200ms ease-out, transform 200ms var(--ease-out); }
-.term-body div.on { opacity: 1; transform: none; }
+.term-body div { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Rows show at once without JavaScript or with reduced motion. "anim" types them: each row wipes in from the left.
+   A wipe, not a fade, so a row never shows at a low contrast. */
+.term.anim .term-body div { clip-path: inset(0 100% 0 0); transition: clip-path 220ms var(--ease-out); }
+.term.anim .term-body div.on { clip-path: inset(0); }
 .term .c-dim { color: #85857d; } .term .c-b { color: #7fd8a6; } .term .c-i { color: #9fb4ff; } .term .c-h { color: #f2f2ea; font-weight: 500; } .term .c-p { color: #f3b27a; }
 
 /* loop */
@@ -72,6 +76,9 @@
 .p-cap b { font: 600 19px/1.25 var(--f-display); text-wrap: balance; }
 .p-cap p { margin: 2px 0 0; color: var(--mute); font-size: 14.5px; text-wrap: pretty; }
 .p-field { position: relative; }
+/* The static state that the build writes for a reader without JavaScript: the last step, laid out by CSS. */
+.p-field.still { display: grid; grid-template-columns: repeat(20, minmax(0, 1fr)); gap: 5px; }
+.p-field.still .cell { position: static; aspect-ratio: 1; }
 .cell { position: absolute; left: 0; top: 0; border-radius: 3px; background: var(--k); transition: transform 700ms var(--ease-io), background-color 260ms ease, box-shadow 260ms ease; }
 .cell.body { background: var(--body); } .cell.index { background: var(--index); } .cell.gone { background: var(--gone); }
 /* A note that waits for its trigger has no line, so its square is hollow. */
@@ -96,7 +103,7 @@
 .p-tune label span { display: flex; justify-content: space-between; }
 .p-tune output { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .w input[type=range] { width: 100%; accent-color: var(--ink); }
-@media (max-width: 600px) { .p-bars { grid-template-columns: 1fr 120px; } .p-bars .lab { grid-column: 1 / -1; margin-bottom: -6px; } .p-dots { margin-left: 0; width: 100%; } }
+@media (max-width: 600px) { .p-field.still { grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 3px; } .p-bars { grid-template-columns: 1fr 120px; } .p-bars .lab { grid-column: 1 / -1; margin-bottom: -6px; } .p-dots { margin-left: 0; width: 100%; } }
 
 /* growth */
 .g-box { position: relative; height: 220px; border-radius: var(--r, 12px); background: var(--sunk); overflow: hidden; }
