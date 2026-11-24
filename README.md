@@ -14,7 +14,11 @@ notes, and a note loads when it applies.
   One idea per note. Read, edit and grep them freely.
 - **Scope** is `global` or a repo id. The repo id is the normalised origin remote
   (`github.com/owner/name`), so SSH clones, HTTPS clones and worktrees share one scope.
-  A repo with no remote uses its directory name.
+  A repo with no remote uses its directory name. When a repo gets a remote, or its remote moves,
+  its id changes and its notes stay under the old id. A session start in a repo with no notes
+  says so when another scope has the same repo name. `kb scope move <old> <new>` then gives
+  every note of the old scope, also in the trash, the new id in one commit. It refuses to
+  overwrite a note, and `--dry-run` shows what would move.
 - **At session start** a hook injects `kb context` for `global` and the current repo. The task is
   not known yet, so no gotcha, convention, decision or how-to gets its body there. Such a note
   loads at its trigger, at a path, or with `kb show`. A session start gives four parts:
@@ -196,7 +200,7 @@ notes, and a note loads when it applies.
   card per note: each card shows the note, the new text struck against the old, and the agent's
   pick with its reason. `a` accepts the agent's pick, `k` keeps the note as is and records that
   you checked it, `t` trashes it, a meter counts the notes that still reach no session (by the characters that each pick frees), and Apply makes
-  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. In a repo it audits that repo. Outside any repo it audits the global notes, in an empty folder that no repo reaches. The Audit button in the page does the same for the global notes, and for any repo a session has opened once. `kb budget` says
+  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. The agent runs on Opus by default, and `auditModel` in `kb.config.json` sets another model. It is a full Claude session, so it counts against your Claude plan or API bill, and kb says so when it starts. The agent loads no settings file, so your allow rules and your default permission mode do not reach it, and it runs in `dontAsk` mode: anything not on its list is denied. It may run only the kb commands in the `allowed-tools` line of the audit skill (no `kb delete`, `kb restore`, `kb serve` or `kb sync`), and it may read files only in the repo or in the empty folder of a global audit. It has no Write tool for the repo. Its notes are committed in the store but never pushed: the next sync of a normal session does that. A wrong `auditModel` stops the audit with an error. In a repo it audits that repo. Outside any repo it audits the global notes, in an empty folder that no repo reaches. The Audit button in the page does the same for the global notes, and for any repo a session has opened once. `kb budget` says
   what a session start gives of each note: a brief, an index line, nothing until its trigger, or
   nothing at all. It asks for room only when the index is over its character budget and a note
   reaches no session. It counts the hidden notes of the repo and the hidden global notes apart.
@@ -385,6 +389,7 @@ kb trash|restore|delete|empty-trash --scope <repo id>   a whole project
 kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]         what a session start gives of each note, and what reaches no session
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
+kb scope move <old> <new> [--dry-run]   give every note of a scope a new repo id
 kb audit [--no-wait]         kb audit propose --file <path>   kb audit status   (an agent audits the scope)
 kb instructions [--repo .]   kb sync      kb checkpointed <session-id> [--ended <time>]
 kb log [--session id] [--since days]      (what the log says of each note, or of one session)

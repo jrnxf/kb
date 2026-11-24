@@ -48,6 +48,8 @@ export interface AuditRunState {
   cards?: number;
   /** The last lines the agent wrote, when it ended with no proposal. */
   said?: string;
+  /** What starting an audit costs, for the user to read. Only the answer to a start has it. */
+  notice?: string;
 }
 
 export interface NoteEdit {
