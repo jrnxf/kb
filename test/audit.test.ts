@@ -665,9 +665,10 @@ describe("the deck", () => {
 describe("the audit page in a browser", () => {
   let browser: Browser;
   let served: Served | undefined;
+  // A cold browser start can take longer than the 5 s that a hook gets by default.
   beforeAll(async () => {
     browser = await chromium.launch();
-  });
+  }, 30_000);
   afterEach(() => served?.stop());
   afterAll(async () => {
     await browser?.close();
