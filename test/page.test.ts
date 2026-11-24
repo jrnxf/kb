@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pageData, storeVersion } from "../cli/page.ts";
+import { pageData, renderBody, safeHref, storeVersion } from "../cli/page.ts";
 import { DIST } from "../cli/serve.ts";
 import type { PageNote } from "../cli/wire.ts";
 import { sourceHash } from "../web/source-hash.ts";
@@ -18,6 +18,54 @@ describe("the data behind the page", () => {
     expect(note!.html).not.toContain("<img");
     // React inserts the title as text, so it stays as written.
     expect(note!.title).toBe("A <b>bold</b> title");
+  });
+
+  test("shows a link that could run script as its text, in every spelling", () => {
+    const links = [
+      "[a](javascript:alert(1))",
+      "[b](JaVaScRiPt:alert(1))",
+      "[c](&#106;avascript:alert(1))",
+      "[d](&#x6A;avascript&colon;alert(1))",
+      "[e](<java\tscript:alert(1)>)",
+      "[f](java&#x0A;script:alert(1))",
+      "[g](data:text/html,<script>alert(1)</script>)",
+      "[h](vbscript:msgbox(1))",
+      "[i]( javascript:alert(1))",
+      "[j](javascript&colon;alert(1))",
+    ];
+    for (const link of links) {
+      const html = renderBody(link);
+      expect(html).not.toContain("<a");
+      expect(html).not.toContain("href");
+      expect(html).toMatch(/<span>[a-j]<\/span>/);
+    }
+    expect(safeHref("&#0;javascript:alert(1)")).toBe(false);
+    expect(safeHref("\u0001javascript:alert(1)")).toBe(false);
+  });
+
+  test("keeps a web, mail or page link", () => {
+    expect(renderBody("[web](https://example.com/a?b=1&c=2 \"t\")")).toContain('<a href="https://example.com/a?b=1&amp;c=2" title="t">web</a>');
+    expect(renderBody("[plain](http://example.com)")).toContain('<a href="http://example.com">plain</a>');
+    expect(renderBody("[mail](mailto:user@example.com)")).toContain('<a href="mailto:user@example.com">mail</a>');
+    expect(renderBody("[note](#note=a)")).toContain('<a href="#note=a">note</a>');
+    expect(renderBody("[path](/docs/a.md)")).toContain('<a href="/docs/a.md">path</a>');
+    expect(renderBody("[FAQ](Q&A.md)")).toContain('<a href="Q&amp;A.md">FAQ</a>');
+    expect(renderBody("[file](docs/a.md?x=1)")).toContain('<a href="docs/a.md?x=1">file</a>');
+  });
+
+  test("loads only an image of this server or one held in the note, and shows any other as its alt text", () => {
+    expect(renderBody("![a <b> & c](https://tracker.example.com/p.png)")).toBe("<p>a &lt;b&gt; &amp; c</p>\n");
+    expect(renderBody("![x](//tracker.example.com/p.png)")).toBe("<p>x</p>\n");
+    expect(renderBody("![](https://tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
+    expect(renderBody("![](//tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
+    expect(renderBody("![ ](https://tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
+    expect(renderBody("![&#0;](https://tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
+    expect(renderBody("![](http:p.png)")).toBe("<p>[image: blocked]</p>\n");
+    expect(renderBody("![](javascript:alert(1))")).toBe("<p>[image: blocked]</p>\n");
+    expect(renderBody("![x](javascript:alert(1))")).toBe("<p>x</p>\n");
+    expect(renderBody("![x](data:image/svg+xml,%3Csvg%20onload=alert(1)%3E)")).toBe("<p>x</p>\n");
+    expect(renderBody("![dot](data:image/png;base64,iVBORw0KGgo=)")).toContain('<img src="data:image/png;base64,iVBORw0KGgo=" alt="dot" />');
+    expect(renderBody("![local](/assets/a.png)")).toContain('<img src="/assets/a.png" alt="local" />');
   });
 
   test("puts global first, then the scopes in order, then the trash with the most recently trashed first", () => {

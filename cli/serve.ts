@@ -3,7 +3,7 @@
 // the store from /api/page. Anyone who can reach the server can read. Only a page opened with the
 // link that `kb serve` prints can write: the link carries the key, as a Jupyter link does.
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
 import { applyAudit, auditData } from "./audit.ts";
@@ -158,12 +158,76 @@ async function body(request: Request): Promise<Record<string, unknown> | null> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
+/**
+ * The rules the browser keeps for the page: scripts, styles, images and requests come only from
+ * this server, and no other site may frame it. So a note that gets script past the renderer still
+ * cannot run it. The inline script of the page, which sets the theme before the first paint, runs
+ * by its hash.
+ */
+export function pagePolicy(html: string): string {
+  const hashes: string[] = [];
+  let code: string | undefined;
+  const flush = () => {
+    if (code !== undefined) hashes.push(` 'sha256-${createHash("sha256").update(code.replace(/\r\n?/g, "\n")).digest("base64")}'`);
+    code = undefined;
+  };
+  // A script with a src is no inline script. The browser hashes the text after its parser turns CRLF into LF.
+  new HTMLRewriter()
+    .on("script", {
+      element(script) {
+        flush();
+        if (!script.hasAttribute("src")) code = "";
+        script.onEndTag(flush);
+      },
+      text(chunk) {
+        if (code !== undefined) code += chunk.text;
+      },
+    })
+    .transform(html);
+  flush();
+  return [
+    "default-src 'none'",
+    `script-src 'self'${hashes.join("")}`,
+    "style-src 'self'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+/** Every answer of the server carries these. An answer that is not the page needs no rights at all. */
+const SAFETY: Record<string, string> = {
+  "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
+  "referrer-policy": "no-referrer",
+};
+
+function withSafety(response: Response): Response {
+  for (const [name, value] of Object.entries(SAFETY)) if (!response.headers.has(name)) response.headers.set(name, value);
+  return response;
+}
+
+/** The page and its policy, worked out again only when the file changes. The file is small, so each request reads it, and a copy that keeps the times is still seen. */
+let cached: { html: string; policy: string } | undefined;
+
+async function indexPage(): Promise<{ html: string; policy: string } | undefined> {
+  const file = Bun.file(join(DIST, "index.html"));
+  if (!(await file.exists())) return undefined;
+  const html = await file.text();
+  if (cached?.html !== html) cached = { html, policy: pagePolicy(html) };
+  return cached;
+}
+
 /** The page at /, and the files of the built page. The page keeps its view in the hash, so it has no other paths. */
 async function staticFile(pathname: string): Promise<Response> {
   if (pathname === "/") {
-    const page = Bun.file(join(DIST, "index.html"));
-    if (!(await page.exists())) return json({ error: "the page is not built. Run `bun run build` in web/." }, 500);
-    return new Response(page, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    const page = await indexPage();
+    if (!page) return json({ error: "the page is not built. Run `bun run build` in web/." }, 500);
+    return new Response(page.html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": page.policy } });
   }
   let name: string;
   try {
@@ -227,6 +291,16 @@ function makeToken(store: Store): string {
 /** The page's address with the key in its fragment. */
 export const linkWithKey = (url: string, token: string) => `${url}#token=${token}`;
 
+/** The answer to a request. An error becomes an answer too. */
+async function answer(store: Store, token: string, port: number, request: Request): Promise<Response> {
+  try {
+    return await handle(store, token, port, request);
+  } catch (error) {
+    if (error instanceof KbError) return json({ error: error.message }, error.message.startsWith("no note") ? 404 : 400);
+    return json({ error: `kb failed: ${(error as Error)?.message ?? error}` }, 500);
+  }
+}
+
 export function serve(store: Store, options: { port?: number } = {}): Served {
   const token = makeToken(store);
   tidy(store);
@@ -235,12 +309,7 @@ export function serve(store: Store, options: { port?: number } = {}): Served {
     hostname: "127.0.0.1",
     port: options.port ?? DEFAULT_PORT,
     async fetch(request, self): Promise<Response> {
-      try {
-        return await handle(store, token, self.port!, request);
-      } catch (error) {
-        if (error instanceof KbError) return json({ error: error.message }, error.message.startsWith("no note") ? 404 : 400);
-        return json({ error: `kb failed: ${(error as Error)?.message ?? error}` }, 500);
-      }
+      return withSafety(await answer(store, token, self.port!, request));
     },
   });
   // `kb audit` reads this to link to the server that is up, also one started with --port.

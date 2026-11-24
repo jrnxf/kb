@@ -17,11 +17,11 @@ import { searchNotes } from "./search.ts";
 import { DEFAULT_PORT, isKbServer, kbServerAt, linkWithKey, runningPort, serve, serveToken, storeId } from "./serve.ts";
 import { resultGroups } from "./wire.ts";
 import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, isLive, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
-import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
+import { CHANGED_MARK, changedAsk, changedSinceCheck, clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
-import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+import { afterWrite, asOfTime, checkedHashes, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 /** `kb add` exits with this code when it wrote nothing because of close notes: an answer to read, not an error (1). */
 const NEIGHBORS_EXIT = 2;
@@ -63,7 +63,8 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb stale [--repo .]                    notes that may no longer be true, each with a reason: a changed
                                          or missing anchor, no use, an old check, a close note, or
                                          the verdicts wrong and not-needed of sessions on any machine
-  kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
+  kb verify <id>... [--repo .]           record that these notes are still true, at HEAD. Run it for a
+                                         note marked "changed", after you read the code and the note holds
   kb budget [--repo .]                   what a session start gives of each note: a brief, an index
                                          line, nothing until its trigger, or nothing at all
   kb audit [--repo .] [--no-wait]        start an agent that audits this repo's notes, and print the
@@ -110,7 +111,9 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
   kind: ${KINDS.join(" | ")}
   confidence: ${CONFIDENCES.join(" | ")} (default medium)
   anchors: repo-relative paths, or path#symbol. A repo note loads when the agent reads or changes
-    a file that an anchor names, or runs a command that names it.
+    a file that an anchor names, or runs a command that names it. kb saves a hash of the code of
+    each anchor, and marks the note when that code changes. With path#symbol only the lines of
+    the symbol count, so name the symbol when the fact is about one function or key.
   triggers: when the note loads outside the session start, each "<kind>: <text>":
     "cmd: pkill -f"  at a shell command that runs it. The command still runs, and the agent
       gets the note with its result. One simple command of the line must hold the words in
@@ -120,8 +123,9 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
       as the reason. A run 3 seconds later passes. For a command where one run does damage.
     "err: address already in use"  after a tool call that failed with this text in its error.
       At least ${ERR_MIN_CHARS} characters. Case does not count.
-  A saved note can come with "warnings": a gotcha or a how-to with no trigger and no anchor, open
-  work that a repo session saves with the scope "global", and a body over ${BODY_CHARS} characters.
+  A saved note can come with "warnings": a gotcha or a how-to with no trigger and no anchor, a
+  repo note that is not open work with no anchor, open work that a repo session saves with the
+  scope "global", and a body over ${BODY_CHARS} characters.
   The note is stored in each case.
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
   New triggers alone do not.
@@ -303,6 +307,8 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   };
   const commit = asOf === undefined ? repo.head : commitAt(repo.root, asOf);
   if (scope !== "global" && repo.scope === scope && commit) raw.verified_at_commit = commit;
+  // Only kb writes the hashes: of the files as the writer saw them, or as they were at the time of --as-of.
+  raw.anchor_hashes = scope !== "global" && repo.scope === scope && repo.root ? checkedHashes(raw.anchors, repo.root, asOf === undefined ? undefined : commit) : undefined;
   if (input.triggers !== undefined) raw.triggers = requireTriggers(input.triggers);
   const note: Note = validateNote(raw);
 
@@ -391,7 +397,15 @@ function cmdShow(store: Store, args: Args): Output {
   // A read changes nothing in the store. The log on this machine records it. A look into the
   // trash is marked, so it never counts as activity of the note.
   logEvent(store, { ev: "show", note: note.id, why: whyOf(args), ...(note.trashed ? { trashed: true as const } : {}) });
-  return { json: note, text: `# ${relative(store.home, note.path)}\n${readFileSync(note.path, "utf8").trimEnd()}` };
+  // The reader is about to act on the note, so this is the moment to say that its files changed.
+  // The check is for the repo of the note only: there its hashes and its commit mean something.
+  let changed: string[] = [];
+  if (!note.trashed && note.scope !== "global" && note.anchors.length > 0) {
+    const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store, { record: false });
+    if (repo.root && repo.scope === note.scope) changed = changedSinceCheck(note, repo.root);
+  }
+  const mark = changed.length > 0 ? `\n${CHANGED_MARK}${note.verified_at_commit ? ` (${note.verified_at_commit})` : ""}: ${changed.join(", ")}. ${changedAsk("this note", note.id)}\n` : "";
+  return { json: changed.length > 0 ? { ...note, changed_since_check: changed } : note, text: `# ${relative(store.home, note.path)}${mark}\n${readFileSync(note.path, "utf8").trimEnd()}` };
 }
 
 function cmdSearch(store: Store, args: Args): Output {
@@ -541,6 +555,8 @@ function cmdVerify(store: Store, args: Args): Output {
   for (const { path: _path, trashed: _trashed, ...note } of notes) {
     note.last_verified = now;
     if (note.scope !== "global" && repo.head) note.verified_at_commit = repo.head;
+    // The check saw the files as they are now, so the note takes their hashes. This ends the mark of a changed file.
+    if (note.scope !== "global" && repo.root) note.anchor_hashes = checkedHashes(note.anchors, repo.root);
     store.writeNote(note);
   }
   const ids = notes.map((n) => n.id);
