@@ -1,12 +1,13 @@
 // `kb context`: the text a session gets at start. The briefs, the index and the budget live here.
 
+import { readFileSync } from "node:fs";
 import { inHoldback, oldStart } from "./holdback.ts"; // HOLDBACK
 import { lastActivity } from "./log.ts";
 import { KINDS, localDate, normalizeTitle } from "./note.ts";
-import { rememberRepo, repoRoot } from "./repos.ts";
+import { rememberRepo, repoRoot, scopesElsewhere } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
 import { anchorReader, changedAtLoad, missingAnchors } from "./stale.ts";
-import { HARD_CONTEXT_CAP, type Config, type Store, type StoredNote } from "./store.ts";
+import { HARD_CONTEXT_CAP, type Config, type Store, type StoredNote, writeAtomic } from "./store.ts";
 import { readTriggers } from "./trigger.ts";
 
 /**
@@ -217,7 +218,9 @@ const overLine = (hidden: number) => `${hidden} more index ${hidden === 1 ? "lin
  * only. `session` is the id of the session that starts, when there is one: it picks the arm.
  */
 export function buildContext(store: Store, repoPath: string, session?: string): ContextResult {
-  return startAt(store, repoPath, session).context;
+  const start = startAt(store, repoPath, session);
+  if (start.movedFrom && start.context.scope) rememberHint(store, start.context.scope, start.movedFrom);
+  return start.context;
 }
 
 /**
@@ -239,6 +242,8 @@ interface Start {
   /** The ids of the notes on a changed file. */
   changed: Set<string>;
   config: Config;
+  /** The other scope that the moved hint named, so a session start can record that it showed the hint. */
+  movedFrom: string | null;
 }
 
 function startAt(store: Store, repoPath: string, session?: string): Start {
@@ -273,7 +278,7 @@ interface Session {
 function startOf(store: Store, scope: string | null, root: string | null = null, session?: string): Start {
   const config = store.config();
   const none = new Set<string>();
-  if (!store.exists()) return { context: EMPTY, ranked: [], changed: none, config };
+  if (!store.exists()) return { context: EMPTY, ranked: [], changed: none, config, movedFrom: null };
   // HOLDBACK: a share of the sessions keeps the old policy. `kb budget` passes no session, so it shows the new one.
   const holdback = inHoldback(session, config.holdback);
 
@@ -281,8 +286,10 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
   const all = store.notes();
   const visible = all.filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === scope));
   const syncError = store.syncError();
-  const moved = scope ? movedHint(all, scope) : null;
-  if (visible.length === 0 && !syncError && !moved) return { context: { ...EMPTY, scope, holdback }, ranked: [], changed: none, config };
+  const hint = scope ? movedHint(all, scope, new Set([...scopesElsewhere(store, scope, root), ...shownHints(store, scope)])) : null;
+  const moved = hint?.text ?? null;
+  const movedFrom = hint?.from ?? null;
+  if (visible.length === 0 && !syncError && !moved) return { context: { ...EMPTY, scope, holdback }, ranked: [], changed: none, config, movedFrom };
 
   const ranked = rank(visible, lastActivity(store));
   const goneOf = new Map<string, string>();
@@ -299,7 +306,7 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
     }
   }
   const laid: Session = { scope, ranked, goneOf, changed, syncError, moved, charBudget: contextBudget(config.budgets.contextChars), briefChars: config.budgets.briefChars };
-  if (holdback) return { context: heldStart(laid), ranked, changed, config }; // HOLDBACK
+  if (holdback) return { context: heldStart(laid), ranked, changed, config, movedFrom }; // HOLDBACK
 
   const context = newStart(laid);
   // Only global notes are hidden here. Which audit makes room? Lay out the global notes alone, as
@@ -308,24 +315,52 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
     const alone = newStart({ ...laid, scope: null, ranked: ranked.filter((n) => n.scope === "global"), goneOf: new Map(), changed: none });
     context.globalAudit = alone.hidden.length > 0;
   }
-  return { context, ranked, changed, config };
+  return { context, ranked, changed, config, movedFrom };
+}
+
+const HINTS = "moved-hints.json";
+
+function readHints(store: Store): Record<string, string[]> {
+  try {
+    return JSON.parse(readFileSync(store.statePath(HINTS), "utf8")) as Record<string, string[]>;
+  } catch {
+    return {};
+  }
+}
+
+/** The scopes that a session start named already for this scope. The hint shows once for each pair, so it can be ignored. */
+const shownHints = (store: Store, scope: string): string[] => readHints(store)[scope] ?? [];
+
+/** Record that the hint named `from` for `scope`. It is per machine and never committed. */
+function rememberHint(store: Store, scope: string, from: string): void {
+  try {
+    const seen = readHints(store);
+    writeAtomic(store.statePath(HINTS), `${JSON.stringify({ ...seen, [scope]: [...(seen[scope] ?? []), from] }, null, 2)}\n`);
+  } catch {
+    // the hint shows again at the next start, which costs nothing
+  }
 }
 
 /**
- * When no active note has the repo's scope, but another scope with the same repo name (the last
- * part of the id) has some, one line that names it and the move. The repo may have got a remote,
- * or its remote moved. It may also be another repo of that name, so kb moves nothing by itself.
+ * When no note that loads has the repo's scope, but another scope with the same repo name (the
+ * last part of the id) has some, one line that names it and the move. The repo may have got a
+ * remote, or its remote moved. It may also be another repo of that name, so kb moves nothing by
+ * itself. The move goes only to a scope with a remote (an id with a "/"), never to a bare scope
+ * that stands for no remote. `skip` holds the scopes that the line must not name: a scope that
+ * another checkout uses, and a scope that the line named already.
  */
-export function movedHint(notes: StoredNote[], scope: string): string | null {
+export function movedHint(notes: StoredNote[], scope: string, skip: ReadonlySet<string> = new Set()): { from: string; text: string } | null {
   const name = (id: string) => id.split("/").at(-1);
-  if (scope === "global" || notes.some((n) => n.scope === scope)) return null;
+  // A promoted note loads from an instruction file, so it does not count as a note of the scope.
+  const loads = notes.filter((n) => !n.promoted_to);
+  if (scope === "global" || !scope.includes("/") || loads.some((n) => n.scope === scope)) return null;
   const counts = new Map<string, number>();
-  for (const n of notes) if (n.scope !== "global" && n.scope !== scope && name(n.scope) === name(scope)) counts.set(n.scope, (counts.get(n.scope) ?? 0) + 1);
+  for (const n of loads) if (n.scope !== "global" && n.scope !== scope && !skip.has(n.scope) && name(n.scope) === name(scope)) counts.set(n.scope, (counts.get(n.scope) ?? 0) + 1);
   const others = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   if (others.length === 0) return null;
   const [top, n] = others[0]!;
   const also = others.length > 1 ? ` (also ${others.slice(1, 3).map(([s]) => s).join(", ")}${others.length > 3 ? ", ..." : ""})` : "";
-  return `No note has the scope ${scope}, but ${top} has ${n} ${n === 1 ? "note" : "notes"} and the same repo name${also}. If they belong to this repo, tell the user: \`kb scope move ${top} ${scope} --dry-run\` shows what moves, and with no --dry-run it moves them.`;
+  return { from: top, text: `No note has the scope ${scope}, but ${top} has ${n} ${n === 1 ? "note" : "notes"} and the same repo name${also}. If they belong to this repo, tell the user: \`kb scope move ${top} ${scope} --dry-run\` shows what moves, and with no --dry-run it moves them. This line shows once.` };
 }
 
 /**

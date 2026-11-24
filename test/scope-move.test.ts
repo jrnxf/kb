@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { proposeAudit } from "../cli/audit.ts";
 import { movedHint } from "../cli/context.ts";
 import type { Store } from "../cli/store.ts";
 import { kb, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
@@ -65,8 +66,8 @@ describe("kb scope move", () => {
 
   test("refuses global, the same scope, a scope with no notes and a scope that is not a repo id", () => {
     const store = setup();
-    expect(kb(store, ["scope", "move", "global", NEW]).stderr).toContain('"global" is not a project');
-    expect(kb(store, ["scope", "move", OLD, "global"]).stderr).toContain('"global" is not a project');
+    expect(kb(store, ["scope", "move", "global", NEW]).stderr).toContain('"global" has no repo id to move');
+    expect(kb(store, ["scope", "move", OLD, "global"]).stderr).toContain("cannot make notes global");
     expect(kb(store, ["scope", "move", OLD, OLD]).stderr).toContain("is the scope already");
     expect(kb(store, ["scope", "move", "nothing-here", NEW]).stderr).toContain('no notes have the scope "nothing-here"');
     expect(kb(store, ["scope", "move", OLD, "../escape"]).stderr).toContain("is not a repo id");
@@ -101,6 +102,72 @@ describe("a session start in a repo with no notes", () => {
     expect(movedHint(notes, OLD)).toBeNull();
     expect(movedHint(notes, "example.com/team/api")).toBeNull();
     expect(movedHint(notes, "global")).toBeNull();
-    expect(movedHint(notes, "example.com/fork/web")).toContain("example.com/team/web has 1 note");
+    expect(movedHint(notes, "example.com/fork/web")?.text).toContain("example.com/team/web has 1 note");
+  });
+});
+
+describe("kb scope move, safety", () => {
+  test("a write that fails halfway leaves the old scope whole and no new file", () => {
+    const store = setup();
+    // A file where the trash folder of the new scope belongs: the second write fails after the first worked.
+    mkdirSync(join(store.home, "trash", "example.com", "team"), { recursive: true });
+    writeFileSync(join(store.home, "trash", "example.com", "team", "app"), "in the way");
+    const r = kb(store, ["scope", "move", OLD, NEW]);
+    expect(r.code).toBe(1);
+    expect(existsSync(join(store.home, "notes", NEW))).toBe(false);
+    expect(store.notes().find((n) => n.id === "warm-cache")!.scope).toBe(OLD);
+    expect(store.notes({ trashed: true }).find((n) => n.id === "old-idea")!.scope).toBe(OLD);
+    expect(log(store)).toEqual(["base"]);
+  });
+
+  test("refuses while an audit of the scope has picks open", () => {
+    const store = setup();
+    proposeAudit(store, { items: [{ id: "warm-cache", action: "keep", why: "x" }] }, { scope: OLD, root: null, head: "abc1234" });
+    const r = kb(store, ["scope", "move", OLD, NEW]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`${OLD} has an audit with picks still open`);
+    expect(store.notes().find((n) => n.id === "warm-cache")!.scope).toBe(OLD);
+  });
+
+  test("the checkout of the old scope goes to the new one", () => {
+    const store = setup();
+    const dir = tempRepo();
+    mkdirSync(store.statePath("."), { recursive: true });
+    writeFileSync(store.statePath("repos.json"), JSON.stringify({ [OLD]: dir, "example.com/team/web": dir }));
+    expect(kb(store, ["scope", "move", OLD, NEW]).code).toBe(0);
+    expect(JSON.parse(readFileSync(store.statePath("repos.json"), "utf8"))).toEqual({ [NEW]: dir, "example.com/team/web": dir });
+  });
+});
+
+describe("the moved hint, direction and stop", () => {
+  test("never suggests a move away from a remote scope, or to a scope with no remote", () => {
+    const store = setup();
+    putNote(store, { id: "n", scope: NEW });
+    const notes = store.notes();
+    // A scratch dir named app has the bare scope. The real repo's notes must stay.
+    expect(movedHint(notes.filter((n) => n.scope !== OLD), OLD)).toBeNull();
+    expect(movedHint(notes.filter((n) => n.scope !== NEW && n.scope !== OLD), OLD)).toBeNull();
+  });
+
+  test("does not name a scope that another checkout uses", () => {
+    const store = setup();
+    const here = tempRepo({ remote: "https://example.com/team/app.git" });
+    const there = tempRepo();
+    mkdirSync(store.statePath("."), { recursive: true });
+    writeFileSync(store.statePath("repos.json"), JSON.stringify({ [OLD]: there }));
+    expect(kb(store, ["context"], { cwd: here }).stdout).not.toContain("No note has the scope");
+  });
+
+  test("shows once for a pair of scopes", () => {
+    const store = setup();
+    const dir = tempRepo({ remote: "https://example.com/team/app.git" });
+    expect(kb(store, ["context"], { cwd: dir }).stdout).toContain("No note has the scope");
+    expect(kb(store, ["context"], { cwd: dir }).stdout).not.toContain("No note has the scope");
+  });
+
+  test("does not count a promoted note", () => {
+    const store = setup();
+    putNote(store, { id: "gone", scope: "example.com/team/old", promoted_to: "CLAUDE.md" });
+    expect(movedHint(store.notes(), "example.com/fork/old")).toBeNull();
   });
 });

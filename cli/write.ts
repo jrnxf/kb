@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { type AnchorHashes, hashAnchors, hashAnchorsAt } from "./anchors.ts";
 import { type WriteOp, logEvent, rollUp } from "./log.ts";
 import { BODY_CHARS, KbError, type Note, isValidScope, serializeNote, validateNote } from "./note.ts";
+import { moveRepo } from "./repos.ts";
 import { type RepoInfo, commitAt } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { pruneMemoryBackups } from "./session.ts";
@@ -227,23 +228,28 @@ export function restoreProject(store: Store, scope: string): string[] {
 export interface ScopeMove {
   from: string;
   to: string;
-  /** The ids that move, active and in the trash. */
+  /** The ids of the active notes that move. */
   notes: string[];
+  /** The ids of the notes in the trash that move. */
   trashed: string[];
 }
 
 /**
  * Give every note of one scope, active and in the trash, another scope, in one commit. For a repo
  * whose id changed: it got a remote, or the remote moved. Every target is checked before the first
- * file moves, and a note that is there already stops the move. With `dryRun`, nothing is written.
+ * file is written, and a note that is there already stops the move. The new files are written
+ * first and the old ones removed after, so a failure leaves the old scope whole: what was written
+ * is removed again. The checkout that the old scope names is the new scope's now. With `dryRun`,
+ * nothing is written.
  */
 export function moveScope(store: Store, from: string, to: string, dryRun = false): ScopeMove {
-  if (from === "global" || to === "global") throw new KbError("\"global\" is not a project. Give a global note a repo scope with kb add and its id.");
+  if (from === "global") throw new KbError("\"global\" has no repo id to move. Move a repo's notes with `kb scope move <old repo id> <new repo id>`.");
+  if (to === "global") throw new KbError("`kb scope move` needs a repo id as the new scope, and cannot make notes global. Save a global note with `kb add` and \"scope\": \"global\", then trash the old one.");
   if (!isValidScope(to)) throw new KbError(`"${to}" is not a repo id. A repo id is host/owner/name, as \`kb scope\` prints it.`);
   if (from === to) throw new KbError(`${from} is the scope already`);
-  requireProject(store, from);
   const active = store.notes().filter((n) => n.scope === from);
   const trashed = store.notes({ trashed: true }).filter((n) => n.scope === from);
+  if (active.length + trashed.length === 0) throw new KbError(`no notes have the scope "${from}". Pass the exact repo id, as \`kb list\` shows it.`);
   for (const note of [...active, ...trashed]) {
     for (const inTrash of [false, true]) {
       if (existsSync(store.notePath({ scope: to, id: note.id }, inTrash))) throw new KbError(`cannot move ${note.id}: ${to} has a note with that id${inTrash ? " in the trash" : ""}. Nothing moved.`);
@@ -251,14 +257,26 @@ export function moveScope(store: Store, from: string, to: string, dryRun = false
   }
   const result = { from, to, notes: active.map((n) => n.id).sort(), trashed: trashed.map((n) => n.id).sort() };
   if (dryRun) return result;
-  for (const note of [...active, ...trashed]) {
-    const { path, trashed: inTrash, ...rest } = note;
-    store.writeNote({ ...rest, scope: to }, inTrash);
+  const all = [...active, ...trashed];
+  const written: { path: string; trashed: boolean }[] = [];
+  try {
+    for (const note of all) {
+      const { path: _path, trashed: inTrash, ...rest } = note;
+      written.push({ path: store.writeNote({ ...rest, scope: to }, inTrash), trashed: inTrash });
+    }
+  } catch (error) {
+    for (const { path, trashed: inTrash } of written) {
+      rmSync(path, { force: true });
+      pruneEmpty(dirname(path), join(store.home, inTrash ? "trash" : "notes"));
+    }
+    throw error;
+  }
+  for (const { path, trashed: inTrash } of all) {
     rmSync(path, { force: true });
     pruneEmpty(dirname(path), join(store.home, inTrash ? "trash" : "notes"));
   }
-  const count = result.notes.length + result.trashed.length;
-  afterWrite(store, `kb: move the scope ${from} to ${to} (${count})`);
+  moveRepo(store, from, to);
+  afterWrite(store, `kb: move the scope ${from} to ${to} (${all.length})`);
   logWrites(store, "update", [...result.notes, ...result.trashed]);
   return result;
 }

@@ -204,6 +204,8 @@ function cmdScope(store: Store, args: Args): Output {
     const [, from, to, ...extra] = args.positional;
     if (!from || !to || extra.length > 0) throw new KbError("usage: kb scope move <old repo id> <new repo id> [--dry-run]");
     const dry = args.flags.has("dry-run");
+    // An open audit is keyed to the scope and its cards name note files. Finish or drop it first.
+    if (openAudits(store).includes(from)) throw new KbError(`${from} has an audit with picks still open. Finish it on the audit page, then run the move again.`);
     const m = moveScope(store, from, to, dry);
     const what = [`${m.notes.length} ${m.notes.length === 1 ? "note" : "notes"}`, ...(m.trashed.length ? [`${m.trashed.length} in the trash`] : [])].join(" and ");
     const ids = [...m.notes, ...m.trashed.map((id) => `${id} (trash)`)].join(", ");
