@@ -182,7 +182,7 @@ notes, and a note loads when it applies.
     with no mark, so an anchor on a symbol gives fewer false marks than an anchor on a file.
   - Each line is trimmed and an empty line is left out, so a new indent changes no hash.
   - An anchor with no hash is compared by the commit of the last check, as `kb stale` last found
-    it: a folder, and each anchor of a note that an older kb wrote, until its next check. That
+    it: a folder, a file over 2 MB, and each anchor of a note that an older kb wrote, until its next check. That
     compare is by content, so the commit need not be in the history of HEAD.
   - A note with no anchor gets no mark, so `kb add` warns when a repo note has none.
   `kb stale` and `/kb:audit` cover one scope: the repo's notes in a repo, the global notes outside
