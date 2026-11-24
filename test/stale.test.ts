@@ -81,16 +81,39 @@ describe("kb stale", () => {
     expect(found[2]!.detail).toBe("lookupRate is no longer in src/rates.ts");
   });
 
-  test("commit-unknown: verified_at_commit is not in the history of HEAD", () => {
+  test("commit-unknown: the clone does not have verified_at_commit", () => {
     const { repo, store } = fixture();
+    putNote(store, { id: "never", scope: SCOPE, verified_at_commit: "0123abc", anchors: ["src/rates.ts"], last_verified: FRESH });
+    // No anchor-changed here: with an unknown commit there is nothing to compare with.
+    expect(reasons(store, repo)).toEqual(["never:commit-unknown"]);
+  });
+
+  test("a commit that is not in the history of HEAD is compared by content: a squash merge, and a dropped commit", () => {
+    const { repo, store } = fixture();
+    // A note checked on a branch. The branch then goes to main as one new commit.
+    sh(repo, "git", "checkout", "-q", "-b", "work");
     writeFileSync(join(repo, "src/rates.ts"), "export const RATE = 2;\n");
+    commit(repo, "work on rates");
+    const tip = sh(repo, "git", "rev-parse", "--short", "HEAD");
+    putNote(store, { id: "squashed", scope: SCOPE, verified_at_commit: tip, anchors: ["src/rates.ts"], last_verified: FRESH });
+    putNote(store, { id: "on-ledger", scope: SCOPE, verified_at_commit: tip, anchors: ["src/ledger.ts"], last_verified: FRESH });
+    sh(repo, "git", "checkout", "-q", "main");
+    sh(repo, "git", "merge", "-q", "--squash", "work");
+    sh(repo, "git", "commit", "-q", "-m", "work on rates (#1)");
+    sh(repo, "git", "branch", "-q", "-D", "work");
+    // The files are as the note saw them, so it is no candidate, and no commit is unknown.
+    expect(reasons(store, repo)).toEqual([]);
+    // Another person changes a file after the merge.
+    writeFileSync(join(repo, "src/ledger.ts"), "export function append() { return 1; }\n");
+    commit(repo, "change ledger");
+    expect(reasons(store, repo)).toEqual(["on-ledger:anchor-changed"]);
+    // A commit that a reset dropped: main does not have the change that the note saw.
+    writeFileSync(join(repo, "src/rates.ts"), "export const RATE = 3;\n");
     commit(repo, "to be dropped");
     const dropped = sh(repo, "git", "rev-parse", "--short", "HEAD");
     sh(repo, "git", "reset", "-q", "--hard", "HEAD~1");
-    putNote(store, { id: "rebased", scope: SCOPE, verified_at_commit: dropped, anchors: ["src/rates.ts"], last_verified: FRESH });
-    putNote(store, { id: "never", scope: SCOPE, verified_at_commit: "0123abc", last_verified: FRESH });
-    // No anchor-changed here: with an unknown commit there is nothing to compare with.
-    expect(reasons(store, repo)).toEqual(["never:commit-unknown", "rebased:commit-unknown"]);
+    putNote(store, { id: "dropped", scope: SCOPE, verified_at_commit: dropped, anchors: ["src/rates.ts"], last_verified: FRESH });
+    expect(reasons(store, repo)).toEqual(["dropped:anchor-changed", "on-ledger:anchor-changed"]);
   });
 
   test("expired: no activity and no check for expireDays. decayed: active, but not verified for decayDays", () => {

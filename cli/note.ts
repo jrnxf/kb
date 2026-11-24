@@ -15,6 +15,12 @@ export interface Note {
   verified_at_commit?: string;
   anchors: string[];
   /**
+   * A hash of the code of each anchor, as the last check of the note saw it: the whole file, or
+   * the lines of the symbol. kb writes it at a check, never a caller. An anchor with no hash (a
+   * folder, a note of an older kb) is compared by `verified_at_commit`.
+   */
+  anchor_hashes?: Record<string, string>;
+  /**
    * When the note loads outside the session start, each `<kind>: <text>`: `cmd` and `stop` at a
    * shell command (only `stop` comes before the run), `err` after an error. trigger.ts reads them.
    * A path is an anchor, not a trigger.
@@ -121,6 +127,12 @@ export function validateNote(raw: Record<string, unknown>): Note {
     confidence: raw.confidence as Confidence,
     body: (raw.body as string).trim(),
   };
+  // A hash that is no text, or of an anchor that the note does not have, is left out: it must never cost the note.
+  if (raw.anchor_hashes !== null && typeof raw.anchor_hashes === "object" && !Array.isArray(raw.anchor_hashes)) {
+    const given = raw.anchor_hashes as Record<string, unknown>;
+    const hashes = Object.fromEntries(note.anchors.flatMap((anchor) => (isString(given[anchor]) ? [[anchor, given[anchor] as string]] : [])));
+    if (Object.keys(hashes).length > 0) note.anchor_hashes = hashes;
+  }
   if (raw.triggers !== undefined && (raw.triggers as string[]).length > 0) note.triggers = raw.triggers as string[];
   if (raw.verified_at_commit !== undefined) note.verified_at_commit = raw.verified_at_commit as string;
   if (raw.promoted_to !== undefined) note.promoted_to = raw.promoted_to as string;
@@ -173,6 +185,7 @@ export function serializeNote(note: Note): string {
   };
   if (note.verified_at_commit) front.verified_at_commit = note.verified_at_commit;
   front.anchors = note.anchors;
+  if (note.anchor_hashes && Object.keys(note.anchor_hashes).length > 0) front.anchor_hashes = note.anchor_hashes;
   if (note.triggers?.length) front.triggers = note.triggers;
   front.confidence = note.confidence;
   if (note.promoted_to) front.promoted_to = note.promoted_to;
