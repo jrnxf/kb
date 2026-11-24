@@ -66,6 +66,8 @@ export interface FireEvent {
   tool: string;
   /** What matched: the words of the trigger, the text of the error trigger, or the repo-relative path of the file. */
   match: string;
+  /** True when the note came with the mark that an anchored file changed after its last check. */
+  changed?: true;
 }
 
 export type LogEvent = Who &

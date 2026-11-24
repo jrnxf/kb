@@ -11,6 +11,7 @@ import { type Reader, type Seen, covers, fileInRepo, isFolder, pathInRepo, realF
 import { isNeighborsAnswer } from "./neighbors.ts";
 import { BODY_CHARS, KINDS, type Note, parseNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
+import { CHANGED_ASK, CHANGED_MARK, changedNotes } from "./stale.ts";
 import { type Store, tilde } from "./store.ts";
 import { type TableNote, triggerTable } from "./table.ts";
 import { commandAt, errorText, matchesCommand, mayMatchCommand, pathWords, simpleCommands } from "./trigger.ts";
@@ -26,6 +27,11 @@ export const NOTES_PER_FILE = 5;
  * the same message from a fast second try, so the reason of each refusal names the wait.
  */
 export const STOP_WINDOW_MS = 3000;
+
+/** At most this many changed paths are named for one note. */
+const CHANGED_PATHS = 3;
+/** Under the notes of a call, when one has the mark. It comes with the note, so the session that uses the note checks it. */
+const CHANGED_NOTE = `A note with "${CHANGED_MARK}" is on a file that changed after the note was last checked. ${CHANGED_ASK}`;
 
 /** A title longer than this is cut. With the caps above, the text stays far under the 10,000 character limit of a hook. */
 const TITLE_CHARS = 200;
@@ -46,6 +52,8 @@ export interface Fire {
   form: Form;
   /** What matched: the words of the trigger, the text of the error trigger, or the repo-relative path. */
   match: string;
+  /** True when the note came with the mark that an anchored file changed after its last check. */
+  changed?: true;
 }
 
 export interface Fired {
@@ -174,6 +182,13 @@ function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: num
   const taken = new Set<string>();
   let given = 0;
   let rest = 0;
+  // The anchored paths of a note that changed after its last check. One small file per repo, read at the first note of that repo.
+  const checks = new Map<string, ReturnType<typeof changedNotes>>();
+  const changedOf = (note: Note): string[] => {
+    if (note.scope === "global") return [];
+    if (!checks.has(note.scope)) checks.set(note.scope, changedNotes(store, note.scope));
+    return checks.get(note.scope)!(note);
+  };
   for (const hit of [...hits].sort(byOrder)) {
     const { id } = hit.note;
     if (taken.has(id)) continue;
@@ -204,9 +219,12 @@ function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: num
       given++;
     }
     const head = `${note.id} [${note.kind}] ${oneLine(note.title, TITLE_CHARS)}`;
-    if (form === "title") (stops ? stopLines : lines).push(`- ${head}`);
-    else blocks.push(`### ${head}\n${kind === "path" ? `anchor on ${oneLine(hit.match, PATH_CHARS)}` : `trigger ${kind}: ${hit.match}`}\n${cutBody(note)}`);
-    fires.push({ note: id, kind, form, match: hit.match });
+    const changed = changedOf(note);
+    const more = changed.length > CHANGED_PATHS ? `, and ${changed.length - CHANGED_PATHS} more` : "";
+    const mark = changed.length > 0 ? `${CHANGED_MARK}: ${oneLine(changed.slice(0, CHANGED_PATHS).join(", "), PATH_CHARS)}${more}` : "";
+    if (form === "title") (stops ? stopLines : lines).push(`- ${head}${mark ? ` (${mark})` : ""}`);
+    else blocks.push(`### ${head}\n${kind === "path" ? `anchor on ${oneLine(hit.match, PATH_CHARS)}` : `trigger ${kind}: ${hit.match}`}\n${mark ? `${mark}\n` : ""}${cutBody(note)}`);
+    fires.push({ note: id, kind, form, match: hit.match, ...(mark ? { changed: true as const } : {}) });
   }
   if (fires.length === 0 && again.length === 0) return null;
   const first = fires.some((fire) => fire.kind === "stop");
@@ -216,6 +234,7 @@ function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: num
   if (lines.length > 0) parts.push(`${blocks.length === 0 ? shape.onlyTitles : shape.titles}\n${lines.join("\n")}`);
   let text = parts.join("\n\n");
   if (shape.countRest && rest > 0) text += `\n${rest} more. \`kb search\` finds them.`;
+  if (fires.some((fire) => fire.changed)) text += `\n\n${CHANGED_NOTE}`;
   return { text, stop: first || again.length > 0, scope, fires };
 }
 

@@ -165,6 +165,16 @@ notes, and a note loads when it applies.
   body or the anchors. A session start also checks the
   anchors of the repo's notes on disk, and tells the agent which notes name a file or a symbol that
   is gone.
+- **A note on a changed file says so when it loads.** `kb stale` records which notes name a file
+  that changed after their last check. From then on such a note has the word `changed` in its
+  index line, and the line `changed since the last check` with the paths when a command, an error
+  or a file loads it. `kb show` runs the check itself, in the repo of the note. The mark comes with
+  what to do: read the code, then `kb verify <id>` when the note still holds, an update with
+  `kb add` when it does not, or `kb verdict wrong <id>`. So the session that uses a note checks it,
+  and the audit is the backstop. A check gives the note the commit of HEAD, which ends the mark.
+  The record is as new as the last `kb stale`: a session start runs it in the background when HEAD
+  moved, so the index of the first session after a pull can lack the mark, and the loads in that
+  session have it. A note with no anchor, or with a commit that left the history, gets no mark.
   `kb stale` and `/kb:audit` cover one scope: the repo's notes in a repo, the global notes outside
   any repo. `/kb:audit` reads the code for each candidate, checks the budget, and proposes keep, rewrite,
   merge, shorten or trash with `kb audit propose`. Each audit also moves rules to the
