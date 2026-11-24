@@ -81,9 +81,10 @@ export function resolveRepo(path: string, store: Store, options: { record?: bool
   if (known) return { scope: known, root, head };
   const scope = slugify(basename(main)) || "repo";
   if (store.exists() && options.record !== false) {
-    local.aliases[main] = scope;
     try {
-      store.saveLocal(local);
+      store.updateLocal((fresh) => {
+        fresh.aliases[main] ||= scope;
+      });
     } catch {
       // the alias is a convenience, never a reason to fail
     }

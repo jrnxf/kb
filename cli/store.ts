@@ -1,6 +1,6 @@
 // The store on disk: paths, config, notes, the usage counters of older versions, generated files and git.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -20,15 +20,15 @@ export interface Config {
   /** A note in the trash for longer than this is deleted for good. */
   trashDays: number;
   autocommit: boolean;
-  /** Per machine: kb reads it from local.json. */
+  /** Per machine: local.json wins, and kb.config.json is the fallback. */
   sync: boolean;
-  /** Per machine: kb reads it from local.json. The user's global instructions file, which a global audit moves rules into. A leading ~ is the home folder. */
+  /** Per machine, as above. The user's global instructions file, which a global audit moves rules into. A leading ~ is the home folder. */
   globalInstructions: string;
 }
 
 /**
- * The keys that differ per machine. They live in local.json, which is never synced, so a config
- * pulled from another machine cannot turn sync on or say where Apply writes.
+ * The keys that differ per machine. They live in local.json, which is never synced. A machine
+ * copies them out of kb.config.json once, and the shared file keeps them for an older kb.
  */
 export const MACHINE_KEYS = ["sync", "globalInstructions"] as const;
 type MachineKey = (typeof MACHINE_KEYS)[number];
@@ -36,8 +36,6 @@ type MachineKey = (typeof MACHINE_KEYS)[number];
 export interface Local extends Partial<Pick<Config, MachineKey>> {
   machine: string;
   aliases: Record<string, string>;
-  /** True once this machine took its per-machine keys from kb.config.json, where an older kb kept them. */
-  movedKeys?: boolean;
 }
 
 /** What kb recorded per note before it had an event log. Nothing writes it now. */
@@ -108,12 +106,12 @@ const GITIGNORE = ["INDEX.md", "index.html", "local.json", ".sync-*", "*.tmp-*",
 /** A path with a leading `~` for the home folder, as a config or a shell command writes it. */
 export const tilde = (path: string) => (path === "~" || path.startsWith("~/") ? join(userHome(), path.slice(1)) : path);
 
-/** The user's home folder. HOME wins, as in a shell. */
-export const userHome = () => process.env.HOME || homedir();
+/** The user's home folder, as an absolute path without a trailing slash. HOME wins, as in a shell. */
+export const userHome = (env: Record<string, string | undefined> = process.env) => resolve(env.HOME || homedir());
 
 /** The store's folder, always absolute: an agent that kb starts runs in another folder. */
 export function kbHome(): string {
-  return resolve(process.env.KB_HOME || join(homedir(), ".kb"));
+  return resolve(process.env.KB_HOME || join(userHome(), ".kb"));
 }
 
 export function git(cwd: string, ...args: string[]): { ok: boolean; out: string } {
@@ -170,50 +168,50 @@ export class Store {
 
   /** The synced config as the file has it. A file that is not a JSON object counts as empty. */
   private sharedConfig(): Record<string, unknown> {
-    const raw = readJson<unknown>(this.configPath());
+    const raw = this.readCached<unknown>(this.configPath());
     return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   }
 
   /**
-   * kb.config.json holds only the keys that the user set. An older kb wrote every default into it,
-   * so a later default never reached the user, and it kept the per-machine keys there. A file that
-   * names a per-machine key is such a file: its per-machine keys go to local.json, and a file that
-   * an older kb wrote whole loses the keys whose value is the default.
+   * Called by ensure(), so a read never writes. kb.config.json holds only the keys that the user
+   * set: a file that an older kb wrote whole (every default key) loses the keys whose value is the
+   * default. The per-machine keys stay in the shared file, because a machine that still runs an older
+   * kb reads them there. This machine copies them into local.json once.
    */
   private tidyConfig(): void {
     const raw = this.sharedConfig();
-    this.machineKeys(raw);
-    if (!MACHINE_KEYS.some((key) => key in raw)) return;
-    const whole = FIRST_KEYS.every((key) => key in raw);
-    const kept = Object.fromEntries(Object.entries(whole ? withoutDefaults(raw) : raw).filter(([key]) => !(MACHINE_KEYS as readonly string[]).includes(key)));
-    writeAtomic(this.configPath(), `${JSON.stringify(kept, null, 2)}\n`);
+    this.pinMachineKeys(raw);
+    if (!FIRST_KEYS.every((key) => key in raw)) return;
+    const kept = withoutDefaults(raw);
+    if (!same(kept, raw)) writeAtomic(this.configPath(), `${JSON.stringify(kept, null, 2)}\n`);
   }
 
   /**
-   * The per-machine keys of local.json. The first time, a machine takes the ones that an older kb
-   * kept in kb.config.json, before a sync can pull a file that lacks them. After that, kb.config.json
-   * has no say over them.
+   * Copy each per-machine key of kb.config.json that differs from the default into local.json, so a
+   * later pull of that file cannot change it on this machine. A key that local.json has wins. It
+   * writes nothing when there is nothing to copy. This runs in ensure(), never in a read, and it
+   * merges into the file as it is now: a hook that starts at the same time may write the machine
+   * id or an alias.
    */
-  private machineKeys(shared: Record<string, unknown>): Local {
-    const local = this.local();
-    if (local.movedKeys || !this.exists()) return local;
-    for (const key of MACHINE_KEYS) {
-      if (key in shared && !(key in local) && !same(shared[key], DEFAULT_CONFIG[key])) Object.assign(local, { [key]: shared[key] });
-    }
-    local.movedKeys = true;
-    this.saveLocal(local);
-    return local;
+  private pinMachineKeys(shared: Record<string, unknown>): void {
+    const missing = MACHINE_KEYS.filter((key) => key in shared && !(key in this.local()) && !same(shared[key], DEFAULT_CONFIG[key]));
+    if (missing.length === 0) return;
+    this.updateLocal((local) => {
+      for (const key of missing) if (!(key in local)) Object.assign(local, { [key]: shared[key] });
+    });
   }
 
   config(): Config {
     const shared = this.sharedConfig() as Partial<Config>;
-    const local = this.machineKeys(shared);
+    const local = this.local();
+    // local.json wins. Where it has no value, the shared file speaks, as it does for a machine that runs an older kb.
+    const machine = { ...shared, ...local };
     const { sync: _sync, globalInstructions: _file, ...raw } = shared;
     return {
       ...DEFAULT_CONFIG,
       ...raw,
-      sync: typeof local.sync === "boolean" ? local.sync : DEFAULT_CONFIG.sync,
-      globalInstructions: typeof local.globalInstructions === "string" && local.globalInstructions ? local.globalInstructions : DEFAULT_CONFIG.globalInstructions,
+      sync: typeof machine.sync === "boolean" ? machine.sync : DEFAULT_CONFIG.sync,
+      globalInstructions: typeof machine.globalInstructions === "string" && machine.globalInstructions ? machine.globalInstructions : DEFAULT_CONFIG.globalInstructions,
       // Only the budgets of this version are read. A config of an older kb can still name
       // `indexLines` and `globalIndexLines`: both limits are gone, and the keys are ignored.
       budgets: {
@@ -232,21 +230,51 @@ export class Store {
 
   /** Per-machine state. It is never committed, because paths and machine ids differ per machine. */
   local(): Local {
-    const raw = readJson<Partial<Local>>(join(this.home, "local.json")) ?? {};
-    return { ...raw, machine: raw.machine ?? "", aliases: raw.aliases ?? {} };
+    const raw = this.readCached<Partial<Local>>(join(this.home, "local.json")) ?? {};
+    return { ...raw, machine: raw.machine ?? "", aliases: { ...raw.aliases } };
   }
 
   saveLocal(local: Local): void {
     writeAtomic(join(this.home, "local.json"), `${JSON.stringify(local, null, 2)}\n`);
   }
 
+  /**
+   * Change local.json: read it as it is now, apply `change`, write it atomically. Several hooks
+   * start at once, so a caller never saves a copy that it read earlier.
+   */
+  updateLocal(change: (local: Local) => void): Local {
+    const local = this.local();
+    change(local);
+    this.saveLocal(local);
+    return local;
+  }
+
   /** The id of this machine, made on first use. It names the file that only this machine writes: its roll-up in activity/. */
   machine(): string {
-    const local = this.local();
-    if (local.machine) return local.machine;
-    local.machine = randomBytes(4).toString("hex");
-    this.saveLocal(local);
-    return local.machine;
+    const have = this.local().machine;
+    if (have) return have;
+    return this.updateLocal((local) => {
+      local.machine ||= randomBytes(4).toString("hex");
+    }).machine;
+  }
+
+  private cache = new Map<string, { stamp: string; value: unknown }>();
+
+  /** A JSON file, parsed again only when the file changed. Every config() call reads two files. */
+  private readCached<T>(path: string): T | null {
+    let stamp: string;
+    try {
+      const stat = statSync(path, { bigint: true });
+      stamp = `${stat.mtimeNs}:${stat.size}:${stat.ino}`;
+    } catch {
+      this.cache.delete(path);
+      return null;
+    }
+    const hit = this.cache.get(path);
+    if (hit?.stamp === stamp) return hit.value as T | null;
+    const value = readJson<T>(path);
+    this.cache.set(path, { stamp, value });
+    return value;
   }
 
   // ---- notes ----

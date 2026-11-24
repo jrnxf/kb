@@ -6,11 +6,10 @@
 // `kb-transcript --memory` names Claude Code's auto memory folder of this project, for /kb:save.
 
 import { readdirSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { maskSecrets } from "../cli/secrets.ts";
 import { type UnsavedSession, allUnsaved, isDir, unsavedSession, writeRecoverFile } from "../cli/session.ts";
-import { Store, git } from "../cli/store.ts";
+import { Store, git, userHome } from "../cli/store.ts";
 import { readConversation } from "./transcript.ts";
 import { settle } from "./unsaved-notice.ts";
 
@@ -95,7 +94,7 @@ const NAME_MAX = 200;
  * outside the project.
  */
 function memory(): void {
-  const config = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+  const config = process.env.CLAUDE_CONFIG_DIR || join(userHome(), ".claude");
   const projects = join(config, "projects");
   const name = realpathSync(process.env.CLAUDE_PROJECT_DIR || process.cwd()).replace(/[^a-zA-Z0-9]/g, "-");
   let dir = name;

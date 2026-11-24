@@ -362,7 +362,7 @@ describe("the roll-up of the log", () => {
     // A store with no log gets no file and no machine id.
     expect(rollUp(store, day("2026-03-01"))).toBe(false);
     expect(existsSync(join(store.home, "activity"))).toBe(false);
-    expect(store.local().machine).toBe("");
+    expect(existsSync(join(store.home, "local.json"))).toBe(false);
     // A log with no activity gives no file either.
     logAt(store, "2026-03-01T00:00:00Z", { ev: "show", note: "a", why: "check" });
     expect(rollUp(store, day("2026-03-01"))).toBe(false);
