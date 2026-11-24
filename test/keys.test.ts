@@ -54,9 +54,13 @@ describe("keys on a wide screen", () => {
     ({ page, store, served } = await open(1280));
   }, 20_000);
   afterEach(async () => {
-    const policy = await blocked();
-    served.stop();
-    await page.close();
+    let policy: string[] = [];
+    try {
+      policy = await blocked();
+    } finally {
+      served.stop();
+      await page.close();
+    }
     expect(policy).toEqual([]);
   });
 
@@ -192,9 +196,13 @@ describe("keys on a phone", () => {
     await drawer().waitFor();
   }, 20_000);
   afterEach(async () => {
-    const policy = await blocked();
-    served.stop();
-    await page.close();
+    let policy: string[] = [];
+    try {
+      policy = await blocked();
+    } finally {
+      served.stop();
+      await page.close();
+    }
     expect(policy).toEqual([]);
   });
 

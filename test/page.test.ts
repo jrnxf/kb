@@ -48,12 +48,15 @@ describe("the data behind the page", () => {
     expect(renderBody("[mail](mailto:user@example.com)")).toContain('<a href="mailto:user@example.com">mail</a>');
     expect(renderBody("[note](#note=a)")).toContain('<a href="#note=a">note</a>');
     expect(renderBody("[path](/docs/a.md)")).toContain('<a href="/docs/a.md">path</a>');
+    expect(renderBody("[FAQ](Q&A.md)")).toContain('<a href="Q&amp;A.md">FAQ</a>');
     expect(renderBody("[file](docs/a.md?x=1)")).toContain('<a href="docs/a.md?x=1">file</a>');
   });
 
   test("loads only an image of this server or one held in the note, and shows any other as its alt text", () => {
     expect(renderBody("![a <b> & c](https://tracker.example.com/p.png)")).toBe("<p>a &lt;b&gt; &amp; c</p>\n");
     expect(renderBody("![x](//tracker.example.com/p.png)")).toBe("<p>x</p>\n");
+    expect(renderBody("![](https://tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
+    expect(renderBody("![](javascript:alert(1))")).toBe("<p>[image: blocked]</p>\n");
     expect(renderBody("![x](javascript:alert(1))")).toBe("<p>x</p>\n");
     expect(renderBody("![x](data:image/svg+xml,%3Csvg%20onload=alert(1)%3E)")).toBe("<p>x</p>\n");
     expect(renderBody("![dot](data:image/png;base64,iVBORw0KGgo=)")).toContain('<img src="data:image/png;base64,iVBORw0KGgo=" alt="dot" />');

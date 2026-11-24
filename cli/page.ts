@@ -23,8 +23,8 @@ function decode(text: string): string {
   });
 }
 
-/** True when the part of a URL before its first /, ? or # holds no scheme. A leftover & could still hide one. */
-const relative = (url: string) => !/[:&]/.test(url.split(/[/?#]/, 1)[0]!);
+/** True when the part of a URL before its first /, ? or # holds no scheme. A leftover & that starts an entity could still hide one. */
+const relative = (url: string) => !/:|&(?:#|[a-z]+;)/i.test(url.split(/[/?#]/, 1)[0]!);
 
 /** A URL as the browser reads it: entities decoded, and no space or control character to hide a scheme. */
 const bare = (value: string) => decode(value).replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
@@ -48,9 +48,18 @@ export function safeSrc(value: string): boolean {
   return /^data:image\/(?:png|gif|jpeg|webp)[;,]/i.test(url) || (!url.startsWith("//") && relative(url));
 }
 
+/** The host an image would have loaded from, or a plain word when the address has none. */
+function imageHost(src: string): string {
+  try {
+    return new URL(bare(src)).host || "blocked";
+  } catch {
+    return "blocked";
+  }
+}
+
 /**
  * The body as HTML. Raw HTML in a note is shown as text, never run. A link that could run script
- * shows as its text, and an image that could call out shows as its alt text.
+ * shows as its text, and an image that could call out shows as its alt text, or as the name of its host when it has none.
  */
 export function renderBody(markdown: string): string {
   let html: string;
@@ -69,8 +78,9 @@ export function renderBody(markdown: string): string {
     })
     .on("img", {
       element(image) {
+        const src = image.getAttribute("src") ?? "";
         // replace() escapes the text it is given.
-        if (!safeSrc(image.getAttribute("src") ?? "")) image.replace(decode(image.getAttribute("alt") ?? ""));
+        if (!safeSrc(src)) image.replace(decode(image.getAttribute("alt") ?? "") || `[image: ${imageHost(src)}]`);
       },
     })
     .transform(html);

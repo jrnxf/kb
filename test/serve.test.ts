@@ -59,6 +59,10 @@ describe("kb serve", () => {
     const [, theme] = (await page.text()).match(/<script>([\s\S]*?)<\/script>/)!;
     expect(policy).toContain(`script-src 'self' 'sha256-${new Bun.CryptoHasher("sha256").update(theme!).digest("base64")}';`);
     expect(pagePolicy("<p>no script</p>")).toContain("script-src 'self';");
+    // The browser hashes the text with CRLF read as LF, and reads a script with attributes the same way.
+    const hash = (text: string) => `'sha256-${new Bun.CryptoHasher("sha256").update(text).digest("base64")}'`;
+    expect(pagePolicy("<script>a\r\nb</script>")).toContain(hash("a\nb"));
+    expect(pagePolicy('<script nonce="x">c</script><script type="module" src="/a.js"></script>')).toContain(`script-src 'self' ${hash("c")};`);
     // A wrong host gets the headers too.
     expect((await fetch(new URL("/api/state", served!.url), { headers: { host: "evil.example.com" } })).headers.get("x-frame-options")).toBe("DENY");
   });
