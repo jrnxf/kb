@@ -14,7 +14,7 @@ beforeAll(async () => {
 }, 30_000);
 afterAll(async () => {
   await browser?.close();
-});
+}, 30_000);
 
 const LONG = Array.from({ length: 80 }, (_, i) => `Line ${i} of a long note.`).join("\n\n");
 
@@ -29,7 +29,7 @@ async function open(width: number): Promise<{ page: Page; store: Store; served: 
   // Fail inside Bun's 5 s test timeout, so one broken key does not break the next test.
   page.setDefaultTimeout(3000);
   blocked = await watchPolicy(page);
-  await page.goto(served.url);
+  await page.goto(served.link);
   await page.getByRole("heading", { level: 1, name: "kb" }).waitFor();
   return { page, store, served };
 }
@@ -276,7 +276,7 @@ describe("a page with data from an older kb serve", () => {
       await route.fulfill({ response, json: data });
     });
     try {
-      await page.goto(served.url);
+      await page.goto(served.link);
       await page.locator('[data-id="one"]').click();
       await page.getByText("The body of one.").waitFor();
       expect(await page.getByText("loads at").count()).toBe(0);
