@@ -12,7 +12,7 @@ Read `<this skill's base directory>/../save/SKILL.md` and follow every step of i
 
 When this turn ends, kb runs `/clear` by itself if all of these are true:
 
-- `kb checkpointed` ran in this turn and succeeded.
+- `kb saved` ran in this turn and succeeded.
 - Your answer starts with `**Safe to clear**`.
 - The turn ended normally.
 

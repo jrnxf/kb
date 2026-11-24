@@ -78,7 +78,7 @@ function write(store: Store, session: string): void {
     // A mask knows the common shapes only. The file is private, and it goes when the session is
     // marked or forgotten, or after 7 days.
     const file = writeRecoverFile(store, session, `${head}\n${conversation.text}`);
-    // `ended` is the end that this read is of. `kb checkpointed --ended` marks the session only while that is its last end.
+    // `ended` is the end that this read is of. `kb saved --ended` marks the session only while that is its last end.
     console.log(JSON.stringify({ file, prompts: conversation.prompts, chars: conversation.chars, failed: conversation.failed, ended: mark.ended }));
   } catch (error) {
     // No path and no stack: the caller must not go and read the raw transcript, which holds tool output.
@@ -92,7 +92,7 @@ const NAME_MAX = 200;
 /**
  * Claude Code's auto memory folder of the project in this directory, and its files but MEMORY.md.
  * The folder is named after the real path of the project, with each character that is not a
- * letter or a digit changed to `-`. The checkpoint skill runs this command: in the default
+ * letter or a digit changed to `-`. The save and clear skills run this command: in the default
  * permission mode, Claude Code asks before a shell command with a variable, or a list of a folder
  * outside the project.
  */

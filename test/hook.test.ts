@@ -409,10 +409,12 @@ describe("plugin files", () => {
     expect(existsSync(join(ROOT, "skills", "recover", "..", "save", "SKILL.md"))).toBe(true);
   });
 
-  // /kb:clear and the old /kb:checkpoint run the steps of /kb:save, so the three cannot drift apart.
-  test("the clear and checkpoint skills follow the save skill, which ends with a verdict the clear reads", () => {
+  // /kb:clear runs the steps of /kb:save, so the two cannot drift apart.
+  test("the clear skill follows the save skill, which ends with a verdict the clear reads", () => {
     const save = readFileSync(join(ROOT, "skills", "save", "SKILL.md"), "utf8");
-    for (const name of ["clear", "checkpoint"]) {
+    // The old /kb:checkpoint is gone: /kb:save is its one name.
+    expect(existsSync(join(ROOT, "skills", "checkpoint"))).toBe(false);
+    for (const name of ["clear"]) {
       const skill = readFileSync(join(ROOT, "skills", name, "SKILL.md"), "utf8");
       expect(skill, name).toContain("../save/SKILL.md");
       expect(skill, name).toContain("disable-model-invocation: true");
@@ -445,13 +447,13 @@ describe("plugin files", () => {
   test("the recover skill marks a session last, and its report never reads as a verdict on this session", () => {
     const recover = readFileSync(join(ROOT, "skills", "recover", "SKILL.md"), "utf8");
     const prompt = recover.split("\n").filter((line) => line.startsWith("> ")).join("\n");
-    expect(prompt).toContain("Never run `kb checkpointed`.");
-    expect(prompt.replace("Never run `kb checkpointed`.", "")).not.toContain("kb checkpointed");
-    expect(recover.indexOf("kb checkpointed <session>")).toBeGreaterThan(recover.indexOf("## 5. Settle the rules, then mark each session"));
+    expect(prompt).toContain("Never run `kb saved`.");
+    expect(prompt.replace("Never run `kb saved`.", "")).not.toContain("kb saved");
+    expect(recover.indexOf("kb saved <session>")).toBeGreaterThan(recover.indexOf("## 5. Settle the rules, then mark each session"));
     // Each mark names the end that step 2 read, so a session that ran again in that time stays unsaved.
     expect(recover).toContain('prints `{"file", "prompts", "chars", "failed", "ended"}`');
-    for (const line of recover.split("\n").filter((each) => !each.startsWith("> ") && /\b[Rr]un `kb checkpointed/.test(each))) expect(line).toContain("`kb checkpointed <session> --ended <ended>`");
-    expect(recover).toContain("- `kb checkpointed` answers that the session runs again, or that it ran again and ended: say so, leave it unsaved, and go on.");
+    for (const line of recover.split("\n").filter((each) => !each.startsWith("> ") && /\b[Rr]un `kb saved/.test(each))) expect(line).toContain("`kb saved <session> --ended <ended>`");
+    expect(recover).toContain("- `kb saved` answers that the session runs again, or that it ran again and ended: say so, leave it unsaved, and go on.");
     expect(prompt).toContain("**Recovered the session of <date of ended> in <cwd>**");
     expect(prompt).toContain('Never write "Safe to clear".');
     expect(recover).toContain("This session still needs its own /kb:save if it did other work.");
@@ -723,7 +725,7 @@ describe("kb-transcript --remove-memory", () => {
   });
 
   test("the save skills remove memory with it, and allow no rm", () => {
-    for (const name of ["save", "clear", "checkpoint"]) {
+    for (const name of ["save", "clear"]) {
       const skill = readFileSync(join(ROOT, "skills", name, "SKILL.md"), "utf8");
       const allowed = /^allowed-tools: (.*)$/m.exec(skill)![1]!;
       expect(allowed, name).toContain("Bash(kb-transcript --remove-memory *)");
@@ -809,7 +811,7 @@ describe("session notices", () => {
     expect(worth()).toHaveLength(1);
 
     // /kb:recover ends with the old session's checkpoint.
-    kb(store, ["checkpointed", "lost"]);
+    kb(store, ["saved", "lost"]);
     expect(runHook({ home: store.home, stdin: startInput(repo, "clear") }).stdout).not.toContain("/kb:recover");
     expect(unsaved(store, repo)).toEqual([]);
   });
@@ -974,7 +976,7 @@ describe("session notices", () => {
       expect(unsaved(store, repo)).toEqual(["first", "second", "third"]);
     });
 
-    // `kb checkpointed` can run while a start measures the transcript. The size must not bring the mark back.
+    // `kb saved` can run while a start measures the transcript. The size must not bring the mark back.
     test("a measured size is written only to a mark that is still there, and the mark keeps its age", () => {
       const store = tempStore();
       const dir = tempDir();
@@ -1112,13 +1114,13 @@ describe("session notices", () => {
       expect(logged(store)).toEqual([{ ev: "ended", session: "lost", reason: "other", checkpoint: false }]);
     });
 
-    test("a session that is resumed and then checkpointed loses its mark", () => {
+    test("a session that is resumed and then saved loses its mark", () => {
       const store = tempStore();
       const repo = tempRepo();
       end(store.home, endInput(repo, "back", "prompt_input_exit"));
       expect(unsaved(store, repo)).toEqual(["back"]);
       // The user resumes it, and it runs /kb:save.
-      expect(kb(store, ["checkpointed", "back", "--json"], { env: { KB_SESSION: "back" } }).json).toEqual({ session: "back", recorded: true });
+      expect(kb(store, ["saved", "back", "--json"], { env: { KB_SESSION: "back" } }).json).toEqual({ session: "back", recorded: true });
       expect(unsaved(store, repo)).toEqual([]);
       // Its next end is the end of a saved session.
       end(store.home, endInput(repo, "back", "prompt_input_exit"));
@@ -1143,7 +1145,7 @@ describe("session notices", () => {
       const store = tempStore();
       const repo = tempRepo();
       putNote(store, { id: "g" });
-      expect(kb(store, ["checkpointed", "saved-one", "--json"]).json).toEqual({ session: "saved-one", recorded: true });
+      expect(kb(store, ["saved", "saved-one", "--json"]).json).toEqual({ session: "saved-one", recorded: true });
       for (const reason of REASONS) {
         end(store.home, endInput(repo, "saved-one", reason));
         end(store.home, { ...endInput(repo, "subagent", reason), agent_id: "agent-a1" });
@@ -1159,7 +1161,7 @@ describe("session notices", () => {
       expect(end(missing, endInput(repo, "x")).exitCode).toBe(0);
       expect(end(missing, {}).exitCode).toBe(0);
       expect(existsSync(missing)).toBe(false);
-      expect(kb(missing, ["checkpointed", "x", "--json"]).json.recorded).toBe(false);
+      expect(kb(missing, ["saved", "x", "--json"]).json.recorded).toBe(false);
       expect(kb(missing, ["unsaved", "--json"]).json).toEqual([]);
       expect(kb(missing, ["unsaved", "--all", "--json"]).json).toEqual([]);
       expect(existsSync(missing)).toBe(false);
@@ -1438,7 +1440,7 @@ describe("session notices", () => {
       const mark = unsavedSession(store, "s")!;
       // The place is written after the record of the save went, so it reaches the mark.
       expect({ scope: mark.scope, root: mark.root, since: typeof mark.since, offset: typeof mark.offset }).toEqual({ scope: "github.com/acme/billing", root: repo, since: "string", offset: "number" });
-      // The part after the checkpoint starts at its first line: the result of `kb checkpointed`.
+      // The part after the checkpoint starts at its first line: the result of `kb saved`.
       const part = readFileSync(path, "utf8").slice(mark.offset!);
       expect(part).toStartWith('{"type":"user"');
       expect(part).toContain(later[0]!);
@@ -1488,7 +1490,7 @@ describe("session notices", () => {
       expect(unsavedSession(store, "s")?.since).toBeDefined();
       // Resumed a third time, it runs /kb:save itself: saved, with no mark.
       runHook({ home: store.home, stdin: startInput(repo, "resume", "s") });
-      expect(kb(store, ["checkpointed", "s", "--json"], { env: { KB_SESSION: "s" } }).json).toEqual({ session: "s", recorded: true });
+      expect(kb(store, ["saved", "s", "--json"], { env: { KB_SESSION: "s" } }).json).toEqual({ session: "s", recorded: true });
       expect(isSaved(store, "s")).toBe(true);
       expect(unsavedSession(store, "s")).toBeNull();
     });
@@ -1570,11 +1572,11 @@ describe("session notices", () => {
 
       // The recovery that was under way can write no more note for it, and cannot mark it saved.
       expect(kb(store, ["add", "--json", "--recovered-from", "back"], { stdin: note.replace("job", "task"), cwd: repo, env: { KB_SESSION: "other" } }).json.error).toBe("no unsaved session back. `kb unsaved` lists them.");
-      const marked = kb(store, ["checkpointed", "back", "--json"], { env: { KB_SESSION: "other" } });
+      const marked = kb(store, ["saved", "back", "--json"], { env: { KB_SESSION: "other" } });
       const runsAgain = "session back runs again: the user resumed it. Nothing was recorded. It gets a new record when it ends. Recover it again then.";
       expect(marked).toMatchObject({ code: 1, json: { error: runsAgain } });
       // The same with the end that it read, whoever asks.
-      expect(kb(store, ["checkpointed", "back", "--ended", read, "--json"])).toMatchObject({ code: 1, json: { error: runsAgain } });
+      expect(kb(store, ["saved", "back", "--ended", read, "--json"])).toMatchObject({ code: 1, json: { error: runsAgain } });
       expect(isSaved(store, "back")).toBe(false);
       expect(isLive(store, "back")).toBe(true);
       expect(logged(store).some((event) => event.ev === "recover" || event.ev === "checkpoint")).toBe(false);
@@ -1594,7 +1596,7 @@ describe("session notices", () => {
       // The recovery that read the first end comes to its last step only now. Nobody read what
       // the session said after its resume, so the mark is refused and the record stays.
       expect(mark.ended).not.toBe(read);
-      const late = kb(store, ["checkpointed", "back", "--ended", read, "--json"], { env: { KB_SESSION: "other" } });
+      const late = kb(store, ["saved", "back", "--ended", read, "--json"], { env: { KB_SESSION: "other" } });
       expect(late).toMatchObject({ code: 1, json: { error: `session back ran again and ended at ${mark.ended}, after this recovery read it. Nothing was recorded. Recover it again: /kb:recover reads what it said since.` } });
       expect(isSaved(store, "back")).toBe(false);
       expect(unsaved(store, repo)).toEqual(["back"]);
@@ -1602,12 +1604,12 @@ describe("session notices", () => {
       // A second recovery reads the new end, and marks it. The same moment in another form is the same end.
       const again = JSON.parse(Bun.spawnSync([join(ROOT, "bin", "kb-transcript"), "back"], { cwd: plain(), env: { ...process.env, KB_HOME: store.home }, stdout: "pipe" }).stdout.toString());
       expect(again.ended).toBe(mark.ended);
-      expect(kb(store, ["checkpointed", "back", "--ended", again.ended.replace("Z", "+00:00"), "--json"], { env: { KB_SESSION: "other" } }).json).toEqual({ session: "back", recorded: true, recovered: true });
+      expect(kb(store, ["saved", "back", "--ended", again.ended.replace("Z", "+00:00"), "--json"], { env: { KB_SESSION: "other" } }).json).toEqual({ session: "back", recorded: true, recovered: true });
       expect(isSaved(store, "back")).toBe(true);
       expect(logged(store).at(-1)).toMatchObject({ ev: "recover", session: "back", by: "other", notes: ["the-queue-drops-a-job"] });
     });
 
-    test("with any source, and a session that then saves itself is checkpointed", () => {
+    test("with any source, and a session that then saves itself is saved", () => {
       const store = tempStore();
       const repo = tempRepo();
       // The source is the word of the harness. A session id that has a record is live, whatever the word is.
@@ -1624,7 +1626,7 @@ describe("session notices", () => {
       expect(unsavedSession(store, "back")).not.toBeNull();
 
       runHook({ home: store.home, stdin: startInput(repo, "resume", "back") });
-      expect(kb(store, ["checkpointed", "back", "--json"], { env: { KB_SESSION: "back" } }).json).toEqual({ session: "back", recorded: true });
+      expect(kb(store, ["saved", "back", "--json"], { env: { KB_SESSION: "back" } }).json).toEqual({ session: "back", recorded: true });
       expect(isLive(store, "back")).toBe(false);
       end(store.home, endInput(repo, "back", "other"));
       expect(kb(store, ["unsaved", "--all", "--json"]).json).toEqual([]);
@@ -1797,7 +1799,7 @@ describe("session notices", () => {
     for (const session of ["kept", "dropped", "old"]) end(store.home, endInput(repo, session, "other"));
     end(store.home, endInput(repo, "short", "other", transcript("short", 1)));
     end(store.home, endInput(repo, "no-file", "other", join(transcripts, "never-written.jsonl")));
-    kb(store, ["checkpointed", "saved"], { cwd: repo, env: { KB_SESSION: "saved" } });
+    kb(store, ["saved", "saved"], { cwd: repo, env: { KB_SESSION: "saved" } });
     end(store.home, endInput(repo, "saved", "clear"));
     expect(events("ended").map((event) => [event.session, event.reason, event.checkpoint])).toEqual([["kept", "other", false], ["dropped", "other", false], ["old", "other", false], ["short", "other", false], ["no-file", "other", false], ["saved", "clear", true]]);
     // Nobody measured a session yet, so none is worth a recovery, and none is forgotten.
@@ -1821,7 +1823,7 @@ describe("session notices", () => {
     const eightDaysAgo = new Date(Date.now() - 8 * 86_400_000);
     utimesSync(join(store.home, ".state", "unsaved-old.json"), eightDaysAgo, eightDaysAgo);
     expect(unsaved(store, repo)).toEqual(["kept"]);
-    kb(store, ["checkpointed", "kept"], now);
+    kb(store, ["saved", "kept"], now);
     expect(events("forgotten").slice(2)).toEqual([{ ev: "forgotten", session: "dropped", scope, why: "user", worth: true, by: "c" }, { ev: "forgotten", session: "old", scope, why: "aged", worth: true }]);
     expect(events("recover")).toEqual([{ ev: "recover", session: "kept", scope, by: "c", notes: [], reason: "prompt_input_exit" }]);
     // A second forget of the same session drops nothing, and logs nothing.
@@ -1846,7 +1848,7 @@ describe("session notices", () => {
     const line = "This session was compacted and /kb:save has not run in it.";
     expect(runHook({ home: store.home, stdin: startInput(repo, "compact", "s1") }).stdout).toContain(line);
     expect(runHook({ home: store.home, stdin: startInput(repo, "startup", "s1") }).stdout).not.toContain(line);
-    kb(store, ["checkpointed", "s1"]);
+    kb(store, ["saved", "s1"]);
     expect(runHook({ home: store.home, stdin: startInput(repo, "compact", "s1") }).stdout).not.toContain(line);
     // The user typed more after the checkpoint, and then the session was compacted.
     const path = join(tempDir("kb-transcripts-"), "s1.jsonl");
@@ -1941,7 +1943,7 @@ describe("session notices", () => {
     writeFileSync(join(store.home, ".gitignore"), "INDEX.md\nindex.html\nlocal.json\n.sync-*\n*.tmp-*\n");
     Bun.spawnSync(["git", "-C", store.home, "init", "-q", "-b", "main"]);
     putNote(store, { id: "g" });
-    kb(store, ["checkpointed", "s1"]);
+    kb(store, ["saved", "s1"]);
     kb(store, ["show", "g"]);
     kb(store, ["verify", "g"]);
     const tracked = Bun.spawnSync(["git", "-C", store.home, "ls-files"], { stdout: "pipe" }).stdout.toString();

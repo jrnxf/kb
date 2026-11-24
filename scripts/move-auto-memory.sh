@@ -30,7 +30,7 @@ done
 
 command -v claude >/dev/null || { echo "claude is not on PATH" >&2; exit 1; }
 
-# The checkpoint skill that runs must take a folder. An older one ignores it and moves nothing.
+# The save skill that runs must take a folder. An older one ignores it and moves nothing.
 plugin=""
 for ((k = 0; k < ${#claude_args[@]}; k++)); do
   [ "${claude_args[k]}" = "--plugin-dir" ] && plugin="${claude_args[k + 1]:-}"

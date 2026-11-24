@@ -284,7 +284,7 @@ describe("kb serve", () => {
   test("a write makes no page file", () => {
     const store = tempStore();
     putNote(store, { id: "a" });
-    kb(store, ["use", "a"]);
+    kb(store, ["verdict", "helped", "a"]);
     expect(existsSync(join(store.home, "index.html"))).toBe(false);
   });
 

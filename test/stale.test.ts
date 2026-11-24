@@ -5,7 +5,7 @@ import { CHANGED_LINE, buildBudget, buildContext, contextBudget } from "../cli/c
 import { afterRead } from "../cli/fire.ts";
 import { findNeighbors, neighborCheck } from "../cli/neighbors.ts";
 import { CHANGED_ASK, changedAsk, changedNotes, changedSinceCheck, findStale } from "../cli/stale.ts";
-import { kb, legacyUsage, logAt, otherMachine, plain, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
+import { kb, logAt, otherMachine, plain, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
 
 const SCOPE = "github.com/acme/billing";
 const NOW = new Date("2026-03-01T00:00:00Z");
@@ -132,8 +132,8 @@ describe("kb stale", () => {
     // Activity within expireDays keeps a note from expiring: here a Read of a file the note is anchored to.
     logAt(store, "2026-02-01T00:00:00Z", { ev: "fire", kind: "path", form: "title", note: "unused", tool: "Read", match: "src/ledger.ts" });
     expect(reasons(store, repo)).toEqual(["used:decayed"]);
-    // So does the last use that an older kb recorded, on any machine.
-    legacyUsage(store, "old", { "old-global": { uses: 2, last_used: "2026-02-01T00:00:00Z" } });
+    // So does activity on another machine.
+    otherMachine(store, "old", { "old-global": { last: "2026-02-01T00:00:00Z" } });
     expect(findStale(store, join(repo, ".."), NOW).candidates.map((c) => `${c.id}:${c.reason}`)).toEqual(["old-global:decayed"]);
     // The config sets both windows.
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ decayDays: 365, expireDays: 30 }));

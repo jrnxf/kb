@@ -100,8 +100,7 @@ notes, and a note loads when it applies.
   repo's own notes rank first, by kind (open-work, gotcha, convention, decision, how-to), then last
   activity on any machine, then last verified. Global notes come after them: open work first, then
   by last activity, then by kind, then last verified. So the first lines to go are global notes
-  that no session opened. No count of reads is in the order. kb ignores the `indexLines` and
-  `globalIndexLines` of an older config: a count of lines hid notes that fit.
+  that no session opened. No count of reads is in the order.
 - **One start in 10 keeps the older form**, so an audit can compare the two. That start is what kb
   gave before the briefs, note for note: an index of at most 60 lines, at most 20 global notes in
   a repo, whole bodies in rank order in the room that is left, and no briefs. A hash of the session id picks the arm,
@@ -145,10 +144,9 @@ notes, and a note loads when it applies.
 - **Before `/clear`** you run `/kb:clear`. The agent saves what the session learned,
   updates notes instead of duplicating them, writes stated rules to instruction files, trashes
   finished open work, empties Claude Code's auto memory, and gives a verdict on the notes it got with `kb verdict`.
-  Then the session clears, but only when the save fully succeeded: the turn finished, `kb checkpointed`
+  Then the session clears, but only when the save fully succeeded: the turn finished, `kb saved`
   recorded the save, and the report starts with **Safe to clear**. Otherwise you get a toast with
   the reason, and the session stays. `/kb:save` does the same save and never clears.
-  `/kb:checkpoint` is the old name of `/kb:save`, and it still works.
   The session start asks the agent to say "Good time to /kb:clear." in one line: when
   a task landed or the context is large, and the session learned something. Only you start it. A
   headless run and a subagent do not get this rule.
@@ -298,9 +296,9 @@ notes, and a note loads when it applies.
 - **Sync.** If the store has a git remote, each write starts a background pull and push, and
   each session start does the same at most once per 5 minutes. With no remote, `kb sync` commits
   on this machine and pushes nowhere. The event log stays on its
-  machine, and its roll-up in `activity/` syncs. The `usage/` files of an older kb stay in the
-  store as history: kb reads the last use in them, and writes them no more. `kb add` never gives a
-  new note an id that has a history on any machine.
+  machine, and its roll-up in `activity/` syncs. A store from an older kb can hold use counters in
+  `usage/`: the first write or sync puts the last use of each note into the roll-up of its machine,
+  and removes the folder. `kb add` never gives a new note an id that has a history on any machine.
 - **A conflict loses nothing.** When two machines change the same note, the sync keeps both: the
   copy verified last stays, and the other goes to the trash as `<id>-conflict`. Each session
   start names it until the copy leaves the trash. Compare the two with `kb show`, bring what the
@@ -325,7 +323,7 @@ notes, and a note loads when it applies.
 ```
 ~/.kb/
   notes/<scope>/<id>.md     trash/<scope>/<id>.md
-  kb.config.json            usage/<machine>.json    # counters of an older kb, read only
+  kb.config.json
   activity/<machine>.json                       # the roll-up of each machine's log, synced
   INDEX.md  local.json  .state/                 # generated or per-machine, not committed
   .state/sync-error  .state/sync-last           # how the last sync ended, and when
@@ -414,7 +412,7 @@ kb budget [--repo .]         what a session start gives of each note, and what r
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
 kb scope move <old> <new> [--dry-run]   give every note of a scope a new repo id
 kb audit [--no-wait]         kb audit propose --file <path>   kb audit status   (an agent audits the scope)
-kb instructions [--repo .]   kb sync      kb checkpointed <session-id> [--ended <time>]
+kb instructions [--repo .]   kb sync      kb saved <session-id> [--ended <time>]
 kb log [--session id] [--since days]      (what the log says of each note, or of one session)
 kb unsaved [--forget <session-id>]   sessions here that ended with no checkpoint, never the one that asks
 kb unsaved --all             those of every directory, with the count per project
