@@ -95,10 +95,11 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
 /**
  * What a writer should look at again in a note that was saved. Never a refusal: the note is
  * stored. A gotcha or a how-to with no trigger and no anchor is one index line at the session
- * start, a title among many, and nothing loads its body. Open work with the scope global is one
- * index line in every repo session: a session shows the next step only for the open work of its
- * own repo. `inRepo` says that the write came from inside a repo. Outside any repo, global is the
- * one scope there is, so open work is right there.
+ * start, a title among many, and nothing loads its body. A repo note with no anchor, open work
+ * aside, is never compared with the code, so no change of the code marks it. Open work with the
+ * scope global is one index line in every repo session: a session shows the next step only for
+ * the open work of its own repo. `inRepo` says that the write came from inside a repo. Outside
+ * any repo, global is the one scope there is, so open work is right there.
  */
 export function noteWarnings(note: Pick<Note, "kind" | "scope" | "body" | "anchors" | "triggers">, inRepo: boolean): string[] {
   const warnings: string[] = [];

@@ -325,8 +325,9 @@ Pass `--project <name>`. A wipe with no project takes ten minutes to rebuild.
 
 kb also writes `promoted_to` (the instruction file a rule moved to), `supersedes` (the notes a merge
 took in) and `trashed_at`. `kb add` answers with `warnings`, and still saves the note, when a gotcha
-or a how-to has no trigger and no anchor, when a session in a repo saves open work with the scope
-`global`, and when a body is over 700 characters.
+or a how-to has no trigger and no anchor, when a repo note that is not open work has no anchor,
+when a session in a repo saves open work with the scope `global`, and when a body is over 700
+characters.
 
 ## Hooks
 

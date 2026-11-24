@@ -212,4 +212,5 @@ End with this, and nothing after it. Write it as Markdown, not in a code block, 
 - The first line is the verdict. Write `**Safe to clear**`, or `**Not safe to clear** - <what is unsaved>` when a `kb` command failed, or when open work exists that no note describes. Never add "yes" or "no".
 - Show the title of a note, not its id. Keep each reason to one short sentence.
 - Under a saved gotcha or how-to that has no trigger and no anchor, add one line: `No trigger: <why none fits>`.
+- Under a saved repo note, not open work, that has no anchor, add one line: `No anchor: <why no file fits>`.
 - Leave out a count that is 0, and a group that is empty.
