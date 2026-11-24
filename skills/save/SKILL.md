@@ -109,6 +109,7 @@ A session with normal permissions refuses a command that sets a shell variable, 
 A note at the session start is one title among many, hours before the agent needs it.
 A trigger or an anchor loads the note at the moment it applies.
 Give every `gotcha` and every `how-to` a trigger or an anchor. When none fits, say why in one line of the report.
+Give every repo note but open work an anchor on the files the fact depends on, also when it has a trigger. Only an anchor lets kb mark the note when that code changes. When no file fits, say why in one line of the report.
 
 - A gotcha about a command gets `"triggers": ["cmd: pkill -f"]`. The note loads at a shell command that runs those words. The command still runs, and the agent gets the note with its result.
 - When one run of the command does damage, write `stop:` in place of `cmd:`. kb then refuses the command once, with the note as the reason. A run 3 seconds later passes.
@@ -122,7 +123,7 @@ kb refuses one word that is a common command (`git`, `ls`, `bun`): add a subcomm
 `-rf` and `-fr` are two words, so give one trigger for each form.
 
 Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id> --check`, then update it or skip.
-A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor, open work that a repo session saved as `"global"`, or a body over 700 characters. The note is saved. Fix it with an update, or give the reason in the report.
+A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor, a repo note with no anchor, open work that a repo session saved as `"global"`, or a body over 700 characters. The note is saved. Fix it with an update, or give the reason in the report.
 
 `neighbors` means that nothing was written: stored notes are close to the new note in their words. `shared` names the words both have.
 `kb add` exits with code 2 for this answer, so the call shows as failed. It is an answer to read, not a failure of the tool. The note is not saved until you run the command again.

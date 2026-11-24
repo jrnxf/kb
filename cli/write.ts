@@ -105,6 +105,10 @@ export function noteWarnings(note: Pick<Note, "kind" | "scope" | "body" | "ancho
   if ((note.kind === "gotcha" || note.kind === "how-to") && note.anchors.length === 0 && !note.triggers?.length) {
     warnings.push(`a ${note.kind} with no trigger and no anchor is only an index line at the session start, and nothing loads its body. Give it "triggers" (cmd:, stop: or err:) or "anchors", or say in your report why it has none.`);
   }
+  // Only an anchor ties a note to code. With none, no change of the code can mark the note, and only time sends it to the audit.
+  if (note.kind !== "open-work" && note.scope !== "global" && note.anchors.length === 0) {
+    warnings.push(`a repo note with no anchor is never compared with the code: when the code changes, nothing marks the note. Give it "anchors" on the files the fact depends on, or say in your report why no file fits.`);
+  }
   if (note.kind === "open-work" && note.scope === "global" && inRepo) {
     warnings.push(`open work belongs to a repo. With the scope global it is one index line in every repo session, and none shows its next step. Trash this note and save it in the repo of the work, with "scope": "repo".`);
   }
