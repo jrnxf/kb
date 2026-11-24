@@ -559,6 +559,12 @@ describe("kb add with triggers", () => {
     expect(add(store, { ...gotcha, title: "With a trigger", triggers: ["err: flux capacitor underflow"] }).json.warnings).toBeUndefined();
     expect(add(store, { ...gotcha, title: "With an anchor", anchors: ["src/pay.ts"] }).json.warnings).toBeUndefined();
     for (const kind of ["decision", "convention"]) expect(add(store, { ...gotcha, title: `A ${kind}`, kind }).json.warnings).toBeUndefined();
+    // A repo note with no anchor is never compared with the code, also when a trigger loads it. Open work and a global note need none.
+    const billing = tempRepo({ remote: "git@github.com:acme/billing.git" });
+    const noAnchor = 'a repo note with no anchor is never compared with the code: when the code changes, nothing marks the note. Give it "anchors" on the files the fact depends on, or say in your report why no file fits.';
+    expect(add(store, { ...gotcha, title: "A repo decision", kind: "decision", scope: "repo" }, billing).json.warnings).toEqual([noAnchor]);
+    expect(add(store, { ...gotcha, title: "A repo gotcha with a trigger", scope: "repo", triggers: ["err: flux capacitor overflow"] }, billing).json.warnings).toEqual([noAnchor]);
+    expect(add(store, { ...gotcha, title: "A repo gotcha with an anchor", scope: "repo", anchors: ["README.md"] }, billing).json.warnings).toBeUndefined();
     // Open work belongs to a repo: with the scope global no repo session shows its next step.
     const inRepo = kb(store, ["add", "--json"], { cwd: tempRepo({ remote: "git@github.com:acme/billing.git" }), stdin: JSON.stringify({ title: "Ship the export", kind: "open-work", body: "Next: write the pager." }) });
     expect(inRepo.json).toMatchObject({ status: "created" });
