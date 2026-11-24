@@ -72,6 +72,7 @@ code { font: .87em var(--f-mono); color: var(--ink); background: var(--sunk); bo
 .tool > .h b { color: var(--soft); font-weight: 500; flex: none; }
 .tool > .h .args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .tool > .h .ok { margin-left: auto; color: var(--body); flex: none; font-variant-numeric: tabular-nums; }
+.tool > .h .ok.warn { color: var(--gone); }
 .tool > .b { padding: 20px; }
 .tool > .b.flush { padding: 0; }
 .tool > .b.loop { padding: 0; --in: 32px; height: calc(400px + 2 * var(--in)); }
@@ -174,14 +175,14 @@ The seed script inserts into tables that only the latest migration creates. On a
         <div><b>cmd: bun db:seed</b><span>The command runs, and the note comes with its result. I read the result with the note in hand.</span></div>
         <div><b>stop: git push --force</b><span>Refuses the first run once, with the note as the reason. Only this trigger comes before the run.</span></div>
         <div><b>err: address already in use</b><span>Loads the note after a tool call fails with that text.</span></div>
-        <div><b>anchors: scripts/seed.ts</b><span>Loads the note when I read or change the file, or a command names it.</span></div>
+        <div><b>anchors: scripts/seed.ts#seedUsers</b><span>Loads the note when I read or change the file, or a command names it. A change to seedUsers marks the note as changed.</span></div>
       </div>
     </div></li>
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">who writes the notes?</div></li>
     <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
       <p>I do. When you state a rule, I write it to CLAUDE.md in that turn. <b>What I learn goes to kb.</b></p>
-      <p><code>kb add</code> names the close notes before it writes, so I update a note and add no twin. It refuses a note that looks like it holds a secret. When you are done, <code>/kb:clear</code> saves the rest and clears the session, but only if the save worked. I say in one line when it is a good time.</p>
+      <p><code>kb add</code> names the close notes before it writes, so I update a note and add no twin. It refuses a note that looks like it holds a secret. It warns on a repo note with no anchor, because only an anchor lets a change of the code mark the note. When you are done, <code>/kb:clear</code> saves the rest and clears the session, but only if the save worked. I say in one line when it is a good time.</p>
       <div class="tool"><div class="h"><b>loop</b><span class="args">how a note gets here</span></div><div class="b" data-w="loop"></div></div>
     </div></li>
 
@@ -225,8 +226,8 @@ An earlier session here ended with no /kb:save.
       </div></div>
       <p>A note goes round until an audit ends it. A rule that you state never enters the store.</p>
       <div class="cmds">
-        <div><b>kb context</b><span>A note whose file or symbol is gone is flagged at session start, before I act on it.</span></div>
-        <div><b>/kb:audit</b><span>Changed anchors and notes with no activity and no check in 90 days go up for review. Rules move into CLAUDE.md.</span></div>
+        <div><b>kb context</b><span>A note whose file or symbol is gone or changed is flagged at session start, before I act on it.</span></div>
+        <div><b>/kb:audit</b><span>Changed notes that no session checked, and notes with no activity and no check in 90 days, go up for review. Rules move into CLAUDE.md.</span></div>
         <div><b>kb verdict</b><span>At the save I say if a note helped, was not needed or was wrong. The audit reads the verdicts.</span></div>
         <div><b>kb log</b><span>A log on each machine records what every session got. No use count ranks a note.</span></div>
         <div><b>kb trash</b><span>Restore in one command. Gone after 30 days.</span></div>
@@ -246,6 +247,28 @@ Check the signature before any JSON parse. A parsed body fails the check, and th
 
 Before you change this file, read the notes that apply with `kb show &lt;id&gt;`:<span class="li"><span class="i">- refunds-reuse-the-charge-id-of-the-order [decision]</span> Refunds reuse the charge id of the order</span></pre></div></div>
       <p>A gotcha comes whole, and another kind comes as its title. A note on a folder covers every file in it. Each note comes once per session, and again after a compaction or a /clear.</p>
+    </div></li>
+
+    <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">what if the code changed after the note?</div></li>
+    <li class="turn ai"><span class="g" aria-hidden="true">●</span><div class="msg">
+      <p>Then the note says so when it loads. <b>kb compares the code with what the last check saw.</b></p>
+      <div class="tool"><div class="h"><b>Read</b><span class="args">api/webhooks.ts</span><span class="ok warn">✓ 1 note · changed</span></div><div class="b"><pre class="wrap"><span class="c">PostToolUse:Read · kb</span>
+kb has notes on api/webhooks.ts.
+
+<span class="i">### stripe-signature-check-needs-the-raw-body [gotcha]</span> Stripe signature check needs the raw body
+<span class="c">anchor on api/webhooks.ts#verifySignature</span>
+<span class="e">changed since the last check: api/webhooks.ts#verifySignature</span>
+Check the signature before any JSON parse. A parsed body fails the check, and the error names no cause.
+
+A note with "changed since the last check" is on a file that changed after the note was last checked. Read the code before you act on such a note. If the note still holds, run `kb verify &lt;id&gt;`. If it does not, update it with `kb add`. If you cannot fix it now, run `kb verdict wrong &lt;id&gt;`.</pre></div></div>
+      <p>I read the function. The check still runs before the parse, so the note holds.</p>
+      <div class="tool"><div class="h"><b>Bash</b><span class="args">kb verify stripe-signature-check-needs-the-raw-body</span><span class="ok">✓ checked</span></div><div class="b"><pre class="wrap">verified stripe-signature-check-needs-the-raw-body</pre></div></div>
+      <div class="cmds">
+        <div><b>a hash per anchor</b><span>Each check saves a hash of the code of each anchor. A load compares it with the file on disk.</span></div>
+        <div><b>no git</b><span>So the mark is right after a pull, after a branch switch, and for a change that is not committed.</span></div>
+        <div><b>path#symbol</b><span>An anchor on one function marks the note only when that function changes.</span></div>
+        <div><b>/kb:audit</b><span>The backstop. A changed note that no session checked goes up for review.</span></div>
+      </div>
     </div></li>
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">can I read the notes myself?</div></li>

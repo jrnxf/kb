@@ -1,3 +1,4 @@
+import { CSPProvider } from "@base-ui/react/csp-provider";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -19,8 +20,11 @@ function Root() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <Root />
-    </QueryClientProvider>
+    {/* kb serve allows no inline style, so Base UI adds no <style> element. index.css holds its rule. */}
+    <CSPProvider disableStyleElements>
+      <QueryClientProvider client={queryClient}>
+        <Root />
+      </QueryClientProvider>
+    </CSPProvider>
   </StrictMode>,
 );
