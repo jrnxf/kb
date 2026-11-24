@@ -458,6 +458,7 @@ There is one exception. A command names its session in the log with `--session <
 ## Install
 
 Requirements: Claude Code 2.1.275 or later, a recent [Bun](https://bun.sh) (tested with 1.4) and git.
+The hooks look for Bun on the PATH, then in `~/.bun/bin` and the Homebrew folders. Without Bun, kb is off, and a session start says so in one line.
 There is no build step and no dependency to install: the page of `kb serve` comes built in `web/dist`.
 
 kb installs from the `jrnxf` marketplace ([jrnxf/plugins](https://github.com/jrnxf/plugins)). In Claude Code:

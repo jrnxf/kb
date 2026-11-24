@@ -2,4 +2,9 @@
 # For /kb:recover: writes what an unsaved session holds to a private file, and measures the
 # sessions that nobody measured yet. For /kb:save: names the auto memory folder of this
 # project. A command of its own, so a skill can allow it by name.
-exec bun "$(dirname "$0")/../hooks/kb-transcript.ts" "$@"
+. "$(dirname "$0")/../hooks/bun.sh"
+if [ -z "$BUN" ]; then
+  echo "kb-transcript: Bun is not on the PATH or in ~/.bun/bin. Install it from bun.sh." >&2
+  exit 127
+fi
+exec "$BUN" "$(dirname "$0")/../hooks/kb-transcript.ts" "$@"
