@@ -26,18 +26,21 @@ export const reloadPage = () => queryClient.invalidateQueries({ queryKey: pageQu
 /**
  * A note that an agent adds or changes shows without a reload. A cheap version check runs while
  * the tab shows, and the notes reload when the store moved. It skips a turn while a change from
- * this page is on its way, as that change reloads the notes itself.
+ * this page is on its way, as that change reloads the notes itself. Its error says that the server
+ * is down, and its `write` says whether the page has the key to change notes.
  */
-export function useStoreWatch(enabled: boolean) {
-  useQuery({
-    queryKey: ["store-version"],
-    enabled,
+export function useStoreWatch() {
+  return useQuery({
+    queryKey: ["store-state"],
     refetchInterval: POLL_MS,
+    // The poll goes on after an error, so the page comes back when the server does.
     queryFn: async () => {
-      const version = await api.storeVersion();
-      const page = queryClient.getQueryData(pageQuery.queryKey);
-      if (page && version !== page.version && queryClient.isMutating() === 0) await reloadPage();
-      return version;
+      const state = await api.storeState();
+      const page = queryClient.getQueryState(pageQuery.queryKey);
+      // A page that could not load at first, or that changed, loads again.
+      const stale = !page?.data || state.version !== page.data.version;
+      if (stale && page?.fetchStatus !== "fetching" && queryClient.isMutating() === 0) await reloadPage();
+      return state;
     },
   });
 }

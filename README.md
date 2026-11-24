@@ -31,7 +31,9 @@ notes, and a note loads when it applies.
     `global` is an index line in a repo, and a brief only outside any repo.
   - The index: one line for each other note, the repo's notes first. A line is the id of the note,
     which is its title in short form, and after `...` the words of the title that the id cut. So a
-    title that states the rule in full reaches every session. A global note with a `cmd`, `stop` or
+    title that states the rule in full reaches every session. The id folds accents (`Ünïcode` gives
+    `unicode`) and leaves out a word with no ASCII form, such as `日本語`, so that line gives the
+    title in full. A title with no ASCII letter or digit gets `note-` and a short hash as its id. A global note with a `cmd`, `stop` or
     `err` trigger gets no line: it loads at its trigger. Open work always keeps its line.
   - A pointer to `kb show` and `kb search`. It counts the global notes that load only at their trigger.
 
@@ -131,9 +133,10 @@ notes, and a note loads when it applies.
 - **A rule goes to an instruction file when the user states it.** The agent starts `/kb:note` on
   its own when the user says "always", "never", "from now on" or corrects it. `kb instructions`
   names the files. A global rule goes into the global file, which `globalInstructions` in
-  `kb.config.json` names (`~/.claude/CLAUDE.md`). kb writes the file at the end of its links, so
-  a dotfiles repo that links it gets the change. A repo rule goes into the repo's `CLAUDE.md` or
-  `AGENTS.md` after you say yes. Nothing is committed for you.
+  `local.json` names (`~/.claude/CLAUDE.md`). kb writes the file at the end of its links, so
+  a dotfiles repo that links it gets the change. A
+  repo rule goes into the repo's `CLAUDE.md` or `AGENTS.md` after you say yes. Nothing is
+  committed for you.
 - **Before `/clear`** you run `/kb:clear`. The agent saves what the session learned,
   updates notes instead of duplicating them, writes stated rules to instruction files, trashes
   finished open work, empties Claude Code's auto memory, and gives a verdict on the notes it got with `kb verdict`.
@@ -301,6 +304,24 @@ notes, and a note loads when it applies.
   .state/triggers.json                          # the table of triggers and anchors that the hooks read
 ```
 
+Two files hold settings. kb writes no default into either one, so a new default of kb reaches you:
+
+- `kb.config.json` syncs to every machine: `budgets`, `holdback`, `decayDays`, `expireDays`,
+  `trashDays` and `autocommit`. Put in only the keys you change.
+- `local.json` stays on its machine: `sync` (true) and `globalInstructions`. Where it has no value,
+  kb reads the key from `kb.config.json`, and where that has none, the default holds. A clone of a
+  store has no `local.json`, so it syncs, and a clone you use for a test needs `"sync": false` in
+  its `local.json`.
+
+An older kb wrote every default into `kb.config.json`, with `sync` and `globalInstructions`. The
+first command that writes copies a valid `sync` or `globalInstructions` value that is not the
+default into `local.json`, once per store (`local.json` then holds `"pinned": true`). A
+`globalInstructions` path that does not exist on this machine stays out. The value stays in
+`kb.config.json`, because a machine that runs an older kb reads it there. For each key, kb takes the
+first valid value from `local.json`, then `kb.config.json`, then the default. If kb wrote the file
+whole, it also drops each key whose value is the default. A value you typed equal to the default
+then follows the default from now on.
+
 ## A note
 
 ```markdown
@@ -384,12 +405,19 @@ and Empty trash clears it all, or with a scope picked only that scope's trash. W
 synced. The server listens on this machine only, and stops with Ctrl+C. To reach it through a
 reverse proxy, name the proxy's host in `KB_SERVE_HOSTS`, split by commas. A name that starts with a
 dot, such as `.example.com`, takes that domain and every name under it, so one setting covers a
-proxy that gives each port its own name. Everybody who can open that name can change notes.
+proxy that gives each port its own name. Everybody who can open that name can read notes.
+
+Only a page opened with the link that `kb serve` prints can change notes. The link ends in
+`#token=...`, the key, as a Jupyter link does. The fragment never reaches a server or a proxy log.
+The page keeps the key in the browser and takes it out of the address. The key stays the same
+when `kb serve` restarts, so an open page keeps working. A page with no key reads, and its banner
+says how to get the key. The server writes the key once, when the store exists, and never reads the file again. To revoke a key, delete `.state/serve-token` in the store and restart `kb serve`. `kb audit` prints its link with the key too.
 
 The page is a React app in `web/` (Vite, Tailwind and shadcn/ui on Base UI). Its build in `web/dist` is
 committed. After a change to `web/` or `cli/wire.ts`, run `bun install` and `bun run build` in `web/`, and
 commit `web/dist` with the change. A test fails while the build is older than its sources.
-`bun run dev` in `web/` serves the page with hot reload against a `kb serve` on port 4810.
+`bun run dev` in `web/` serves the page with hot reload against a `kb serve` on port 4810. Add the
+`#token=...` part of the link that `kb serve` printed to the dev page's address to change notes there.
 
 `kb search` finds the notes that have every word of the query, in any order, in the title or the
 body. A word also finds its other forms: "retry" finds "retries" and "retrying", and "migrations"
@@ -508,7 +536,7 @@ Report a security problem as `SECURITY.md` says.
 
 ## Install
 
-Requirements: Claude Code 2.1.275 or later, a recent [Bun](https://bun.sh) (tested with 1.4) and git.
+Requirements: Claude Code 2.1.275 or later, [Bun](https://bun.sh) 1.3.14 or later (tested with 1.3 and 1.4) and git.
 The hooks look for Bun in `KB_BUN`, on the PATH, then in `~/.bun/bin`, `~/.local/bin`, the mise and asdf shims and the Homebrew folders. Without Bun, kb is off, and a session start says so in one line.
 There is no build step and no dependency to install: the page of `kb serve` comes built in `web/dist`.
 

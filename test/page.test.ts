@@ -13,7 +13,7 @@ describe("the data behind the page", () => {
   test("shows raw HTML in a note as text, and renders the markdown", () => {
     const store = tempStore();
     putNote(store, { id: "xss", title: "A <b>bold</b> title", body: "Use `x`.\n\n<script>alert(1)</script> and <img src=x onerror=alert(1)>" });
-    const [note] = pageData(store, "t").notes;
+    const [note] = pageData(store).notes;
     expect(note!.html).toContain("<code>x</code>");
     expect(note!.html).not.toContain("<script");
     expect(note!.html).not.toContain("<img");
@@ -77,12 +77,11 @@ describe("the data behind the page", () => {
     putNote(store, { id: "newer", scope: "github.com/acme/zed", trashed_at: "2026-06-01T00:00:00Z" }, true);
     putNote(store, { id: "a", scope: "github.com/acme/api" });
     putNote(store, { id: "g" });
-    const data = pageData(store, "the-token");
+    const data = pageData(store);
     expect(data.notes.map((n) => [n.id, n.trashed])).toEqual([["g", false], ["a", false], ["z", false], ["newer", true], ["older", true], ["before", true]]);
     // Each note in the trash says when the trash deletes it.
     expect(data.notes.find((n) => n.id === "newer")!.clears_at).toBe("2026-07-01T00:00:00Z");
     expect(data.trashDays).toBe(30);
-    expect(data.token).toBe("the-token");
     expect(data.kinds).toEqual(["open-work", "gotcha", "convention", "decision", "how-to"]);
   });
 
@@ -91,10 +90,10 @@ describe("the data behind the page", () => {
     const scope = "github.com/acme/api";
     putNote(store, { id: "a", scope });
     putNote(store, { id: "b", scope });
-    const order = () => pageData(store, "t").notes.map((n) => n.id);
+    const order = () => pageData(store).notes.map((n) => n.id);
     const first = storeVersion(store);
     expect(order()).toEqual(["a", "b"]);
-    expect(pageData(store, "t").version).toBe(first);
+    expect(pageData(store).version).toBe(first);
     // No note changed. A read of "b" on this machine puts it first.
     logAt(store, "2026-03-01T00:00:00Z", { ev: "show", note: "b", why: "task" });
     expect(order()).toEqual(["b", "a"]);
@@ -115,7 +114,7 @@ describe("the data behind the page", () => {
     putNote(store, { id: "g" });
     logAt(store, "2026-03-01T00:00:00Z", { ev: "show", note: "a", why: "task" });
     const reads = spyOn(log, "lastActivity");
-    const data = pageData(store, "t");
+    const data = pageData(store);
     expect(reads).toHaveBeenCalledTimes(1);
     expect(data.version).toBe(storeVersion(store));
     expect(reads).toHaveBeenCalledTimes(2);

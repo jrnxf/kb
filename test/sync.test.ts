@@ -6,7 +6,7 @@ import { judgments, lastActivity } from "../cli/log.ts";
 import { findStale } from "../cli/stale.ts";
 import { Store } from "../cli/store.ts";
 import { syncNow } from "../cli/sync.ts";
-import { daysAgo, kb, legacyUsage, logAt, plain, putNote, sh, tempDir } from "./helpers.ts";
+import { daysAgo, kb, legacyUsage, logAt, machineConfig, plain, putNote, sh, tempDir } from "./helpers.ts";
 
 /** Two machines: two clones of one bare remote. */
 function twoMachines(): { a: Store; b: Store } {
@@ -19,7 +19,7 @@ function twoMachines(): { a: Store; b: Store } {
     const store = new Store(home);
     store.ensure();
     // Background sync is off, so each test controls the order of events.
-    writeFileSync(join(home, "kb.config.json"), JSON.stringify({ sync: false }));
+    machineConfig(store, { sync: false });
     return store;
   };
   return { a: make("a"), b: make("b") };
@@ -34,8 +34,8 @@ describe("kb sync", () => {
 
   test("a write starts a background sync that reaches the remote with no kb sync call", async () => {
     const { a, b } = twoMachines();
-    // The config is tracked, so both machines get the same one.
-    for (const store of [a, b]) writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ sync: true }));
+    // Sync is a key of each machine, so each one turns it on.
+    for (const store of [a, b]) machineConfig(store, { sync: true });
     const added = kb(a, ["add", "--json"], { stdin: JSON.stringify({ title: "Pushed in the background", kind: "gotcha", body: "x", scope: "global" }) });
     expect(added.json.status).toBe("created");
     const remoteLog = () => Bun.spawnSync(["git", "-C", join(a.home, "..", "remote.git"), "log", "--format=%s", "main"], { stdout: "pipe", stderr: "pipe" }).stdout.toString();

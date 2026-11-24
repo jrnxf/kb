@@ -8,7 +8,7 @@ import { parseNote } from "../cli/note.ts";
 import { search } from "../cli/search.ts";
 import { recordUnsaved } from "../cli/session.ts";
 import { Store } from "../cli/store.ts";
-import { ROOT, daysAgo, kb, logAt, logged, otherMachine, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { ROOT, daysAgo, kb, logAt, logged, machineConfig, otherMachine, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const add = (store: Store | string, note: object, cwd?: string) => kb(store, ["add", "--json"], { stdin: JSON.stringify(note), cwd });
 
@@ -26,9 +26,9 @@ describe("kb instructions", () => {
     const dir = tempDir();
     writeFileSync(join(dir, "AGENTS.md"), "# Rules\n");
     sh(dir, "ln", "-s", "AGENTS.md", "CLAUDE.md");
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(dir, "CLAUDE.md") }));
+    machineConfig(store, { globalInstructions: join(dir, "CLAUDE.md") });
     expect(kb(store, ["instructions"]).stdout).toContain(`AGENTS.md (${join(dir, "CLAUDE.md")} links here)`);
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(dir, "AGENTS.md") }));
+    machineConfig(store, { globalInstructions: join(dir, "AGENTS.md") });
     expect(kb(store, ["instructions"]).stdout).not.toContain("links here");
   });
 });
@@ -179,7 +179,7 @@ describe("kb add", () => {
         expect(store.find(made.json.id)!.last_verified).toBe(stored);
         kb(store, ["delete", made.json.id]);
       }
-      expect(kb(store, ["add", "--as-of"], { stdin: "{}" })).toMatchObject({ code: 2, stderr: "--as-of needs a value\n" });
+      expect(kb(store, ["add", "--as-of"], { stdin: "{}" })).toMatchObject({ code: 1, stderr: "--as-of needs a value\n" });
       expect(store.notes().map((n) => n.id)).toEqual([note.id]);
     });
   });
@@ -355,15 +355,15 @@ describe("kb add: close notes", () => {
     expect(held.json).toMatchObject({ status: "neighbors", neighbors: [{ id: "second-raw-body" }] });
   });
 
-  // The id comes from the ASCII letters and digits of the title. The words of the note can be in any script.
+  // The id comes from the ASCII words of the title, and a hash when the title has letters that the id drops. The words of the note can be in any script.
   test("a note in another script gets its twin back as a neighbor, and kb search finds it by its own words", () => {
     const store = tempStore();
     const made = add(store, { title: "Staging DB: никогда не запускай миграции на общей базе", kind: "gotcha", body: "Базу делят четыре команды. Миграция там удалила нужную колонку.", scope: "global" });
-    expect(made.json).toMatchObject({ status: "created", id: "staging-db" });
+    expect(made.json.id).toMatch(/^staging-db-[0-9a-f]{8}$/);
     const held = add(store, { title: "Общая база staging: миграции запускать нельзя", kind: "gotcha", body: "Миграция удалила колонку другой команды.", scope: "global" });
     expect([held.json.status, held.code]).toEqual(["neighbors", 2]);
-    expect(held.json.neighbors[0]).toMatchObject({ id: "staging-db", shared: expect.arrayContaining(["миграции", "колонку"]) });
-    expect(kb(store, ["search", "миграция", "колонку"]).stdout).toStartWith("staging-db | global | Staging DB: никогда");
+    expect(held.json.neighbors[0]).toMatchObject({ id: made.json.id, shared: expect.arrayContaining(["миграции", "колонку"]) });
+    expect(kb(store, ["search", "миграция", "колонку"]).stdout).toStartWith(`${made.json.id} | global | Staging DB: никогда`);
   });
 
   // An agent in a repo wrote a draft with "scope": "repo", got a global neighbor, and passed its id.
@@ -670,7 +670,7 @@ describe("the event log from the CLI", () => {
     kb(store, ["show", "ledger"], { cwd: repo, env });
     kb(store, ["show", "ledger-rows", "--check"], { cwd: repo, env });
     // The older --no-use is gone: an unknown flag, and nothing is logged.
-    expect(kb(store, ["show", "ledger-rows", "--no-use"], { cwd: repo, env }).code).toBe(2);
+    expect(kb(store, ["show", "ledger-rows", "--no-use"], { cwd: repo, env }).code).toBe(1);
     // The --session flag wins over the environment, and a session outside any repo has the scope "global".
     kb(store, ["show", "old", "--session", "s2"], { env });
     kb(store, ["search", "append-only", "rows"], { cwd: repo, env });
@@ -749,7 +749,7 @@ describe("the event log from the CLI", () => {
     // A session may judge a note it trashed a moment ago.
     expect(kb(store, ["verdict", "wrong", "trashed"], { env }).code).toBe(0);
     // The older kb use is gone.
-    expect(kb(store, ["use", "a", "b"], { env })).toMatchObject({ code: 2, stderr: 'unknown command "use". Run `kb help`.\n' });
+    expect(kb(store, ["use", "a", "b"], { env })).toMatchObject({ code: 1, stderr: 'unknown command "use". Run `kb help`.\n' });
     expect(logged(store).slice(1)).toEqual([
       { ev: "verdict", session: "s1", scope: "global", note: "a", verdict: "helped" },
       { ev: "verdict", session: "s1", scope: "global", note: "b", verdict: "not-needed" },
@@ -1350,6 +1350,29 @@ describe("kb search", () => {
     expect(kb(store, ["search", "retry", "days"]).stdout.trimEnd().split("\n")).toEqual(["retries | global | The provider retries a webhook for 3 days", "  11: Each retry has the same event id."]);
     // The closest-match answer counts a form as the word.
     expect(kb(store, ["search", "webhook", "retry", "zebra"]).stdout).toStartWith("no note has every word. Closest:\nretries | ");
+  });
+});
+
+describe("kb add with a title that is not ASCII", () => {
+  test("folds accents into the id, gives a title with no ASCII word a hash id, and finds its twin", () => {
+    const store = tempStore();
+    const note = { kind: "convention", scope: "global", body: "b", new: true };
+    const mixed = add(store, { ...note, title: "Ünïcode 日本語 🚀 title" });
+    expect(mixed.json.id).toMatch(/^unicode-title-[0-9a-f]{8}$/);
+    // A small ASCII part does not decide for a title that is mostly Japanese.
+    expect(add(store, { ...note, title: "v2 の問題" }).json.status).toBe("created");
+    expect(add(store, { ...note, title: "v2 のバグ" }).json.status).toBe("created");
+    expect(add(store, { ...note, title: "v2 の問題" }).json.status).toBe("exists");
+    const japanese = add(store, { ...note, title: "日本語だけのタイトル" });
+    expect(japanese.json.id).toMatch(/^note-[0-9a-f]{8}$/);
+    expect(add(store, { ...note, title: " 日本語だけのタイトル " }).json).toMatchObject({ status: "exists", id: japanese.json.id });
+    expect(add(store, { ...note, title: "🚀 ✨" }).json).toEqual({ error: "invalid note: title: needs letters or digits" });
+    for (const title of ["!!!", "---", "\u200b"]) expect(add(store, { ...note, title }).json).toEqual({ error: "invalid note: title: needs letters or digits" });
+    expect(add(store, { ...note, title: "   " }).json).toEqual({ error: "invalid note: title: required" });
+    const context = kb(store, ["context"]).stdout;
+    expect(context).toContain(`- ${japanese.json.id} [convention] 日本語だけのタイトル\n`);
+    // The id leaves out the words with no ASCII form, so the line keeps them.
+    expect(context).toContain(`- ${mixed.json.id} [convention] Ünïcode 日本語 🚀 title\n`);
   });
 });
 

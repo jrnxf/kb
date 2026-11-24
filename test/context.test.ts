@@ -100,6 +100,11 @@ describe("kb context ranking", () => {
     expect(line(slugify(long), long)).toBe("- never-run-the-migration-tool-against-the-shared [gotcha] ...staging database (it is shared)");
     // An id that is the whole title stands alone: the title would say it twice.
     expect(line("amounts-are-integer-cents", "Amounts are integer cents!")).toBe("- amounts-are-integer-cents [gotcha]");
+    // A mark that the id holds without loss does not bring the title, and the cut words still follow.
+    expect(line("it-s-fine-today", "It’s fine — today →")).toBe("- it-s-fine-today [gotcha]");
+    expect(line("the-deploy-cli-exits-0-when-the-upload-was", "The deploy CLI exits 0 when the upload was rejected → 🚀")).toBe("- the-deploy-cli-exits-0-when-the-upload-was [gotcha] ...rejected → 🚀");
+    // A word that the id lost brings the whole title.
+    expect(line("v2-12345678", "v2 の問題")).toBe("- v2-12345678 [gotcha] v2 の問題");
     // An id that does not come from the title gets the whole title.
     expect(line("two", "A global fact")).toBe("- two [gotcha] A global fact");
     expect(line("amounts-are-integer-cents-2", "Amounts are integer cents")).toBe("- amounts-are-integer-cents-2 [gotcha] Amounts are integer cents");
