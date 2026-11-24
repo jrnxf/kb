@@ -4,12 +4,15 @@
 // no session start measured yet, and forgets the short ones, so `kb unsaved` lists only sessions
 // that are worth a recovery. Both read a transcript, so they live here and not in the CLI.
 // `kb-transcript --memory` names Claude Code's auto memory folder of this project, for /kb:save.
+// `kb-transcript --remove-memory <file>` keeps a private copy of one memory file, then removes it.
 
-import { readdirSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { maskSecrets } from "../cli/secrets.ts";
-import { type UnsavedSession, allUnsaved, isDir, unsavedSession, writeRecoverFile } from "../cli/session.ts";
-import { Store, git, userHome } from "../cli/store.ts";
+import { claudeConfigDir } from "./auto-memory.ts";
+import { MEMORY_BACKUPS, type UnsavedSession, allUnsaved, isDir, privateDir, unsavedSession, writeRecoverFile } from "../cli/session.ts";
+import { localDate } from "../cli/note.ts";
+import { Store, git } from "../cli/store.ts";
 import { readConversation } from "./transcript.ts";
 import { settle } from "./unsaved-notice.ts";
 
@@ -94,8 +97,7 @@ const NAME_MAX = 200;
  * outside the project.
  */
 function memory(): void {
-  const config = process.env.CLAUDE_CONFIG_DIR || join(userHome(), ".claude");
-  const projects = join(config, "projects");
+  const projects = join(claudeConfigDir(), "projects");
   const name = realpathSync(process.env.CLAUDE_PROJECT_DIR || process.cwd()).replace(/[^a-zA-Z0-9]/g, "-");
   let dir = name;
   if (name.length > NAME_MAX && !isDir(join(projects, name))) {
@@ -107,12 +109,84 @@ function memory(): void {
   console.log(JSON.stringify({ folder, files }));
 }
 
+/**
+ * Remove one auto memory file that kb or an instruction file holds now, after a private copy of it
+ * goes to the store's per-machine state folder. /kb:save runs this in place of `rm`, so a fact that
+ * a save got wrong can come back. The path must be a memory file, as Claude Code lays them out:
+ * `<config>/projects/<name>/memory/<file>.md` in Claude's own config folder, not MEMORY.md, and not
+ * a link. A copy goes with the trash, `trashDays` after the day of its removal.
+ */
+function removeMemory(store: Store, args: string[]): void {
+  if (args.length !== 1 || !args[0]) fail("usage: kb-transcript --remove-memory <absolute path of one memory file>, one file per command");
+  const file = args[0];
+  try {
+    removeOne(store, file);
+  } catch (error) {
+    // The file stays unless its copy was written, as the copy comes first. One JSON line, as every result is.
+    fail(`could not remove ${file}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function removeOne(store: Store, file: string): void {
+  let dir: string;
+  try {
+    dir = realpathSync(dirname(file));
+  } catch {
+    return fail(`no folder ${dirname(file)}`);
+  }
+  const real = join(dir, basename(file));
+  let projects: string;
+  const config = claudeConfigDir();
+  try {
+    projects = realpathSync(join(config, "projects"));
+  } catch {
+    return fail(`Claude's projects folder ${join(config, "projects")} does not exist or cannot be read`);
+  }
+  const folder = dirname(real);
+  const name = basename(dirname(folder));
+  if (!real.endsWith(".md") || basename(real) === "MEMORY.md" || basename(folder) !== "memory" || dirname(dirname(folder)) !== projects) {
+    return fail(`${file} is not an auto memory file: kb removes only ${join(projects, "<name>", "memory", "<file>.md")}, and never MEMORY.md`);
+  }
+  // Open once, without following a link at the last step, and read from that handle: a swap of the file between the check and the read cannot send the read elsewhere.
+  let text: string;
+  try {
+    const fd = openSync(real, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      if (!fstatSync(fd).isFile()) return fail(`${file} is not a file`);
+      text = readFileSync(fd, "utf8");
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return fail(code === "ENOENT" ? `no memory file ${file}` : code === "ELOOP" ? `${file} is a link` : `cannot read ${file}: ${(error as Error).message}`);
+  }
+  store.ensure();
+  const root = store.statePath(MEMORY_BACKUPS);
+  const into = join(root, localDate(new Date().toISOString()), name);
+  privateDir(into, root);
+  // A second file of the same name on the same day gets a number. An exclusive create never takes a copy that is there.
+  let backup = join(into, basename(real));
+  for (let n = 2; ; n++) {
+    try {
+      writeFileSync(backup, text, { flag: "wx", mode: 0o600 });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      backup = join(into, `${basename(real, ".md")}.${n}.md`);
+    }
+  }
+  rmSync(real);
+  console.log(JSON.stringify({ removed: real, backup }));
+}
+
 const arg = process.argv[2];
 if (!arg) {
-  console.error("usage: kb-transcript <session id> | --measure | --memory");
+  console.error("usage: kb-transcript <session id> | --measure | --memory | --remove-memory <file>");
   process.exit(1);
 }
 if (arg === "--memory") memory();
+else if (arg === "--remove-memory") removeMemory(new Store(), process.argv.slice(3));
 else {
   const store = new Store();
   if (arg === "--measure") measure(store);
