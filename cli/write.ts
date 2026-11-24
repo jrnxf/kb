@@ -298,6 +298,7 @@ export function moveScope(store: Store, from: string, to: string, dryRun = false
   }
   for (const { path, trashed: inTrash } of all) {
     rmSync(path, { force: true });
+    store.track(path);
     pruneEmpty(dirname(path), join(store.home, inTrash ? "trash" : "notes"));
   }
   moveRepo(store, from, to);
