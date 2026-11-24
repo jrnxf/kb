@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PageNote } from "../../../cli/wire.ts";
 import { Button } from "@/components/ui/button";
-import { Empty, EmptyContent, EmptyTitle } from "@/components/ui/empty";
+import { Empty, EmptyContent, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,7 +16,7 @@ interface Props {
   searchRef: React.RefObject<HTMLInputElement | null>;
   onOpen: (note: PageNote) => void;
   /** Why the list is empty, and the shortest way back to notes. */
-  empty: { text: string; action?: { label: string; run: () => void } };
+  empty: { text: string; hint?: React.ReactNode; action?: { label: string; run: () => void } };
   /** The list shows the trash: it says how long a note stays, and offers to empty it. */
   trash?: { days: number; onEmpty: () => void };
   /** The list shows one project: it offers to move the whole project to the trash, and to audit it. */
@@ -101,6 +101,7 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, tra
         {notes.length === 0 ? (
           <Empty className="items-start gap-2.5 rounded-none border-0 px-4 pt-0.5 pb-6 text-left md:p-0 md:px-4">
             <EmptyTitle className="text-[13.5px] font-normal text-muted-foreground">{empty.text}</EmptyTitle>
+            {empty.hint && <EmptyDescription className="text-[13.5px] leading-normal">{empty.hint}</EmptyDescription>}
             {empty.action && (
               <EmptyContent className="items-start">
                 <Button variant="outline" size="xs" onClick={empty.action.run}>

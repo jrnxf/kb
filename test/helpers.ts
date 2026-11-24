@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "playwright";
@@ -11,6 +11,12 @@ process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_SYSTEM = "/dev/null";
 process.env.GIT_AUTHOR_NAME = process.env.GIT_COMMITTER_NAME = "kb test";
 process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = "kb@example.com";
+
+// Each test run has its own home folder: a test never reads or writes the user's own files, and
+// two runs at once never share one.
+const testHome = realpathSync(mkdtempSync(join(tmpdir(), "kb-home-")));
+process.env.HOME = testHome;
+process.on("exit", () => rmSync(testHome, { recursive: true, force: true }));
 
 // The session of the developer or the agent that runs the tests must not reach the event log of a test.
 delete process.env.KB_SESSION;
@@ -57,6 +63,11 @@ export function tempRepo(options: { remote?: string; name?: string } = {}): stri
   sh(dir, "git", "commit", "-q", "-m", "init");
   if (options.remote) sh(dir, "git", "remote", "add", "origin", options.remote);
   return dir;
+}
+
+/** Set per-machine keys, such as sync and globalInstructions, in the store's local.json. */
+export function machineConfig(store: Store, keys: Record<string, unknown>): void {
+  store.saveLocal({ ...store.local(), ...keys });
 }
 
 let counter = 0;

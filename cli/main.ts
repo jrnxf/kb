@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 // kb: a personal knowledge store for coding agents. Harness-agnostic: flags and stdin only.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
+import { type Args, USAGE_EXIT, UsageError, parseArgs } from "./args.ts";
 import { openAudits, proposeAudit, readAudit } from "./audit.ts";
 import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
@@ -14,14 +16,15 @@ import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isVali
 import { commitAt, resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
-import { DEFAULT_PORT, isKbServer, runningPort, serve } from "./serve.ts";
+import { DEFAULT_PORT, isKbServer, kbServerAt, linkToRunning, runningPort, serve, storeId } from "./serve.ts";
 import { resultGroups } from "./wire.ts";
 import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, isLive, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
 import { CHANGED_MARK, changedAsk, changedSinceCheck, clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
-import { Store } from "./store.ts";
+import { Store, git } from "./store.ts";
 import { syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
-import { afterWrite, asOfTime, checkedHashes, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+import { version, versionText } from "./version.ts";
+import { afterWrite, asOfTime, checkedHashes, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireIdOrPart, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 /** `kb add` exits with this code when it wrote nothing because of close notes: an answer to read, not an error (1). */
 const NEIGHBORS_EXIT = 2;
@@ -52,9 +55,11 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          not-needed is only for a note that a trigger loaded in the
                                          session, never for a note from the session start
   kb trash <id>... | kb restore <id>...  trash retires a note: restore brings it back. A note in the
-                                         trash for more than trashDays (30) is deleted for good
+                                         trash for more than trashDays (30) is deleted for good. A part
+                                         of the id is enough when one note has it
   kb delete <id>...                      remove notes for good, active or in the trash. When the user
-                                         wants a note gone now. In a git store, the history keeps the file
+                                         wants a note gone now. In a git store, the history keeps the file.
+                                         Whole ids only
   kb empty-trash                         remove every note in the trash for good
   kb trash --scope <repo id>             move every note of a project to the trash. restore --scope
                                          brings that move back. delete --scope removes the project's
@@ -92,8 +97,11 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          kb alone in a terminal does the same. Behind a proxy, name it in
                                          KB_SERVE_HOSTS: kb.example.com, or .example.com for every name under it
   kb sync                                commit, pull and push the store
+  kb version                             the commit kb runs from. Also kb --version
 
 Every command accepts --json. The store is ~/.kb, or KB_HOME.
+A flag that the command does not take is an error, exit code ${USAGE_EXIT}: nothing ran. After --, every
+word is plain text: kb search -- --force.
 A read, a write and a verdict each add one line to a log on this machine. The line names the
 session: --session <id>, or KB_SESSION, or the id that Claude Code sets for the command.
 The log stays on its machine. A small roll-up of it syncs with the store, at most once per day.
@@ -150,34 +158,6 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
   Exit codes: 0 for "created", "updated", "exists" and "newer". ${NEIGHBORS_EXIT} for "neighbors": nothing was
   written, and the answer is on stdout as always. 1 for an error.`;
 
-interface Args {
-  positional: string[];
-  flags: Map<string, string | true>;
-}
-
-const VALUE_FLAGS = new Set(["as-of", "ended", "file", "forget", "recovered-from", "repo", "scope", "to", "port", "session", "since"]);
-
-function parseArgs(argv: string[]): Args {
-  const positional: string[] = [];
-  const flags = new Map<string, string | true>();
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (!arg.startsWith("--")) {
-      positional.push(arg);
-      continue;
-    }
-    const [name, inline] = arg.slice(2).split(/=(.*)/s) as [string, string | undefined];
-    if (VALUE_FLAGS.has(name)) {
-      const value = inline ?? argv[++i];
-      if (value === undefined) throw new KbError(`--${name} needs a value`);
-      flags.set(name, value);
-    } else {
-      flags.set(name, true);
-    }
-  }
-  return { positional, flags };
-}
-
 function uniqueId(base: string, taken: Set<string>): string {
   if (!taken.has(base)) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
@@ -195,7 +175,10 @@ function cmdContext(store: Store, args: Args): Output {
   // HOLDBACK: the arm comes from --session alone, so the command prints the new policy unless a session is named.
   const session = args.flags.get("session");
   const result = buildContext(store, String(args.flags.get("repo") ?? "."), typeof session === "string" ? session : undefined);
-  return { json: result, text: result.text.trimEnd() };
+  const text = result.text.trimEnd();
+  // A hook reads stdout, so an empty start stays empty there. A person at a terminal gets one line.
+  if (!text && process.stdout.isTTY && !args.flags.has("json") && !args.flags.has("quiet")) console.error(`kb context: no note loads at a session start in ${result.scope ?? "global"}.`);
+  return { json: result, text };
 }
 
 function cmdScope(store: Store, args: Args): Output {
@@ -204,8 +187,10 @@ function cmdScope(store: Store, args: Args): Output {
 }
 
 /** The JSON a command reads: the file of --file, or stdin. A shell can refuse a heredoc. A file always passes. */
-async function inputText(args: Args): Promise<string> {
+async function inputText(args: Args, command: string): Promise<string> {
   const file = args.flags.get("file");
+  // A person at a terminal would wait on stdin with no prompt.
+  if (file === undefined && process.stdin.isTTY) throw new UsageError(`kb ${command} reads JSON from --file <path> or from stdin, and stdin is a terminal. Pass --file, or pipe the JSON in.`);
   if (file === undefined) return Bun.stdin.text();
   try {
     return readFileSync(resolve(String(file)), "utf8");
@@ -232,16 +217,34 @@ function neighborsHint(neighbors: Neighbor[], scope: string): string {
   return [NEIGHBORS_HINT, ...elsewhere].join(" ");
 }
 
+/** Why git found no repo at `dir`, in words: a missing git, a missing or unreadable folder, or no repo. */
+function noRepoWhy(dir: string): string {
+  if (!git(tmpdir(), "--version").ok) return "kb cannot run git, so it found no git repo";
+  try {
+    if (!statSync(dir).isDirectory()) return `kb found no git repo at ${dir}, which is not a directory`;
+    readdirSync(dir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return `kb found no git repo at ${dir}, which ${code === "ENOENT" ? "does not exist" : "it cannot read"}`;
+  }
+  return `kb found no git repo at ${dir}`;
+}
+
 const ADD_INPUT = "kb add reads one JSON object, from --file <path> or on stdin";
 
-function cmdAdd(store: Store, args: Args, text: string): Output {
-  let input: Record<string, unknown>;
+/** The JSON of a command's input, or an error that says what is wrong with it. */
+function parseInput(text: string, expected: string): unknown {
+  if (!text.trim()) throw new KbError(`${expected}. The input is empty.`);
   try {
-    input = JSON.parse(text);
-  } catch {
-    throw new KbError(ADD_INPUT);
+    return JSON.parse(text);
+  } catch (error) {
+    throw new KbError(`${expected}. The input is not valid JSON (${text.length} characters): ${(error as Error).message}`);
   }
-  if (input === null || typeof input !== "object" || Array.isArray(input)) throw new KbError(ADD_INPUT);
+}
+
+function cmdAdd(store: Store, args: Args, text: string): Output {
+  const input = parseInput(text, ADD_INPUT) as Record<string, unknown>;
+  if (input === null || typeof input !== "object" || Array.isArray(input)) throw new KbError(`${ADD_INPUT}. The input is ${Array.isArray(input) ? "an array" : input === null ? "null" : `a ${typeof input}`}.`);
 
   store.ensure();
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
@@ -289,10 +292,21 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   const slug = slugify(input.title);
   if (!slug) throw new KbError("invalid note: title: needs letters or digits");
 
+  // No repo here, so a note with no scope is global, and loads in every repo. An anchor names a
+  // file of one repo, so such a note was meant for a repo: it is refused. The refusal comes before the twin check, whose hint would lead to repo anchors on a global note. Any other note is saved.
+  const looked = resolve(String(args.flags.get("repo") ?? "."));
+  const noRepo = input.scope === undefined && repo.scope === null;
+  if (noRepo && Array.isArray(input.anchors) && input.anchors.length > 0) {
+    throw new KbError(`${noRepoWhy(looked)}, so this note would be global, and its anchors name files of a repo. Run kb add inside the repo, or pass --repo <its directory>. For a fact of every repo, pass "scope": "global".`);
+  }
+
   // Same normalised title in the same scope: let the caller decide to update.
   const title = normalizeTitle(input.title);
   const twin = active.find((n) => n.scope === scope && (normalizeTitle(n.title) === title || n.id === title));
-  if (twin) return { json: { status: "exists", id: twin.id, path: twin.path }, text: `exists ${twin.id}` };
+  if (twin) {
+    const hint = `A note with this title is in ${scope}. To update it, pass "id": "${twin.id}" and no "scope".`;
+    return { json: { status: "exists", id: twin.id, path: twin.path, hint }, text: `exists ${twin.id}\n${hint}` };
+  }
 
   const raw: Record<string, unknown> = {
     confidence: "medium",
@@ -334,12 +348,13 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   afterWrite(store, `kb: add ${note.id}`);
   logWrites(store, "add", [note.id], shown, typeof from === "string" ? from : undefined);
   recovered(note.id);
-  return added("created", { id: note.id, path }, note, repo.scope !== null, neighbors);
+  const where = noRepo ? [`${noRepoWhy(looked)}, so the note is global: it loads in every repo. That is right for a fact of every repo. For a fact of one repo, trash this note and run kb add inside the repo, or pass --repo <its directory>. Pass "scope": "global" to save a global note with no warning.`] : [];
+  return added("created", { id: note.id, path }, note, repo.scope !== null, neighbors, where);
 }
 
 /** The result of a note that `kb add` saved, with what the writer should look at again. */
-function added(status: "created" | "updated", saved: { id: string; path: string }, note: Note, inRepo: boolean, neighbors: Neighbor[] = []): Output {
-  const warnings = noteWarnings(note, inRepo);
+function added(status: "created" | "updated", saved: { id: string; path: string }, note: Note, inRepo: boolean, neighbors: Neighbor[] = [], more: string[] = []): Output {
+  const warnings = [...more, ...noteWarnings(note, inRepo)];
   const close = neighbors.length > 0;
   return {
     json: { status, ...saved, ...(close ? { neighbors } : {}), ...(warnings.length > 0 ? { warnings } : {}) },
@@ -392,8 +407,7 @@ function cmdShow(store: Store, args: Args): Output {
   const given = args.positional[0];
   if (!given) throw new KbError("usage: kb show <id> [--check]");
   // Ids are long. A part of one is enough to read a note, when only one note has it.
-  const close = store.find(given) ? [] : closeIds(store, given);
-  const note = requireNote(store, close.length === 1 ? close[0]! : given);
+  const note = requireIdOrPart(store, given);
   // A read changes nothing in the store. The log on this machine records it. A look into the
   // trash is marked, so it never counts as activity of the note.
   logEvent(store, { ev: "show", note: note.id, why: whyOf(args), ...(note.trashed ? { trashed: true as const } : {}) });
@@ -464,7 +478,7 @@ function cmdList(store: Store, args: Args): Output {
   const text =
     rows.length === 0
       ? trash ? "the trash is empty" : "no notes"
-      : [line("id", "kind", "scope", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, r.last_verified.slice(0, 10), `${r.title}${r.clears_at ? ` (deleted ${r.clears_at.slice(0, 10)})` : ""}`))].join("\n");
+      : [line("id", "kind", "scope", "verified", "title"), ...rows.map((r) => line(r.id, r.kind, r.scope, r.last_verified.slice(0, 10), `${r.title}${r.clears_at ? ` (purges ${r.clears_at.slice(0, 10)})` : ""}`))].join("\n");
   return { json: rows, text };
 }
 
@@ -513,8 +527,13 @@ function cmdMove(store: Store, args: Args, toTrash: boolean): Output {
     return { json: { scope, [toTrash ? "trashed" : "restored"]: moved }, text: toTrash ? `moved ${count} of ${scope} to the trash: ${moved.join(", ")}` : `restored ${count} of ${scope}: ${moved.join(", ")}` };
   }
   if (args.positional.length === 0) throw new KbError(`usage: kb ${verb} <id>...`);
-  const moved = moveNotes(store, args.positional, toTrash);
-  return { json: { [toTrash ? "trashed" : "restored"]: moved }, text: `${toTrash ? "moved to the trash:" : "restored"} ${moved.join(", ")}` };
+  // A part of an id is enough, as in kb show, when only one note it can move has it.
+  const given = args.positional.map((word) => ({ word, id: requireIdOrPart(store, word, !toTrash).id }));
+  const moved = moveNotes(store, given.map((g) => g.id), toTrash);
+  // A part of an id moved a note: name the note, so a word that matched more than meant is seen.
+  const matched = given.filter((g) => g.word !== g.id);
+  const names = given.map((g) => (g.word === g.id ? g.id : `${g.id} (matched ${g.word})`));
+  return { json: { [toTrash ? "trashed" : "restored"]: moved, ...(matched.length > 0 ? { matched: Object.fromEntries(matched.map((g) => [g.word, g.id])) } : {}) }, text: `${toTrash ? "moved to the trash:" : "restored"} ${names.join(", ")}` };
 }
 
 function cmdEmptyTrash(store: Store, args: Args): Output {
@@ -531,7 +550,14 @@ function cmdDelete(store: Store, args: Args): Output {
     return { json: { scope, deleted }, text: `deleted ${deleted.length} ${deleted.length === 1 ? "note" : "notes"} of ${scope}: ${deleted.join(", ")}` };
   }
   if (args.positional.length === 0) throw new KbError("usage: kb delete <id>...");
-  const deleted = deleteNotes(store, args.positional);
+  // A delete is for good, so a part of an id is never enough, also when only one note has it.
+  let deleted: string[];
+  try {
+    deleted = deleteNotes(store, args.positional);
+  } catch (error) {
+    if (!(error instanceof KbError)) throw error;
+    throw new KbError(`${error.message}. kb delete removes notes for good, so it takes whole ids only. Nothing was deleted.`);
+  }
   return { json: { deleted }, text: `deleted ${deleted.join(", ")}` };
 }
 
@@ -545,12 +571,26 @@ function cmdStale(store: Store, args: Args): Output {
 function cmdVerify(store: Store, args: Args): Output {
   if (args.positional.length === 0) throw new KbError("usage: kb verify <id>... [--repo .]");
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
-  const notes = args.positional.map((id) => {
-    const note = requireNote(store, id);
-    if (note.trashed) throw new KbError(`${id} is in the trash. Restore it first.`);
-    if (note.scope !== "global" && note.scope !== repo.scope) throw new KbError(`${id} belongs to ${note.scope}. Run kb verify inside that repo, so the commit is recorded.`);
+  const resolved = args.positional.map((given) => {
+    let note;
+    try {
+      note = requireIdOrPart(store, given, false);
+    } catch (error) {
+      // A part that names no active note may name one in the trash: say so, and not "no note".
+      // Two active notes with the part stay an error: the trash is no answer to that.
+      if (closeIds(store, given, false).length > 0) throw error;
+      try {
+        note = requireIdOrPart(store, given, true);
+      } catch {
+        throw error;
+      }
+    }
+    if (note.trashed) throw new KbError(`${note.id} is in the trash. Restore it first.`);
+    if (note.scope !== "global" && note.scope !== repo.scope) throw new KbError(`${note.id} belongs to ${note.scope}. Run kb verify inside that repo, so the commit is recorded.`);
     return note;
   });
+  // Two words can name one note.
+  const notes = resolved.filter((note, i) => resolved.findIndex((n) => n.id === note.id) === i);
   const now = nowIso();
   for (const { path: _path, trashed: _trashed, ...note } of notes) {
     note.last_verified = now;
@@ -796,27 +836,37 @@ function openInBrowser(url: string): void {
   }
 }
 
-/** Start the page server and stay up until the process is stopped. */
+/**
+ * Start the page server and stay up until the process is stopped. A store that does not exist yet
+ * shows as an empty page, and the first note creates it.
+ */
 async function cmdServe(store: Store, args: Args, json: boolean): Promise<never> {
-  if (!store.exists()) throw new KbError("the store does not exist yet. `kb add` creates it.");
   const flag = args.flags.get("port");
   const port = flag === undefined ? DEFAULT_PORT : Number(flag);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new KbError("--port needs a number from 0 to 65535");
   const open = !args.flags.has("no-open") && !json;
+  // The link carries the key that lets the page change notes. It is in the fragment, so no server or proxy log sees it.
   let url: string;
+  let note = "";
   try {
-    url = serve(store, { port }).url;
+    url = serve(store, { port }).link;
   } catch (error) {
     if ((error as { code?: string })?.code !== "EADDRINUSE") throw error;
-    if (!(await isKbServer(port))) throw new KbError(`port ${port} is in use by another program. Pass --port.`);
-    // One server per port is enough: show the one that is already up.
-    url = `http://127.0.0.1:${port}/`;
+    const running = await kbServerAt(port);
+    if (!running) throw new KbError(`port ${port} is in use by another program. Pass --port.`);
+    // A kb older than this one does not name its store.
+    if (running.store !== undefined && running.store !== storeId(store)) throw new KbError(`port ${port} serves another kb store. Stop that kb serve, or pass --port.`);
+    // One server per port is enough: show the one that is already up, with the key it uses.
+    const found = await linkToRunning(store, port);
+    url = found.link;
+    if (!found.keyed) note = `The link has no key, so the page is read only. To change notes, stop that kb serve${running.store === undefined ? " (it is from an older kb)" : ""} and run kb serve again.`;
     if (open) openInBrowser(url);
-    console.log(json ? JSON.stringify({ url, started: false }, null, 2) : `kb serve is already running at ${url}`);
+    console.log(json ? JSON.stringify({ url, started: false, ...(note ? { note } : {}) }, null, 2) : `kb serve is already running at ${url}${note ? `\n${note}` : ""}`);
     process.exit(0);
   }
   console.log(json ? JSON.stringify({ url, started: true }, null, 2) : `kb serve: ${url}
-Press Ctrl+C to stop.`);
+Open this link to read and change notes. Without its key the page is read only.
+Press Ctrl+C to stop. \`kb help\` lists the commands.`);
   if (open) openInBrowser(url);
   return new Promise<never>(() => {});
 }
@@ -835,20 +885,15 @@ async function cmdAudit(store: Store, args: Args, input: () => Promise<string>):
   if (sub !== undefined && sub !== "propose" && sub !== "status") throw new KbError("usage: kb audit [propose | status] [--repo .] [--no-wait]");
   // The link goes to the server that is running: the port kb serve recorded, or the default.
   const port = (await runningPort(store)) ?? DEFAULT_PORT;
-  const url = `http://127.0.0.1:${port}/#audit=${encodeURIComponent(scope)}`;
+  // The link carries the key, as the serve link does, so the page can apply the picks.
+  const { link: url } = await linkToRunning(store, port, `#audit=${encodeURIComponent(scope)}`);
   const served = () => isKbServer(port);
   const open = async (cards: number, lead: string): Promise<Output> => ({
     json: { scope, status: "open", cards, url, served: await served() },
     text: `${lead}\n${(await served()) ? `open ${url}` : `kb serve is not running. Start it with \`kb serve\`, then open ${url}`}`,
   });
   if (sub === "propose") {
-    const text = await input();
-    let proposal: unknown;
-    try {
-      proposal = JSON.parse(text);
-    } catch {
-      throw new KbError('kb audit propose reads {"items": [...]}, from --file <path> or on stdin');
-    }
+    const proposal = parseInput(await input(), 'kb audit propose reads {"items": [...]}, from --file <path> or on stdin');
     store.ensure();
     const audit = proposeAudit(store, proposal, repo);
     return open(audit.items.length, `saved ${audit.items.length} cards for ${scope}`);
@@ -897,15 +942,48 @@ function cmdSync(store: Store): Output {
   return { json: result, text: `${result.status}: ${result.detail}` };
 }
 
+/** Each command that runs, by name. The words that print the help or the version are in main(). */
+const HANDLERS: Record<string, (store: Store, args: Args, json: boolean) => Output | Promise<Output>> = {
+  context: cmdContext,
+  scope: cmdScope,
+  add: async (store, args) => cmdAdd(store, args, await inputText(args, "add")),
+  show: cmdShow,
+  search: cmdSearch,
+  list: cmdList,
+  verdict: (store, args) => cmdVerdict(store, args.positional[0], args.positional.slice(1), sessionOf(args.flags.get("session"))),
+  use: (store, args) => cmdVerdict(store, "helped", args.positional),
+  log: cmdLog,
+  trash: (store, args) => cmdMove(store, args, true),
+  restore: (store, args) => cmdMove(store, args, false),
+  delete: cmdDelete,
+  "empty-trash": cmdEmptyTrash,
+  stale: cmdStale,
+  verify: cmdVerify,
+  budget: cmdBudget,
+  instructions: cmdInstructions,
+  checkpointed: cmdCheckpointed,
+  unsaved: cmdUnsaved,
+  serve: cmdServe,
+  audit: (store, args) => cmdAudit(store, args, () => inputText(args, "audit propose")),
+  sync: (store) => cmdSync(store),
+};
+
+const INFO_COMMANDS = ["help", "--help", "-h", "version", "--version"];
+
 async function main(): Promise<number> {
   let json = false;
   try {
     const [command, ...rest] = process.argv.slice(2);
-    const args = parseArgs(rest);
+    // Until the flags parse, only a --json before "--" counts: it is the flag, and not a word to search for.
+    const end = rest.indexOf("--");
+    json = (end < 0 ? rest : rest.slice(0, end)).includes("--json");
+    // The flags are checked against the command, so an unknown command is named first.
+    if (command !== undefined && !Object.hasOwn(HANDLERS, command) && !INFO_COMMANDS.includes(command)) throw new UsageError(`unknown command "${command}". Run \`kb help\`.`);
+    const args = parseArgs(rest, command);
     json = args.flags.has("json");
     const store = new Store();
     // A note whose time in the trash is up is gone before any command reads the store.
-    if (command && store.exists() && !["help", "--help", "-h"].includes(command) && !args.flags.has("help")) {
+    if (command && store.exists() && !INFO_COMMANDS.includes(command) && !args.flags.has("help")) {
       // Housekeeping must never stop the command, above all a restore or a delete.
       try {
         tidyTrash(store);
@@ -921,37 +999,17 @@ async function main(): Promise<number> {
       setActor(() => (who ??= { session: sessionOf(args.flags.get("session")), scope: resolveRepo(String(args.flags.get("repo") ?? "."), store, { record: false }).scope ?? "global" }));
     }
     // A person who types only `kb` in a terminal wants to see the notes. A script gets the help.
-    if (!command && process.stdout.isTTY && store.exists()) await cmdServe(store, args, json);
+    if (!command && process.stdout.isTTY) await cmdServe(store, args, json);
     if (!command || command === "help" || command === "--help" || command === "-h" || args.flags.has("help")) {
       console.log(USAGE);
       return 0;
     }
-    let out: Output;
-    switch (command) {
-      case "context": out = cmdContext(store, args); break;
-      case "scope": out = cmdScope(store, args); break;
-      case "add": out = cmdAdd(store, args, await inputText(args)); break;
-      case "show": out = cmdShow(store, args); break;
-      case "search": out = cmdSearch(store, args); break;
-      case "list": out = cmdList(store, args); break;
-      case "verdict": out = cmdVerdict(store, args.positional[0], args.positional.slice(1), sessionOf(args.flags.get("session"))); break;
-      case "use": out = cmdVerdict(store, "helped", args.positional); break;
-      case "log": out = cmdLog(store, args); break;
-      case "trash": out = cmdMove(store, args, true); break;
-      case "restore": out = cmdMove(store, args, false); break;
-      case "delete": out = cmdDelete(store, args); break;
-      case "empty-trash": out = cmdEmptyTrash(store, args); break;
-      case "stale": out = cmdStale(store, args); break;
-      case "verify": out = cmdVerify(store, args); break;
-      case "budget": out = cmdBudget(store, args); break;
-      case "instructions": out = cmdInstructions(store, args); break;
-      case "checkpointed": out = cmdCheckpointed(store, args); break;
-      case "unsaved": out = cmdUnsaved(store, args); break;
-      case "serve": out = await cmdServe(store, args, json); break;
-      case "audit": out = await cmdAudit(store, args, () => inputText(args)); break;
-      case "sync": out = cmdSync(store); break;
-      default: throw new KbError(`unknown command "${command}". Run \`kb help\`.`);
+    if (command === "version" || command === "--version") {
+      const v = version();
+      console.log(json ? JSON.stringify(v, null, 2) : versionText(v));
+      return 0;
     }
+    const out = await HANDLERS[command]!(store, args, json);
     if (json) console.log(JSON.stringify(out.json, null, 2));
     else if (out.text && !args.flags.has("quiet")) console.log(out.text);
     return out.code ?? 0;
@@ -959,7 +1017,7 @@ async function main(): Promise<number> {
     const message = error instanceof KbError ? error.message : `kb failed: ${(error as Error)?.message ?? error}`;
     if (json) console.log(JSON.stringify({ error: message }));
     else console.error(message);
-    return 1;
+    return error instanceof UsageError ? USAGE_EXIT : 1;
   }
 }
 

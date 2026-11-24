@@ -189,7 +189,7 @@ describe("a cmd trigger loads its note at the command", () => {
     // The limit of the hook is the limit that `kb add` warns at: one number for both.
     const add = (body: string) => kb(store, ["add", "--json"], { cwd: repo, stdin: JSON.stringify({ title: `Body of ${body.length}`, kind: "decision", scope: "global", body }) }).json.warnings;
     expect(add("y".repeat(700))).toBeUndefined();
-    expect(add("y".repeat(701))).toEqual(["the body has 701 characters. A trigger loads at most 700, and cuts the rest. Keep the fact, why it matters, and how to apply it."]);
+    expect(add("y".repeat(701))).toEqual(["the body has 701 characters, not counting the spaces and newlines at its ends, which kb removes. A trigger loads at most 700, and cuts the rest. Keep the fact, why it matters, and how to apply it."]);
   });
 
   test("each note is one fire in the log, with its trigger, and satisfies kb verdict not-needed", () => {

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "bun build.ts",
+    "render": "bun render.ts",
     "preview": "bun run build && wrangler dev",
     "deploy": "bun run build && wrangler deploy"
   },
