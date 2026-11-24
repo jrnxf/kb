@@ -5,7 +5,7 @@ import { lastActivity } from "./log.ts";
 import { KINDS, localDate, normalizeTitle } from "./note.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
-import { anchorReader, missingAnchors } from "./stale.ts";
+import { anchorReader, changedAtLoad, missingAnchors } from "./stale.ts";
 import { HARD_CONTEXT_CAP, type Config, type Store, type StoredNote } from "./store.ts";
 import { readTriggers } from "./trigger.ts";
 
@@ -39,6 +39,8 @@ export interface ContextResult {
   bodies: string[];
   /** Notes in the session whose anchor is gone from the checkout, with what is gone. */
   gone: { id: string; detail: string }[];
+  /** Notes with an index line that says "changed": an anchored file changed after the last check of the note. */
+  changed: string[];
   chars: number;
   /** `chars` by what it pays for: the briefs, the index section, the bodies of the hold-back arm, and `fixed` for all the rest. */
   charsBy: { fixed: number; briefs: number; index: number; bodies: number };
@@ -67,7 +69,7 @@ export function contextBudget(contextChars: number): number {
   return Math.min(Math.max(500, contextChars) + SAVE_RULE.length + 1, HARD_CONTEXT_CAP);
 }
 
-const EMPTY: ContextResult = { text: "", scope: null, briefs: [], index: [], triggerOnly: [], hidden: [], hiddenBy: { repo: 0, global: 0 }, globalAudit: false, holdback: false, bodies: [], gone: [], chars: 0, charsBy: { fixed: 0, briefs: 0, index: 0, bodies: 0 } };
+const EMPTY: ContextResult = { text: "", scope: null, briefs: [], index: [], triggerOnly: [], hidden: [], hiddenBy: { repo: 0, global: 0 }, globalAudit: false, holdback: false, bodies: [], gone: [], changed: [], chars: 0, charsBy: { fixed: 0, briefs: 0, index: 0, bodies: 0 } };
 
 /**
  * The order of the index. Repo notes before global notes, so the notes of the repo are never
@@ -97,10 +99,11 @@ export function rank(notes: StoredNote[], active: Map<string, string>): StoredNo
  * says the same thing twice and doubles the cost of the index. For most notes the line is the
  * only thing a session gets, so it must not lose the words that the cut removed: they follow
  * after "...". The full title is added only when the id does not come from it: a rewritten
- * title, or an id with a number suffix.
+ * title, or an id with a number suffix. `changed` adds the word to the kind: an anchored file of
+ * the note changed after its last check.
  */
-export function indexLine(note: StoredNote): string {
-  const head = `- ${note.id} [${note.kind}]`;
+export function indexLine(note: StoredNote, changed = false): string {
+  const head = `- ${note.id} [${note.kind}${changed ? ", changed" : ""}]`;
   const full = normalizeTitle(note.title);
   if (full === note.id) return head;
   if (!full.startsWith(`${note.id}-`)) return `${head} ${note.title}`;
@@ -203,6 +206,9 @@ function pointer(triggerOnly: number): string {
   return `${at}\`kb show <id>\` prints one note. \`kb search <words>\` searches every note.`;
 }
 
+/** Under the heading of an index that has a line with "changed". A title in the index reads as a fact, so the line says what the word means. */
+export const CHANGED_LINE = 'A line with "changed" is a note on a file that changed after the last check of the note. Read the code before you act on it.';
+
 /** The last line of an index that is cut: how many notes have no line. */
 const overLine = (hidden: number) => `${hidden} more index ${hidden === 1 ? "line is" : "lines are"} over the index budget.`;
 
@@ -216,9 +222,10 @@ export function buildContext(store: Store, repoPath: string, session?: string): 
 
 /**
  * The context of a scope: a repo id, or null for a session outside any repo. With the checkout at
- * `root`, each repo note in the session has its anchors checked, and a note whose file or symbol is
- * gone says so. The check reads files only, so a session start can afford it. `kb stale` runs the
- * git checks later.
+ * `root`, each repo note in the session has its anchors checked: a note whose file or symbol is
+ * gone says so, and a note whose file is not what its last check saw gets the word "changed". The
+ * check reads files only, so a session start can afford it. `kb stale` runs the git checks later,
+ * for the anchors that have no hash.
  */
 export function contextFor(store: Store, scope: string | null, root: string | null = null, session?: string): ContextResult {
   return startOf(store, scope, root, session).context;
@@ -229,6 +236,8 @@ interface Start {
   context: ContextResult;
   /** Every note of the session, in rank order. */
   ranked: StoredNote[];
+  /** The ids of the notes on a changed file. */
+  changed: Set<string>;
   config: Config;
 }
 
@@ -253,6 +262,8 @@ interface Session {
   ranked: StoredNote[];
   /** What is gone from a note, by id. */
   goneOf: Map<string, string>;
+  /** The notes on a file that is not what their last check saw. */
+  changed: Set<string>;
   syncError: string | null;
   charBudget: number;
   briefChars: number;
@@ -260,36 +271,41 @@ interface Session {
 
 function startOf(store: Store, scope: string | null, root: string | null = null, session?: string): Start {
   const config = store.config();
-  if (!store.exists()) return { context: { ...EMPTY, scope }, ranked: [], config };
+  const none = new Set<string>();
+  if (!store.exists()) return { context: { ...EMPTY, scope }, ranked: [], changed: none, config };
   // HOLDBACK: a share of the sessions keeps the old policy. `kb budget` passes no session, so it shows the new one.
   const holdback = inHoldback(session, config.holdback);
 
   // A promoted note loads from the instruction file that holds it now, so it is not here too.
   const visible = store.notes().filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === scope));
   const syncError = store.syncError();
-  if (visible.length === 0 && !syncError) return { context: { ...EMPTY, scope, holdback }, ranked: [], config };
+  if (visible.length === 0 && !syncError) return { context: { ...EMPTY, scope, holdback }, ranked: [], changed: none, config };
 
   const ranked = rank(visible, lastActivity(store));
   const goneOf = new Map<string, string>();
+  const changed = new Set<string>();
   if (scope && root) {
     const read = anchorReader();
+    const changedOf = changedAtLoad(store, scope, root, read);
     for (const note of ranked) {
       if (note.scope !== scope || note.anchors.length === 0) continue;
       const missing = missingAnchors(note, root, read).map((m) => m.detail).join("; ");
       if (missing) goneOf.set(note.id, missing.length > GONE_DETAIL_CHARS ? `${missing.slice(0, GONE_DETAIL_CHARS - 3)}...` : missing);
+      // A note under "Anchors gone" has its warning. The word is for the note that has none.
+      else if (changedOf(note).length > 0) changed.add(note.id);
     }
   }
-  const laid: Session = { scope, ranked, goneOf, syncError, charBudget: contextBudget(config.budgets.contextChars), briefChars: config.budgets.briefChars };
-  if (holdback) return { context: heldStart(laid), ranked, config }; // HOLDBACK
+  const laid: Session = { scope, ranked, goneOf, changed, syncError, charBudget: contextBudget(config.budgets.contextChars), briefChars: config.budgets.briefChars };
+  if (holdback) return { context: heldStart(laid), ranked, changed, config }; // HOLDBACK
 
   const context = newStart(laid);
   // Only global notes are hidden here. Which audit makes room? Lay out the global notes alone, as
   // a session outside any repo gets them. If they do not fit there either, it is the global audit.
   if (scope && context.hiddenBy.repo === 0 && context.hiddenBy.global > 0) {
-    const alone = newStart({ ...laid, scope: null, ranked: ranked.filter((n) => n.scope === "global"), goneOf: new Map() });
+    const alone = newStart({ ...laid, scope: null, ranked: ranked.filter((n) => n.scope === "global"), goneOf: new Map(), changed: none });
     context.globalAudit = alone.hidden.length > 0;
   }
-  return { context, ranked, config };
+  return { context, ranked, changed, config };
 }
 
 /**
@@ -297,7 +313,7 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
  * index section of the notes listed, with a last line that counts the hidden ones. `goneIn` gives
  * what is gone from the notes shown.
  */
-function partsOf({ scope, goneOf, syncError }: Session, line: (note: StoredNote) => string) {
+function partsOf({ scope, goneOf, changed, syncError }: Session, line: (note: StoredNote) => string) {
   const goneIn = (shown: StoredNote[]): ContextResult["gone"] => (goneOf.size === 0 ? [] : shown.filter((n) => goneOf.has(n.id)).map((n) => ({ id: n.id, detail: goneOf.get(n.id)! })));
   const head = (shown: StoredNote[]): string[] => {
     const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, FORMAT_LINE, SAVE_RULE];
@@ -313,6 +329,7 @@ function partsOf({ scope, goneOf, syncError }: Session, line: (note: StoredNote)
   const index = (listed: StoredNote[], hidden: number): string[] => {
     if (listed.length === 0) return [];
     const lines = ["", "## Index"];
+    if (listed.some((n) => changed.has(n.id))) lines.push(CHANGED_LINE);
     for (const section of [scope, "global"]) {
       const inSection = listed.filter((n) => n.scope === section);
       if (inSection.length === 0) continue;
@@ -352,7 +369,7 @@ function newStart(session: Session): ContextResult {
       return text;
     };
   };
-  const line = once(indexLine);
+  const line = once((note) => indexLine(note, session.changed.has(note.id)));
   const brief = once(briefBlock);
   const { goneIn, head, index } = partsOf(session, line);
 
@@ -426,6 +443,7 @@ function newStart(session: Session): ContextResult {
     holdback: false,
     bodies: [],
     gone: goneIn([...shown.briefs, ...shown.listed]),
+    changed: ids(shown.listed.filter((n) => session.changed.has(n.id))),
     chars: text.length,
     charsBy: { fixed: text.length - sizes.briefs - sizes.index, ...sizes, bodies: 0 },
   };
@@ -433,7 +451,7 @@ function newStart(session: Session): ContextResult {
 
 /** HOLDBACK: a start of the arm. The old policy picks the notes and builds the text, with the fixed text and the index lines of today. */
 function heldStart(session: Session): ContextResult {
-  const { goneIn, head, index } = partsOf(session, indexLine);
+  const { goneIn, head, index } = partsOf(session, (note) => indexLine(note, session.changed.has(note.id)));
   const old = oldStart(session.ranked, session.scope !== null, { head, index }, session.charBudget);
   return {
     text: old.text,
@@ -447,6 +465,7 @@ function heldStart(session: Session): ContextResult {
     holdback: true,
     bodies: ids(old.bodies),
     gone: goneIn([...old.bodies, ...old.listed]),
+    changed: ids(old.listed.filter((n) => session.changed.has(n.id))),
     chars: old.text.length,
     charsBy: { fixed: old.text.length - old.sizes.index - old.sizes.bodies, briefs: 0, ...old.sizes },
   };
@@ -503,7 +522,7 @@ export function budgetOf(store: Store, scope: string | null): BudgetResult {
   return budgetFor(startOf(store, scope, scope ? repoRoot(store, scope) : null));
 }
 
-function budgetFor({ context, ranked, config }: Start): BudgetResult {
+function budgetFor({ context, ranked, changed, config }: Start): BudgetResult {
   const form = new Map<string, BudgetResult["notes"][number]["shown"]>();
   for (const id of context.briefs) form.set(id, "brief");
   for (const id of context.index) form.set(id, "index");
@@ -511,7 +530,7 @@ function budgetFor({ context, ranked, config }: Start): BudgetResult {
   for (const id of context.hidden) form.set(id, "hidden");
   const notes = ranked.filter((n) => form.has(n.id)).map((n) => {
     const shown = form.get(n.id)!;
-    return { id: n.id, kind: n.kind, scope: n.scope, chars: shown === "brief" ? briefBlock(n).length + 1 : shown === "trigger" ? 0 : indexLine(n).length + 1, shown };
+    return { id: n.id, kind: n.kind, scope: n.scope, chars: shown === "brief" ? briefBlock(n).length + 1 : shown === "trigger" ? 0 : indexLine(n, changed.has(n.id)).length + 1, shown };
   });
   type Row = (typeof notes)[number];
   const budget = contextBudget(config.budgets.contextChars);

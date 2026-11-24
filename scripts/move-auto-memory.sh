@@ -8,7 +8,8 @@
 #
 # A run starts in the folder's project directory, so its repo facts get the repo's scope. When
 # that directory is gone, it starts in $HOME and keeps only the facts that hold in every repo.
-# All memory folders are saved to a tar file first. Each run's report is in a log file.
+# All memory folders are saved to a tar file first, readable by this user only. Each run's report
+# is in a log file.
 set -euo pipefail
 
 config="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -92,8 +93,9 @@ fi
 stamp="$(date +%Y%m%d-%H%M%S)"
 backup="$config/auto-memory-backup-$stamp.tar.gz"
 logs="$config/auto-memory-move-$stamp"
-mkdir -p "$logs"
-(cd "$config" && tar -czf "$backup" projects/*/memory)
+# The memory files are private, so the tar file and the logs are for this user only.
+mkdir -p -m 700 "$logs"
+(umask 077 && cd "$config" && tar -czf "$backup" projects/*/memory)
 echo "backup: $backup"
 echo "logs:   $logs"
 
@@ -111,7 +113,7 @@ for memory in "${folders[@]}"; do
   # Only user settings load: a project's own hooks (a Stop hook that waits, for one) can hang -p.
   if (cd "${dir:-$HOME}" && CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude -p "/kb:save $memory" --setting-sources user ${claude_args[@]+"${claude_args[@]}"} </dev/null >"$log" 2>&1); then
     after="$(count "$memory")"
-    # claude exits 0 also when a write or an rm was refused, so the files left are the real check.
+    # claude exits 0 also when a write or a kb-transcript --remove-memory was refused, so the files left are the real check.
     [ "$after" -lt "$before" ] || untouched=$((untouched + 1))
     echo "$((before - after)) of $before files moved, see the log for the skipped ones"
   else

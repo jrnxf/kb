@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { contextBudget } from "../cli/context.ts";
+import { CHANGED_LINE, buildBudget, buildContext, contextBudget } from "../cli/context.ts";
+import { afterRead } from "../cli/fire.ts";
 import { findNeighbors, neighborCheck } from "../cli/neighbors.ts";
-import { findStale } from "../cli/stale.ts";
+import { CHANGED_ASK, changedAsk, changedNotes, changedSinceCheck, findStale } from "../cli/stale.ts";
 import { kb, logAt, otherMachine, plain, putNote, sh, tempRepo, tempStore } from "./helpers.ts";
 
 const SCOPE = "github.com/acme/billing";
@@ -80,16 +81,39 @@ describe("kb stale", () => {
     expect(found[2]!.detail).toBe("lookupRate is no longer in src/rates.ts");
   });
 
-  test("commit-unknown: verified_at_commit is not in the history of HEAD", () => {
+  test("commit-unknown: the clone does not have verified_at_commit", () => {
     const { repo, store } = fixture();
+    putNote(store, { id: "never", scope: SCOPE, verified_at_commit: "0123abc", anchors: ["src/rates.ts"], last_verified: FRESH });
+    // No anchor-changed here: with an unknown commit there is nothing to compare with.
+    expect(reasons(store, repo)).toEqual(["never:commit-unknown"]);
+  });
+
+  test("a commit that is not in the history of HEAD is compared by content: a squash merge, and a dropped commit", () => {
+    const { repo, store } = fixture();
+    // A note checked on a branch. The branch then goes to main as one new commit.
+    sh(repo, "git", "checkout", "-q", "-b", "work");
     writeFileSync(join(repo, "src/rates.ts"), "export const RATE = 2;\n");
+    commit(repo, "work on rates");
+    const tip = sh(repo, "git", "rev-parse", "--short", "HEAD");
+    putNote(store, { id: "squashed", scope: SCOPE, verified_at_commit: tip, anchors: ["src/rates.ts"], last_verified: FRESH });
+    putNote(store, { id: "on-ledger", scope: SCOPE, verified_at_commit: tip, anchors: ["src/ledger.ts"], last_verified: FRESH });
+    sh(repo, "git", "checkout", "-q", "main");
+    sh(repo, "git", "merge", "-q", "--squash", "work");
+    sh(repo, "git", "commit", "-q", "-m", "work on rates (#1)");
+    sh(repo, "git", "branch", "-q", "-D", "work");
+    // The files are as the note saw them, so it is no candidate, and no commit is unknown.
+    expect(reasons(store, repo)).toEqual([]);
+    // Another person changes a file after the merge.
+    writeFileSync(join(repo, "src/ledger.ts"), "export function append() { return 1; }\n");
+    commit(repo, "change ledger");
+    expect(reasons(store, repo)).toEqual(["on-ledger:anchor-changed"]);
+    // A commit that a reset dropped: main does not have the change that the note saw.
+    writeFileSync(join(repo, "src/rates.ts"), "export const RATE = 3;\n");
     commit(repo, "to be dropped");
     const dropped = sh(repo, "git", "rev-parse", "--short", "HEAD");
     sh(repo, "git", "reset", "-q", "--hard", "HEAD~1");
-    putNote(store, { id: "rebased", scope: SCOPE, verified_at_commit: dropped, anchors: ["src/rates.ts"], last_verified: FRESH });
-    putNote(store, { id: "never", scope: SCOPE, verified_at_commit: "0123abc", last_verified: FRESH });
-    // No anchor-changed here: with an unknown commit there is nothing to compare with.
-    expect(reasons(store, repo)).toEqual(["never:commit-unknown", "rebased:commit-unknown"]);
+    putNote(store, { id: "dropped", scope: SCOPE, verified_at_commit: dropped, anchors: ["src/rates.ts"], last_verified: FRESH });
+    expect(reasons(store, repo)).toEqual(["dropped:anchor-changed", "on-ledger:anchor-changed"]);
   });
 
   test("expired: no activity and no check for expireDays. decayed: active, but not verified for decayDays", () => {
@@ -546,5 +570,112 @@ describe("kb budget", () => {
     const sum = (sizes: number[]) => sizes.reduce((a, c) => a + c, 0);
     expect(sum(freed)).toBeGreaterThanOrEqual(need);
     expect(sum(freed.slice(0, -1))).toBeLessThan(need);
+  });
+});
+
+describe("a note on a changed file says so when it loads", () => {
+  /** Two notes on src/ledger.ts and one on src/rates.ts, all checked at the first commit. Then ledger.ts changes. */
+  function changedFixture() {
+    const { repo, store, head } = fixture();
+    putNote(store, { id: "gotcha", scope: SCOPE, verified_at_commit: head, anchors: ["src/ledger.ts#append"], last_verified: FRESH, body: "append takes one row." });
+    putNote(store, { id: "decision", kind: "decision", scope: SCOPE, verified_at_commit: head, anchors: ["src"], last_verified: FRESH });
+    putNote(store, { id: "steady", scope: SCOPE, verified_at_commit: head, anchors: ["src/rates.ts"], last_verified: FRESH });
+    writeFileSync(join(repo, "src/ledger.ts"), "export function append() { return 1; }\n");
+    commit(repo, "change ledger");
+    return { repo, store, head };
+  }
+  const reader = { session_id: "s1" };
+
+  test("kb stale gives the commit and the paths, and records them for the hooks", () => {
+    const { repo, store, head } = changedFixture();
+    expect(changedNotes(store, SCOPE)(store.find("gotcha")!)).toEqual([]);
+    const found = kb(store, ["stale", "--json"], { cwd: repo }).json.candidates.filter((c: any) => c.reason === "anchor-changed");
+    expect(found.map((c: any) => [c.id, c.commit, c.paths])).toEqual([["decision", head, ["src"]], ["gotcha", head, ["src/ledger.ts"]]]);
+    const changedOf = changedNotes(store, SCOPE);
+    expect(changedOf(store.find("gotcha")!)).toEqual(["src/ledger.ts"]);
+    expect(changedOf(store.find("decision")!)).toEqual(["src"]);
+    expect(changedOf(store.find("steady")!)).toEqual([]);
+    // Another repo has its own record.
+    expect(changedNotes(store, "github.com/acme/web")({ ...store.find("gotcha")!, scope: "github.com/acme/web" })).toEqual([]);
+  });
+
+  test("a Read gives the mark, the paths and what to do, and the log records it", () => {
+    const { repo, store } = changedFixture();
+    kb(store, ["stale"], { cwd: repo });
+    const fired = afterRead(store, join(repo, "src/ledger.ts"), reader)!;
+    expect(fired.text).toBe(
+      [
+        "kb has notes on src/ledger.ts.",
+        "",
+        "### gotcha [gotcha] Title of gotcha",
+        "anchor on src/ledger.ts",
+        "changed since the last check: src/ledger.ts",
+        "append takes one row.",
+        "",
+        "Before you change this file, read the notes that apply with `kb show <id>`:",
+        "- decision [decision] Title of decision (changed since the last check: src)",
+        "",
+        `A note with "changed since the last check" is on a file that changed after the note was last checked. ${CHANGED_ASK}`,
+      ].join("\n"),
+    );
+    expect(fired.fires.map((f) => [f.note, f.changed])).toEqual([["gotcha", true], ["decision", true]]);
+    // A note on a file that did not change loads as before.
+    const steady = afterRead(store, join(repo, "src/rates.ts"), { session_id: "s2" })!;
+    expect(steady.text).toContain("### steady [gotcha] Title of steady\nanchor on src/rates.ts\nk");
+    expect(steady.fires.map((f) => [f.note, f.changed])).toEqual([["steady", undefined], ["decision", true]]);
+  });
+
+  test("a check of the note ends the mark, and a write to another note does not", () => {
+    const { repo, store } = changedFixture();
+    kb(store, ["stale"], { cwd: repo });
+    // The write clears the count of the session start. The record of the changed files stays.
+    kb(store, ["trash", "steady"]);
+    expect(existsSync(join(store.home, ".state", "stale.json"))).toBe(false);
+    expect(changedNotes(store, SCOPE)(store.find("gotcha")!)).toEqual(["src/ledger.ts"]);
+    // `kb verify` gives the note the commit of HEAD, so the record of the old commit says nothing.
+    expect(kb(store, ["verify", "gotcha"], { cwd: repo }).code).toBe(0);
+    expect(changedNotes(store, SCOPE)(store.find("gotcha")!)).toEqual([]);
+    expect(afterRead(store, join(repo, "src/ledger.ts"), reader)!.text).not.toContain("gotcha [gotcha] Title of gotcha (changed");
+    // The next `kb stale` drops the note from the record.
+    kb(store, ["stale"], { cwd: repo });
+    expect(Object.keys(JSON.parse(readFileSync(join(store.home, ".state", "changed.json"), "utf8"))[SCOPE])).toEqual(["decision"]);
+  });
+
+  test("an anchor that left the note is no reason", () => {
+    const { repo, store } = changedFixture();
+    kb(store, ["stale"], { cwd: repo });
+    const note = store.find("gotcha")!;
+    expect(changedNotes(store, SCOPE)({ ...note, anchors: ["src/rates.ts"] })).toEqual([]);
+  });
+
+  test("kb show says it with no record, in the repo of the note only", () => {
+    const { repo, store, head } = changedFixture();
+    const shown = kb(store, ["show", "gotcha"], { cwd: repo });
+    expect(shown.stdout.split("\n")[1]).toBe(`changed since the last check (${head}): src/ledger.ts. ${changedAsk("this note", "gotcha")}`);
+    expect(kb(store, ["show", "gotcha", "--json"], { cwd: repo }).json.changed_since_check).toEqual(["src/ledger.ts"]);
+    expect(kb(store, ["show", "steady"], { cwd: repo }).stdout).not.toContain("changed since the last check");
+    expect(kb(store, ["show", "gotcha"], { cwd: plain() }).stdout).not.toContain("changed since the last check");
+    expect(changedSinceCheck(store.find("gotcha")!, repo)).toEqual(["src/ledger.ts"]);
+    expect(changedSinceCheck({ anchors: ["src/ledger.ts"], verified_at_commit: "0000000" }, repo)).toEqual([]);
+  });
+
+  test("the index of a session start marks the note, and says what the mark means", () => {
+    const { repo, store } = changedFixture();
+    const before = buildContext(store, repo);
+    expect(before.changed).toEqual([]);
+    expect(before.text).not.toContain("changed");
+    kb(store, ["stale"], { cwd: repo });
+    const after = buildContext(store, repo);
+    expect(after.changed.sort()).toEqual(["decision", "gotcha"]);
+    expect(after.text).toContain(`## Index\n${CHANGED_LINE}\n### ${SCOPE} (3)\n- gotcha [gotcha, changed] Title of gotcha\n- steady [gotcha] Title of steady\n- decision [decision, changed] Title of decision\n`);
+    expect(after.chars).toBe(after.text.length);
+    // `kb budget` counts the line as the session gets it.
+    const budget = buildBudget(store, repo);
+    expect(budget.notes.find((n) => n.id === "gotcha")!.chars).toBe("- gotcha [gotcha, changed] Title of gotcha".length + 1);
+    // A note whose anchor is gone has its own warning, and no mark.
+    rmSync(join(repo, "src/ledger.ts"));
+    const gone = buildContext(store, repo);
+    expect(gone.gone.map((g) => g.id)).toEqual(["gotcha"]);
+    expect(gone.changed).toEqual(["decision"]);
   });
 });
