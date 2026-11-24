@@ -31,7 +31,9 @@ notes, and a note loads when it applies.
     `global` is an index line in a repo, and a brief only outside any repo.
   - The index: one line for each other note, the repo's notes first. A line is the id of the note,
     which is its title in short form, and after `...` the words of the title that the id cut. So a
-    title that states the rule in full reaches every session. A global note with a `cmd`, `stop` or
+    title that states the rule in full reaches every session. The id folds accents (`Ünïcode` gives
+    `unicode`) and leaves out a word with no ASCII form, such as `日本語`, so that line gives the
+    title in full. A title with no ASCII letter or digit gets `note-` and a short hash as its id. A global note with a `cmd`, `stop` or
     `err` trigger gets no line: it loads at its trigger. Open work always keeps its line.
   - A pointer to `kb show` and `kb search`. It counts the global notes that load only at their trigger.
 
@@ -539,7 +541,7 @@ Report a security problem as `SECURITY.md` says.
 
 ## Install
 
-Requirements: Claude Code 2.1.275 or later, a recent [Bun](https://bun.sh) (tested with 1.4) and git.
+Requirements: Claude Code 2.1.275 or later, [Bun](https://bun.sh) 1.3.14 or later (tested with 1.3 and 1.4) and git.
 The hooks look for Bun in `KB_BUN`, on the PATH, then in `~/.bun/bin`, `~/.local/bin`, the mise and asdf shims and the Homebrew folders. Without Bun, kb is off, and a session start says so in one line.
 There is no build step and no dependency to install: the page of `kb serve` comes built in `web/dist`.
 

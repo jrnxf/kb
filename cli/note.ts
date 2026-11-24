@@ -1,5 +1,7 @@
 // Note schema, frontmatter parsing and serialisation.
 
+import { createHash } from "node:crypto";
+
 export const KINDS = ["open-work", "gotcha", "convention", "decision", "how-to"] as const;
 export const CONFIDENCES = ["high", "medium", "low"] as const;
 export type Kind = (typeof KINDS)[number];
@@ -52,24 +54,65 @@ export function isValidScope(scope: string): boolean {
   return SCOPE_RE.test(scope) && !scope.split("/").some((part) => part === "." || part === "..");
 }
 
-/** Lowercase words joined by "-". The full form compares titles. */
+/** Lowercase, with an accent folded into its letter (Ü gives u). A letter with no ASCII form stays. */
+export function foldAccents(text: string): string {
+  return text.toLowerCase().normalize("NFKD").replace(/\p{M}+/gu, "");
+}
+
+/** Lowercase ASCII words joined by "-". A letter with no ASCII form, such as 日本語, is left out. */
 export function normalizeTitle(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  return foldAccents(text).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/** True when a title has a letter or digit that its ASCII words leave out, such as 日本語. */
+export function dropsLetters(text: string): boolean {
+  return /(?![a-z0-9])[\p{L}\p{N}]/u.test(foldAccents(text));
+}
+
+/**
+ * The key that compares two titles. An ASCII title compares by its words. A title that
+ * drops letters compares in full, so `v2 の問題` and `v2 のバグ` stay two notes.
+ */
+export function titleKey(text: string): string {
+  if (!dropsLetters(text)) return normalizeTitle(text);
+  return text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, "-").replace(/^-+|-+$/g, "");
 }
 
 const MAX_SLUG = 48;
 
-/** A short id from a title: cut at a word boundary, because the id sits next to the title in every index line. */
-export function slugify(text: string): string {
-  const full = normalizeTitle(text);
+function cutSlug(full: string): string {
   if (full.length <= MAX_SLUG) return full;
   const cut = full.slice(0, MAX_SLUG + 1);
   const boundary = cut.lastIndexOf("-");
   return (boundary >= 20 ? cut.slice(0, boundary) : full.slice(0, MAX_SLUG)).replace(/-+$/, "");
+}
+
+/**
+ * The scope of a repo with no remote, from its folder name. Do not change this rule: a scope is
+ * a key of stored notes, and a new rule would orphan the notes of a folder like `café`.
+ */
+export function slugify(text: string): string {
+  const full = text
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return cutSlug(full);
+}
+
+/**
+ * The id of a new note with this title: its ASCII words, cut at a word boundary, because the id
+ * sits next to the title in every index line. A title that drops letters adds a short hash of
+ * its full key, so two such titles keep two ids, and a title with no ASCII word is "note-" and
+ * the hash. The same title always gives the same id. Empty only for an empty title.
+ */
+export function titleId(title: string): string {
+  const key = titleKey(title);
+  if (!key) return "";
+  const slug = cutSlug(normalizeTitle(title));
+  if (!dropsLetters(title)) return slug;
+  const hash = createHash("sha256").update(key).digest("hex").slice(0, 8);
+  return `${slug || "note"}-${hash}`;
 }
 
 const isString = (v: unknown): v is string => typeof v === "string" && v.length > 0;
@@ -173,23 +216,62 @@ export function byTrashedAt(a: Pick<Note, "trashed_at" | "last_verified">, b: Pi
   return (b.trashed_at ?? b.last_verified).localeCompare(a.trashed_at ?? a.last_verified);
 }
 
+/** Words that a YAML reader takes as a boolean or null, in YAML 1.1 or 1.2. */
+const RESERVED = /^(?:null|~|true|false|yes|no|on|off|y|n)$/i;
+/** A number in YAML 1.1 or 1.2: decimal, float, hex, octal, binary, sexagesimal, inf, nan. */
+const NUMBER = /^[-+]?(?:[\d_]+(?:\.[\d_]*)?(?:e[-+]?\d+)?|\.\d[\d_]*(?:e[-+]?\d+)?|0x[\da-f_]+|0o[0-7_]+|0b[01_]+|\d[\d_]*(?::[0-5]?\d)+(?:\.\d*)?|\.inf|\.nan)$/i;
+/** A date with no time, which a YAML 1.1 reader turns into a timestamp. */
+const DATE = /^\d{4}-\d\d?-\d\d?(?:[Tt ]|$)/;
+
+/**
+ * A string as a YAML scalar. A plain one when no reader can take it for anything else, else
+ * double quotes with JSON escapes, which YAML reads the same. The rules are kb's own, so the
+ * file does not change with the version of Bun. `time` lets a timestamp stay plain.
+ */
+function scalar(raw: string, time = false): string {
+  // A lone surrogate has no UTF-8 form: a reader gets U+FFFD, so write that, and what is saved is what is read.
+  const text = raw.toWellFormed();
+  if (time && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(text)) return text;
+  const plain =
+    text.length > 0 &&
+    !/^[\s\-?:,[\]{}#&*!|>'"%@`]/.test(text) &&
+    !/\s$/.test(text) &&
+    // Only a plain space: any other space, a control character or a line break needs an escape.
+    !/[\p{Cc}\p{Zl}\p{Zp}\p{Zs}\ufeff]/u.test(text.replaceAll(" ", "")) &&
+    !/[,[\]{}'"`]|: |\s#|:$|^(?:---|\.\.\.)/.test(text) &&
+    !RESERVED.test(text) &&
+    !NUMBER.test(text) &&
+    !DATE.test(text) &&
+    text !== "<<";
+  return plain ? text : JSON.stringify(text).replace(/[\u0085\u2028\u2029\ufeff\u00a0]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+/** One key of the front matter: a scalar on its line, or a list with one item per line. */
+function frontLine(key: string, value: string | string[], time = false): string {
+  if (!Array.isArray(value)) return `${key}: ${scalar(value, time)}`;
+  if (value.length === 0) return `${key}: []`;
+  return [`${key}:`, ...value.map((item) => `  - ${scalar(item)}`)].join("\n");
+}
+
 export function serializeNote(note: Note): string {
   // Key order is fixed so diffs stay small.
-  const front: Record<string, unknown> = {
-    id: note.id,
-    title: note.title,
-    scope: note.scope,
-    kind: note.kind,
-    created: note.created,
-    last_verified: note.last_verified,
-  };
-  if (note.verified_at_commit) front.verified_at_commit = note.verified_at_commit;
-  front.anchors = note.anchors;
-  if (note.anchor_hashes && Object.keys(note.anchor_hashes).length > 0) front.anchor_hashes = note.anchor_hashes;
-  if (note.triggers?.length) front.triggers = note.triggers;
-  front.confidence = note.confidence;
-  if (note.promoted_to) front.promoted_to = note.promoted_to;
-  if (note.supersedes?.length) front.supersedes = note.supersedes;
-  if (note.trashed_at) front.trashed_at = note.trashed_at;
-  return `---\n${Bun.YAML.stringify(front, null, 2).trimEnd()}\n---\n${note.body.trim()}\n`;
+  const lines = [
+    frontLine("id", note.id),
+    frontLine("title", note.title),
+    frontLine("scope", note.scope),
+    frontLine("kind", note.kind),
+    frontLine("created", note.created, true),
+    frontLine("last_verified", note.last_verified, true),
+  ];
+  if (note.verified_at_commit) lines.push(frontLine("verified_at_commit", note.verified_at_commit));
+  lines.push(frontLine("anchors", note.anchors));
+  if (note.anchor_hashes && Object.keys(note.anchor_hashes).length > 0) {
+    lines.push("anchor_hashes:", ...Object.entries(note.anchor_hashes).map(([path, hash]) => `  ${scalar(path)}: ${scalar(hash)}`));
+  }
+  if (note.triggers?.length) lines.push(frontLine("triggers", note.triggers));
+  lines.push(frontLine("confidence", note.confidence));
+  if (note.promoted_to) lines.push(frontLine("promoted_to", note.promoted_to));
+  if (note.supersedes?.length) lines.push(frontLine("supersedes", note.supersedes));
+  if (note.trashed_at) lines.push(frontLine("trashed_at", note.trashed_at, true));
+  return `---\n${lines.join("\n")}\n---\n${note.body.trim()}\n`;
 }
