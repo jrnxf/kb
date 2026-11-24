@@ -372,7 +372,7 @@ kb unsaved --all             those of every directory, with the count per projec
 kb version                   the commit kb runs from, as kb <12-digit sha> (pre-release). Also kb --version
 ```
 
-A flag that the command does not take is an error with exit code 2, and nothing runs. A typo such as
+A flag that the command does not take is an error with exit code 1, and nothing runs (2 is the answer `neighbors` of `kb add`). A typo such as
 `--scop` gets `Did you mean --scope?`. After `--`, every word is plain text: `kb search -- --force`.
 `kb show`, `kb trash`, `kb restore` and `kb verify` take a part of an id when only one note has it. `kb delete`
 removes notes for good, so it takes whole ids only.

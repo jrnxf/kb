@@ -24,7 +24,7 @@ import { Store, git } from "./store.ts";
 import { syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
 import { version, versionText } from "./version.ts";
-import { afterWrite, asOfTime, checkedHashes, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireIdOrPart, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+import { afterWrite, asOfTime, checkedHashes, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireIdOrPart, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 /** `kb add` exits with this code when it wrote nothing because of close notes: an answer to read, not an error (1). */
 const NEIGHBORS_EXIT = 2;
@@ -292,20 +292,20 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   const slug = slugify(input.title);
   if (!slug) throw new KbError("invalid note: title: needs letters or digits");
 
+  // No repo here, so a note with no scope is global, and loads in every repo. An anchor names a
+  // file of one repo, so such a note was meant for a repo: it is refused. The refusal comes before the twin check, whose hint would lead to repo anchors on a global note. Any other note is saved.
+  const looked = resolve(String(args.flags.get("repo") ?? "."));
+  const noRepo = input.scope === undefined && repo.scope === null;
+  if (noRepo && Array.isArray(input.anchors) && input.anchors.length > 0) {
+    throw new KbError(`${noRepoWhy(looked)}, so this note would be global, and its anchors name files of a repo. Run kb add inside the repo, or pass --repo <its directory>. For a fact of every repo, pass "scope": "global".`);
+  }
+
   // Same normalised title in the same scope: let the caller decide to update.
   const title = normalizeTitle(input.title);
   const twin = active.find((n) => n.scope === scope && (normalizeTitle(n.title) === title || n.id === title));
   if (twin) {
     const hint = `A note with this title is in ${scope}. To update it, pass "id": "${twin.id}" and no "scope".`;
     return { json: { status: "exists", id: twin.id, path: twin.path, hint }, text: `exists ${twin.id}\n${hint}` };
-  }
-
-  // No repo here, so a note with no scope is global, and loads in every repo. An anchor names a
-  // file of one repo, so such a note was meant for a repo: it is refused. Any other note is saved.
-  const looked = resolve(String(args.flags.get("repo") ?? "."));
-  const noRepo = input.scope === undefined && repo.scope === null;
-  if (noRepo && Array.isArray(input.anchors) && input.anchors.length > 0) {
-    throw new KbError(`${noRepoWhy(looked)}, so this note would be global, and its anchors name files of a repo. Run kb add inside the repo, or pass --repo <its directory>. For a fact of every repo, pass "scope": "global".`);
   }
 
   const raw: Record<string, unknown> = {
@@ -528,8 +528,12 @@ function cmdMove(store: Store, args: Args, toTrash: boolean): Output {
   }
   if (args.positional.length === 0) throw new KbError(`usage: kb ${verb} <id>...`);
   // A part of an id is enough, as in kb show, when only one note it can move has it.
-  const moved = moveNotes(store, args.positional.map((given) => requireIdOrPart(store, given, !toTrash).id), toTrash);
-  return { json: { [toTrash ? "trashed" : "restored"]: moved }, text: `${toTrash ? "moved to the trash:" : "restored"} ${moved.join(", ")}` };
+  const given = args.positional.map((word) => ({ word, id: requireIdOrPart(store, word, !toTrash).id }));
+  const moved = moveNotes(store, given.map((g) => g.id), toTrash);
+  // A part of an id moved a note: name the note, so a word that matched more than meant is seen.
+  const matched = given.filter((g) => g.word !== g.id);
+  const names = given.map((g) => (g.word === g.id ? g.id : `${g.id} (matched ${g.word})`));
+  return { json: { [toTrash ? "trashed" : "restored"]: moved, ...(matched.length > 0 ? { matched: Object.fromEntries(matched.map((g) => [g.word, g.id])) } : {}) }, text: `${toTrash ? "moved to the trash:" : "restored"} ${names.join(", ")}` };
 }
 
 function cmdEmptyTrash(store: Store, args: Args): Output {
@@ -547,17 +551,13 @@ function cmdDelete(store: Store, args: Args): Output {
   }
   if (args.positional.length === 0) throw new KbError("usage: kb delete <id>...");
   // A delete is for good, so a part of an id is never enough, also when only one note has it.
-  const missing = args.positional.find((id) => !store.find(id));
-  if (missing !== undefined) {
-    let why = `no note with id "${missing}"`;
-    try {
-      requireNote(store, missing);
-    } catch (error) {
-      why = (error as Error).message;
-    }
-    throw new KbError(`${why}. kb delete removes notes for good, so it takes whole ids only. Nothing was deleted.`);
+  let deleted: string[];
+  try {
+    deleted = deleteNotes(store, args.positional);
+  } catch (error) {
+    if (!(error instanceof KbError)) throw error;
+    throw new KbError(`${error.message}. kb delete removes notes for good, so it takes whole ids only. Nothing was deleted.`);
   }
-  const deleted = deleteNotes(store, args.positional);
   return { json: { deleted }, text: `deleted ${deleted.join(", ")}` };
 }
 
@@ -577,6 +577,8 @@ function cmdVerify(store: Store, args: Args): Output {
       note = requireIdOrPart(store, given, false);
     } catch (error) {
       // A part that names no active note may name one in the trash: say so, and not "no note".
+      // Two active notes with the part stay an error: the trash is no answer to that.
+      if (closeIds(store, given, false).length > 0) throw error;
       try {
         note = requireIdOrPart(store, given, true);
       } catch {
@@ -965,7 +967,7 @@ async function main(): Promise<number> {
     const end = rest.indexOf("--");
     json = (end < 0 ? rest : rest.slice(0, end)).includes("--json");
     // The flags are checked against the command, so an unknown command is named first.
-    if (command !== undefined && !(command in HANDLERS) && !INFO_COMMANDS.includes(command)) throw new UsageError(`unknown command "${command}". Run \`kb help\`.`);
+    if (command !== undefined && !Object.hasOwn(HANDLERS, command) && !INFO_COMMANDS.includes(command)) throw new UsageError(`unknown command "${command}". Run \`kb help\`.`);
     const args = parseArgs(rest, command);
     json = args.flags.has("json");
     const store = new Store();

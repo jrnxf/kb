@@ -36,11 +36,14 @@ export function logWrites(store: Store, op: WriteOp, ids: string[], neighbors: s
   logEvent(store, ids.map((note) => ({ ev: "write" as const, note, op, ...(from ? { from } : {}), ...(neighbors.length > 0 ? { neighbors } : {}) })));
 }
 
-/** Ids that contain the given text. For a caller who remembers a part of an id. */
-export function closeIds(store: Store, part: string): string[] {
+/** Every note of the store, or only the active (false) or trashed (true) ones. */
+const poolOf = (store: Store, trashed?: boolean): StoredNote[] => (trashed === undefined ? [...store.notes(), ...store.notes({ trashed: true })] : store.notes({ trashed }));
+
+/** Ids that contain the given text, in `trashed` notes only or in all. For a caller who remembers a part of an id. */
+export function closeIds(store: Store, part: string, trashed?: boolean): string[] {
   const text = part.toLowerCase();
   if (!text) return [];
-  return [...store.notes(), ...store.notes({ trashed: true })].filter((n) => n.id.includes(text)).map((n) => n.id).sort();
+  return poolOf(store, trashed).filter((n) => n.id.includes(text)).map((n) => n.id).sort();
 }
 
 /**
@@ -52,12 +55,9 @@ export function closeIds(store: Store, part: string): string[] {
 export function requireIdOrPart(store: Store, given: string, trashed?: boolean): StoredNote {
   const exact = store.find(given);
   if (exact) return exact;
-  const text = given.toLowerCase();
-  const pool = trashed === undefined ? [...store.notes(), ...store.notes({ trashed: true })] : store.notes({ trashed });
-  const matches = text ? pool.filter((n) => n.id.includes(text)) : [];
-  if (matches.length === 1) return matches[0]!;
-  if (matches.length > 1) {
-    const ids = matches.map((n) => n.id).sort();
+  const ids = closeIds(store, given, trashed);
+  if (ids.length === 1) return poolOf(store, trashed).find((n) => n.id === ids[0])!;
+  if (ids.length > 1) {
     throw new KbError(`${ids.length} notes have "${given}" in their id: ${ids.slice(0, 8).join(", ")}${ids.length > 8 ? `, and ${ids.length - 8} more` : ""}. Pass the whole id.`);
   }
   return requireNote(store, given);

@@ -179,7 +179,7 @@ describe("kb add", () => {
         expect(store.find(made.json.id)!.last_verified).toBe(stored);
         kb(store, ["delete", made.json.id]);
       }
-      expect(kb(store, ["add", "--as-of"], { stdin: "{}" })).toMatchObject({ code: 2, stderr: "--as-of needs a value\n" });
+      expect(kb(store, ["add", "--as-of"], { stdin: "{}" })).toMatchObject({ code: 1, stderr: "--as-of needs a value\n" });
       expect(store.notes().map((n) => n.id)).toEqual([note.id]);
     });
   });
@@ -1266,9 +1266,9 @@ describe("kb show", () => {
     expect(twoTrash.code).toBe(1);
     expect(twoTrash.stderr).toContain("2 notes have \"amounts\" in their id");
     expect(store.notes()).toHaveLength(2);
-    expect(kb(store, ["trash", "atlas-amounts", "--json"]).json).toEqual({ trashed: ["atlas-amounts-are-integer-cents"] });
+    expect(kb(store, ["trash", "atlas-amounts", "--json"]).json).toEqual({ trashed: ["atlas-amounts-are-integer-cents"], matched: { "atlas-amounts": "atlas-amounts-are-integer-cents" } });
     // kb restore looks in the trash only, and kb verify in the active notes only.
-    expect(kb(store, ["restore", "amounts", "--json"]).json).toEqual({ restored: ["atlas-amounts-are-integer-cents"] });
+    expect(kb(store, ["restore", "amounts", "--json"]).json).toEqual({ restored: ["atlas-amounts-are-integer-cents"], matched: { amounts: "atlas-amounts-are-integer-cents" } });
     // A delete is for good: a part is never enough, also when one note has it.
     const part = kb(store, ["delete", "atlas-amounts"]);
     expect(part.code).toBe(1);
@@ -1373,28 +1373,28 @@ async function kbTty(home: string, args: string[], cwd: string): Promise<{ code:
 }
 
 describe("the flags of a command", () => {
-  test("a flag that the command does not take is an error with exit code 2, and names the closest flag", () => {
+  test("a flag that the command does not take is an error with exit code 1, never the 2 of a neighbors answer, and names the closest flag", () => {
     const store = tempStore();
     putNote(store, { id: "first" });
     const typo = kb(store, ["list", "--scop", "global"]);
-    expect(typo).toMatchObject({ code: 2, stdout: "", stderr: "unknown flag --scop for kb list. Did you mean --scope? Nothing ran.\n" });
+    expect(typo).toMatchObject({ code: 1, stdout: "", stderr: "unknown flag --scop for kb list. Did you mean --scope? Nothing ran.\n" });
     expect(kb(store, ["list", "--bogus-flag"]).stderr).toStartWith("unknown flag --bogus-flag for kb list. It takes: --help, --json, --quiet, --repo, --scope, --session, --trash.");
-    expect(kb(store, ["list", "--bogus", "--json"])).toMatchObject({ code: 2, json: { error: expect.stringContaining("unknown flag --bogus for kb list") } });
+    expect(kb(store, ["list", "--bogus", "--json"])).toMatchObject({ code: 1, json: { error: expect.stringContaining("unknown flag --bogus for kb list") } });
     // An audit that a typo would start never starts.
-    expect(kb(store, ["audit", "--bogus", "--no-wait"], { env: { KB_AUDIT_AGENT: "/usr/bin/true" } }).code).toBe(2);
+    expect(kb(store, ["audit", "--bogus", "--no-wait"], { env: { KB_AUDIT_AGENT: "/usr/bin/true" } }).code).toBe(1);
     expect(existsSync(join(store.home, "audits"))).toBe(false);
     // A switch takes no value, and a value flag needs one.
-    expect(kb(store, ["list", "--trash=yes"])).toMatchObject({ code: 2, stderr: "--trash takes no value. Nothing ran.\n" });
-    expect(kb(store, ["list", "--scope"])).toMatchObject({ code: 2, stderr: "--scope needs a value\n" });
+    expect(kb(store, ["list", "--trash=yes"])).toMatchObject({ code: 1, stderr: "--trash takes no value. Nothing ran.\n" });
+    expect(kb(store, ["list", "--scope"])).toMatchObject({ code: 1, stderr: "--scope needs a value\n" });
     // A flag of another command is unknown here.
-    expect(kb(store, ["show", "first", "--trash"]).code).toBe(2);
+    expect(kb(store, ["show", "first", "--trash"]).code).toBe(1);
   });
 
   test("after -- every word is plain text, and an unknown command is named before its flags", () => {
     const store = tempStore();
     putNote(store, { id: "force", title: "Use --force with care", body: "Push --force rewrites history." });
     expect(kb(store, ["search", "--", "--force"]).stdout).toStartWith("force | global | Use --force with care");
-    expect(kb(store, ["lsit", "--scope", "global"])).toMatchObject({ code: 2, stderr: 'unknown command "lsit". Run `kb help`.\n' });
+    expect(kb(store, ["lsit", "--scope", "global"])).toMatchObject({ code: 1, stderr: 'unknown command "lsit". Run `kb help`.\n' });
   });
 
   test("every flag that the docs and the skills name still parses", () => {
@@ -1470,7 +1470,7 @@ describe("kb in a terminal", () => {
   test("kb add with stdin on a terminal says how to give the JSON, and does not wait", async () => {
     const store = tempStore();
     const result = await kbTty(store.home, ["add"], tempDir());
-    expect(result.code).toBe(2);
+    expect(result.code).toBe(1);
     expect(result.out).toContain("kb add reads JSON from --file <path> or from stdin, and stdin is a terminal. Pass --file, or pipe the JSON in.");
   });
 
@@ -1524,12 +1524,13 @@ describe("review fixes of the strict CLI", () => {
     expect(kb(store, ["search", "--bogus", "--json"]).json.error).toContain("unknown flag");
   });
 
-  test("a twin is named before the refusal of anchors outside a repo", () => {
+  test("the refusal of anchors outside a repo comes before the twin check", () => {
     const store = tempStore();
     const dir = tempDir();
     add(store, { title: "Pay rounds down", kind: "gotcha", body: "x" }, dir);
     const again = add(store, { title: "Pay rounds down", kind: "gotcha", body: "x", anchors: ["src/a.ts"] }, dir);
-    expect(again.json).toMatchObject({ status: "exists", id: "pay-rounds-down" });
+    expect(again.code).toBe(1);
+    expect(again.json.error).toContain("its anchors name files of a repo");
   });
 
   test("the refusal outside a repo says why git found none", () => {
@@ -1543,7 +1544,7 @@ describe("review fixes of the strict CLI", () => {
   test("an ambiguous prefix lists every close flag, and an empty flag name has its own error", () => {
     const store = tempStore();
     expect(kb(store, ["list", "--s", "x"]).stderr).toBe("unknown flag --s for kb list. Did you mean --scope or --session? Nothing ran.\n");
-    expect(kb(store, ["list", "--=x"])).toMatchObject({ code: 2, stderr: '"--=x" has no flag name. Nothing ran.\n' });
+    expect(kb(store, ["list", "--=x"])).toMatchObject({ code: 1, stderr: '"--=x" has no flag name. Nothing ran.\n' });
   });
 
   test("kb verify says that a part of an id names a note in the trash, and names the whole id", () => {
@@ -1553,6 +1554,53 @@ describe("review fixes of the strict CLI", () => {
     putNote(store, { id: "active-gotcha", scope: "github.com/acme/web" });
     expect(kb(store, ["verify", "active-got"]).stderr).toBe("active-gotcha belongs to github.com/acme/web. Run kb verify inside that repo, so the commit is recorded.\n");
     expect(kb(store, ["verify", "zzz"]).stderr).toContain('no note with id "zzz"');
+  });
+
+  test("a name of Object.prototype is no command and no flag", () => {
+    const store = tempStore();
+    for (const word of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+      expect(kb(store, [word])).toMatchObject({ code: 1, stderr: `unknown command "${word}". Run \`kb help\`.\n` });
+    }
+    expect(kb(store, ["list", "--constructor"]).stderr).toStartWith("unknown flag --constructor for kb list.");
+    expect(kb(store, ["list", "--__proto__"]).stderr).toStartWith("unknown flag --__proto__ for kb list.");
+  });
+
+  test("a word with one dash is refused, and after -- it is text", () => {
+    const store = tempStore();
+    putNote(store, { id: "dash", title: "Use -json with care", body: "The -json word." });
+    expect(kb(store, ["list", "-json"])).toMatchObject({ code: 1, stderr: expect.stringContaining('"-json" starts with one dash, and kb flags start with two: --json. To use it as text, put it after --: kb list -- -json. Nothing ran.') });
+    expect(kb(store, ["list", "-scope", "global"]).code).toBe(1);
+    expect(kb(store, ["search", "--", "-json"]).stdout).toStartWith("dash | global");
+    expect(kb(store, ["search", "-"]).code).toBe(0);
+    // The word after a flag that takes a value is its value.
+    expect(kb(store, ["list", "--session", "-x"]).code).toBe(0);
+  });
+
+  test("kb verify of a part that two active notes have says so, and never that a note is in the trash", () => {
+    const store = tempStore();
+    putNote(store, { id: "foo-one" });
+    putNote(store, { id: "foo-two" });
+    putNote(store, { id: "foo-three", trashed_at: daysAgo(1) }, true);
+    expect(kb(store, ["verify", "foo"]).stderr).toStartWith('2 notes have "foo" in their id: foo-one, foo-two.');
+  });
+
+  test("kb trash and kb restore name the whole id when a part of it moved the note", () => {
+    const store = tempStore();
+    putNote(store, { id: "atlas-amounts" });
+    putNote(store, { id: "other" });
+    const trashed = kb(store, ["trash", "atlas", "other", "--json"]);
+    expect(trashed.json).toEqual({ trashed: ["atlas-amounts", "other"], matched: { atlas: "atlas-amounts" } });
+    expect(kb(store, ["restore", "atlas"]).stdout).toBe("restored atlas-amounts (matched atlas)\n");
+    expect(kb(store, ["restore", "other"]).stdout).toBe("restored other\n");
+  });
+
+  test("kb delete takes whole ids, names the close ones, and deletes nothing when one is wrong", () => {
+    const store = tempStore();
+    putNote(store, { id: "atlas-amounts" });
+    putNote(store, { id: "other" });
+    expect(kb(store, ["delete", "other", "atlas"]).stderr).toBe('no note with id "atlas". Ids with that text: atlas-amounts. kb delete removes notes for good, so it takes whole ids only. Nothing was deleted.\n');
+    expect(store.notes()).toHaveLength(2);
+    expect(kb(store, ["delete", "other"]).stdout).toBe("deleted other\n");
   });
 
   test("the version takes a commit that git prints with more than 12 digits", async () => {

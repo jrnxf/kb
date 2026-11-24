@@ -3,10 +3,10 @@
 
 import { KbError } from "./note.ts";
 
-/** An error in how the command was called: nothing ran. Exit code 2, as in most CLIs. */
+/** An error in how the command was called: nothing ran. Exit code 1, as for any error: 2 is an answer of `kb add`. */
 export class UsageError extends KbError {}
 
-export const USAGE_EXIT = 2;
+export const USAGE_EXIT = 1;
 
 export interface Args {
   positional: string[];
@@ -78,13 +78,16 @@ export function parseArgs(argv: string[], command?: string): Args {
       positional.push(...argv.slice(i + 1));
       break;
     }
+    if (arg.startsWith("-") && !arg.startsWith("--") && arg !== "-") {
+      throw new UsageError(`"${arg}" starts with one dash, and kb flags start with two: --${arg.slice(1)}. To use it as text, put it after --: kb ${command ?? "<command>"} -- ${arg}. Nothing ran.`);
+    }
     if (!arg.startsWith("--")) {
       positional.push(arg);
       continue;
     }
     const [name, inline] = arg.slice(2).split(/=(.*)/s) as [string, string | undefined];
     if (name === "") throw new UsageError(`"${arg}" has no flag name. Nothing ran.`);
-    const kind = known[name];
+    const kind = Object.hasOwn(known, name) ? known[name] : undefined;
     if (kind === undefined) {
       const guess = closest(name, Object.keys(known));
       const hint = guess.length > 0 ? ` Did you mean ${guess.map((k) => `--${k}`).join(" or ")}?` : ` It takes: ${Object.keys(known).sort().map((k) => `--${k}`).join(", ")}.`;
