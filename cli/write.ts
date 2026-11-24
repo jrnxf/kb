@@ -1,8 +1,9 @@
 // Changes to stored notes, shared by the CLI commands and `kb serve`.
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, rmdirSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { type WriteOp, logEvent, rollUp } from "./log.ts";
-import { BODY_CHARS, KbError, type Note, serializeNote, validateNote } from "./note.ts";
+import { BODY_CHARS, KbError, type Note, isValidScope, serializeNote, validateNote } from "./note.ts";
 import { type RepoInfo, commitAt } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { clearStaleCache } from "./stale.ts";
@@ -199,6 +200,57 @@ export function restoreProject(store: Store, scope: string): string[] {
   afterWrite(store, `kb: restore the project ${scope} (${ids.length})`);
   logWrites(store, "restore", ids);
   return ids;
+}
+
+export interface ScopeMove {
+  from: string;
+  to: string;
+  /** The ids that move, active and in the trash. */
+  notes: string[];
+  trashed: string[];
+}
+
+/**
+ * Give every note of one scope, active and in the trash, another scope, in one commit. For a repo
+ * whose id changed: it got a remote, or the remote moved. Every target is checked before the first
+ * file moves, and a note that is there already stops the move. With `dryRun`, nothing is written.
+ */
+export function moveScope(store: Store, from: string, to: string, dryRun = false): ScopeMove {
+  if (from === "global" || to === "global") throw new KbError("\"global\" is not a project. Give a global note a repo scope with kb add and its id.");
+  if (!isValidScope(to)) throw new KbError(`"${to}" is not a repo id. A repo id is host/owner/name, as \`kb scope\` prints it.`);
+  if (from === to) throw new KbError(`${from} is the scope already`);
+  requireProject(store, from);
+  const active = store.notes().filter((n) => n.scope === from);
+  const trashed = store.notes({ trashed: true }).filter((n) => n.scope === from);
+  for (const note of [...active, ...trashed]) {
+    for (const inTrash of [false, true]) {
+      if (existsSync(store.notePath({ scope: to, id: note.id }, inTrash))) throw new KbError(`cannot move ${note.id}: ${to} has a note with that id${inTrash ? " in the trash" : ""}. Nothing moved.`);
+    }
+  }
+  const result = { from, to, notes: active.map((n) => n.id).sort(), trashed: trashed.map((n) => n.id).sort() };
+  if (dryRun) return result;
+  for (const note of [...active, ...trashed]) {
+    const { path, trashed: inTrash, ...rest } = note;
+    store.writeNote({ ...rest, scope: to }, inTrash);
+    rmSync(path, { force: true });
+    pruneEmpty(dirname(path), join(store.home, inTrash ? "trash" : "notes"));
+  }
+  const count = result.notes.length + result.trashed.length;
+  afterWrite(store, `kb: move the scope ${from} to ${to} (${count})`);
+  logWrites(store, "update", [...result.notes, ...result.trashed]);
+  return result;
+}
+
+/** Remove the folders that a move left empty, up to the root. Git keeps no empty folder, so they would differ per machine. */
+function pruneEmpty(dir: string, root: string): void {
+  for (let at = dir; at.startsWith(`${root}/`); at = dirname(at)) {
+    try {
+      if (readdirSync(at).length > 0) return;
+      rmdirSync(at);
+    } catch {
+      return;
+    }
+  }
 }
 
 /** Remove every note of a project for good, active and in the trash. Only when the user wants the project gone now. */

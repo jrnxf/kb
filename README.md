@@ -14,7 +14,11 @@ notes, and a note loads when it applies.
   One idea per note. Read, edit and grep them freely.
 - **Scope** is `global` or a repo id. The repo id is the normalised origin remote
   (`github.com/owner/name`), so SSH clones, HTTPS clones and worktrees share one scope.
-  A repo with no remote uses its directory name.
+  A repo with no remote uses its directory name. When a repo gets a remote, or its remote moves,
+  its id changes and its notes stay under the old id. A session start in a repo with no notes
+  says so when another scope has the same repo name. `kb scope move <old> <new>` then gives
+  every note of the old scope, also in the trash, the new id in one commit. It refuses to
+  overwrite a note, and `--dry-run` shows what would move.
 - **At session start** a hook injects `kb context` for `global` and the current repo. The task is
   not known yet, so no gotcha, convention, decision or how-to gets its body there. Such a note
   loads at its trigger, at a path, or with `kb show`. A session start gives four parts:
@@ -352,6 +356,7 @@ kb trash|restore|delete|empty-trash --scope <repo id>   a whole project
 kb stale [--repo .]          kb verify <id>...
 kb budget [--repo .]         what a session start gives of each note, and what reaches no session
 kb scope [--repo .]          kb serve     (local page: read, edit and trash notes)
+kb scope move <old> <new> [--dry-run]   give every note of a scope a new repo id
 kb audit [--no-wait]         kb audit propose --file <path>   kb audit status   (an agent audits the scope)
 kb instructions [--repo .]   kb sync      kb checkpointed <session-id> [--ended <time>]
 kb log [--session id] [--since days]      (what the log says of each note, or of one session)

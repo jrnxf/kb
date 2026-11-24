@@ -263,6 +263,8 @@ interface Session {
   /** The notes on a file that changed after their last check, as the last `kb stale` found them. */
   changed: Set<string>;
   syncError: string | null;
+  /** When the repo has no notes, a line that names the scopes of the same repo name that have some. */
+  moved: string | null;
   charBudget: number;
   briefChars: number;
 }
@@ -275,9 +277,11 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
   const holdback = inHoldback(session, config.holdback);
 
   // A promoted note loads from the instruction file that holds it now, so it is not here too.
-  const visible = store.notes().filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === scope));
+  const all = store.notes();
+  const visible = all.filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === scope));
   const syncError = store.syncError();
-  if (visible.length === 0 && !syncError) return { context: { ...EMPTY, scope, holdback }, ranked: [], changed: none, config };
+  const moved = scope ? movedHint(all, scope) : null;
+  if (visible.length === 0 && !syncError && !moved) return { context: { ...EMPTY, scope, holdback }, ranked: [], changed: none, config };
 
   const ranked = rank(visible, lastActivity(store));
   const goneOf = new Map<string, string>();
@@ -293,7 +297,7 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
       else if (changedOf(note).length > 0) changed.add(note.id);
     }
   }
-  const laid: Session = { scope, ranked, goneOf, changed, syncError, charBudget: contextBudget(config.budgets.contextChars), briefChars: config.budgets.briefChars };
+  const laid: Session = { scope, ranked, goneOf, changed, syncError, moved, charBudget: contextBudget(config.budgets.contextChars), briefChars: config.budgets.briefChars };
   if (holdback) return { context: heldStart(laid), ranked, changed, config }; // HOLDBACK
 
   const context = newStart(laid);
@@ -307,15 +311,33 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
 }
 
 /**
+ * When no active note has the repo's scope, but another scope with the same repo name (the last
+ * part of the id) has some, one line that names it and the move. The repo may have got a remote,
+ * or its remote moved. It may also be another repo of that name, so kb moves nothing by itself.
+ */
+export function movedHint(notes: StoredNote[], scope: string): string | null {
+  const name = (id: string) => id.split("/").at(-1);
+  if (scope === "global" || notes.some((n) => n.scope === scope)) return null;
+  const counts = new Map<string, number>();
+  for (const n of notes) if (n.scope !== "global" && n.scope !== scope && name(n.scope) === name(scope)) counts.set(n.scope, (counts.get(n.scope) ?? 0) + 1);
+  const others = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  if (others.length === 0) return null;
+  const [top, n] = others[0]!;
+  const also = others.length > 1 ? ` (also ${others.slice(1, 3).map(([s]) => s).join(", ")}${others.length > 3 ? ", ..." : ""})` : "";
+  return `No note has the scope ${scope}, but ${top} has ${n} ${n === 1 ? "note" : "notes"} and the same repo name${also}. If they belong to this repo, tell the user: \`kb scope move ${top} ${scope} --dry-run\` shows what moves, and with no --dry-run it moves them.`;
+}
+
+/**
  * The parts of the text that every start has: `head`, the lines before the notes, and `index`, the
  * index section of the notes listed, with a last line that counts the hidden ones. `goneIn` gives
  * what is gone from the notes shown.
  */
-function partsOf({ scope, goneOf, changed, syncError }: Session, line: (note: StoredNote) => string) {
+function partsOf({ scope, goneOf, changed, syncError, moved }: Session, line: (note: StoredNote) => string) {
   const goneIn = (shown: StoredNote[]): ContextResult["gone"] => (goneOf.size === 0 ? [] : shown.filter((n) => goneOf.has(n.id)).map((n) => ({ id: n.id, detail: goneOf.get(n.id)! })));
   const head = (shown: StoredNote[]): string[] => {
     const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, FORMAT_LINE, SAVE_RULE];
     if (syncError) lines.push(`kb sync did not finish: ${syncError} \`kb sync\` shows the detail.`);
+    if (moved) lines.push(moved);
     // A note whose file or symbol is gone may be wrong now. The session checks it before it acts on it.
     const gone = goneIn(shown);
     if (gone.length > 0) {
