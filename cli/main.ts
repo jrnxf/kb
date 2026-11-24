@@ -10,7 +10,7 @@ import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
 import { MAX_NEIGHBORS, NOT_WRITTEN, type Neighbor, findNeighbors } from "./neighbors.ts";
 import { FORGET_WHYS, type ForgetWhy, type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, saysWorth, sessionOf, setActor, summarize } from "./log.ts";
-import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
+import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, titleId, titleKey, validateNote } from "./note.ts";
 import { commitAt, resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
@@ -282,12 +282,12 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   }
   if (typeof input.title !== "string" || !input.title.trim()) throw new KbError("invalid note: title: required");
   rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors, triggers: input.triggers }, "the note");
-  const slug = slugify(input.title);
-  if (!slug) throw new KbError("invalid note: title: needs letters or digits");
+  const slug = titleId(input.title);
+  if (!slug) throw new KbError("invalid note: title: required");
 
   // Same normalised title in the same scope: let the caller decide to update.
-  const title = normalizeTitle(input.title);
-  const twin = active.find((n) => n.scope === scope && (normalizeTitle(n.title) === title || n.id === title));
+  const title = titleKey(input.title);
+  const twin = active.find((n) => n.scope === scope && (titleKey(n.title) === title || n.id === title));
   if (twin) return { json: { status: "exists", id: twin.id, path: twin.path }, text: `exists ${twin.id}` };
 
   const raw: Record<string, unknown> = {

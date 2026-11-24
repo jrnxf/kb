@@ -97,11 +97,13 @@ export function rank(notes: StoredNote[], active: Map<string, string>): StoredNo
  * says the same thing twice and doubles the cost of the index. For most notes the line is the
  * only thing a session gets, so it must not lose the words that the cut removed: they follow
  * after "...". The full title is added only when the id does not come from it: a rewritten
- * title, or an id with a number suffix.
+ * title, an id with a number suffix, or a title with a word that has no ASCII form.
  */
 export function indexLine(note: StoredNote): string {
   const head = `- ${note.id} [${note.kind}]`;
   const full = normalizeTitle(note.title);
+  // A word that the id cannot hold, such as 日本語, would be lost, so the title comes in full.
+  if (/[^\p{ASCII}]/u.test(note.title.normalize("NFKD").replace(/\p{M}+/gu, ""))) return `${head} ${note.title}`;
   if (full === note.id) return head;
   if (!full.startsWith(`${note.id}-`)) return `${head} ${note.title}`;
   // The shortest start of the title that gives the id. What follows is the part that was cut.

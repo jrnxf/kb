@@ -1338,3 +1338,20 @@ describe("kb search", () => {
     expect(kb(store, ["search", "webhook", "retry", "zebra"]).stdout).toStartWith("no note has every word. Closest:\nretries | ");
   });
 });
+
+describe("kb add with a title that is not ASCII", () => {
+  test("folds accents into the id, gives a title with no ASCII word a hash id, and finds its twin", () => {
+    const store = tempStore();
+    const note = { kind: "convention", scope: "global", body: "b", new: true };
+    expect(add(store, { ...note, title: "Ünïcode 日本語 🚀 title" }).json).toMatchObject({ status: "created", id: "unicode-title" });
+    const japanese = add(store, { ...note, title: "日本語だけのタイトル" });
+    expect(japanese.json.id).toMatch(/^note-[0-9a-f]{8}$/);
+    expect(add(store, { ...note, title: " 日本語だけのタイトル " }).json).toMatchObject({ status: "exists", id: japanese.json.id });
+    expect(add(store, { ...note, title: "🚀 ✨" }).json.status).toBe("created");
+    expect(add(store, { ...note, title: "   " }).json).toEqual({ error: "invalid note: title: required" });
+    const context = kb(store, ["context"]).stdout;
+    expect(context).toContain(`- ${japanese.json.id} [convention] 日本語だけのタイトル\n`);
+    // The id leaves out the words with no ASCII form, so the line keeps them.
+    expect(context).toContain("- unicode-title [convention] Ünïcode 日本語 🚀 title\n");
+  });
+});
