@@ -4,7 +4,7 @@
 # project. A command of its own, so a skill can allow it by name.
 . "$(dirname "$0")/../hooks/bun.sh"
 if [ -z "$BUN" ]; then
-  echo "kb-transcript: Bun is not on the PATH or in ~/.bun/bin. Install it from bun.sh." >&2
+  echo "kb-transcript: $BUN_MISSING" >&2
   exit 127
 fi
 exec "$BUN" "$(dirname "$0")/../hooks/kb-transcript.ts" "$@"
