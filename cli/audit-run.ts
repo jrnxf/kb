@@ -9,12 +9,13 @@ import { join } from "node:path";
 import { readAudit } from "./audit.ts";
 import { KbError } from "./note.ts";
 import { type Store, writeAtomic } from "./store.ts";
+import { NO_SYNC_ENV } from "./sync.ts";
 import type { AuditRunState } from "./wire.ts";
 import { nowIso } from "./write.ts";
 
 /** Set in the agent's environment. There `kb audit` only reports, so an agent never starts another one. */
 export const RUN_ENV = "KB_AUDIT_RUN";
-/** A command to run in place of `claude`, for tests. Its arguments are the prompt only. */
+/** A command to run in place of `claude`, for tests. It gets the arguments `claude` would get. */
 export const AGENT_ENV = "KB_AUDIT_AGENT";
 
 const RUNS = "audit-runs.json";
@@ -87,20 +88,64 @@ export function auditPrompt(): string {
 }
 
 /**
- * What the headless agent may do with no question: kb, and reading the code. The skill has it
- * write the proposal to a file in its scratchpad directory. A write there needs no permission, so
- * no Write is allowed here: the agent can change no file of the repo.
+ * The kb commands the audit skill runs. The skill names them in its `allowed-tools` line, so there
+ * is one list: the session of /kb:audit and the headless agent both get exactly these.
  */
-export const AGENT_TOOLS = ["Bash(kb *)", "Read", "Grep", "Glob"];
+export function skillTools(): string[] {
+  const skill = readFileSync(join(PLUGIN, "skills", "audit", "SKILL.md"), "utf8");
+  const line = /^allowed-tools: (.*)$/m.exec(skill);
+  if (!line) throw new KbError("skills/audit/SKILL.md has no allowed-tools line");
+  return line[1]!.split(", ");
+}
 
-/** The agent command. `claude -p` with only what the skill needs. */
-function agentCommand(prompt: string): string[] {
+/**
+ * What the headless agent may do with no question: the kb commands of the audit skill, and reading
+ * the code. No kb delete, restore, serve, sync or empty-trash. The skill has it write the proposal
+ * to a file in its scratchpad directory. A write there needs no permission, so no Write is
+ * allowed here: the agent can change no file of the repo.
+ */
+export const AGENT_TOOLS = [...skillTools(), "Read", "Grep", "Glob"];
+
+/**
+ * Read, Grep and Glob reach the working directory only: the repo, or the empty folder of a global
+ * audit. The agent reads the notes and the instruction files through kb.
+ */
+export const AGENT_SETTINGS = { permissions: { blockReadsOutsideWorkingDirectories: true } };
+
+/**
+ * The arguments of `claude`: print mode with only what the skill needs.
+ * - `--setting-sources ""` loads no settings file. The user's allow rules and `defaultMode`
+ *   (often bypassPermissions) would widen the limit, and a repo's own hooks can hang a headless run.
+ *   `--settings` still applies.
+ * - `--permission-mode dontAsk` denies every call that no `--allowedTools` rule allows, with no prompt.
+ */
+export function agentArgs(prompt: string, model: string): string[] {
+  return ["-p", prompt, "--model", model, "--setting-sources", "", "--permission-mode", "dontAsk", "--settings", JSON.stringify(AGENT_SETTINGS), "--allowedTools", ...AGENT_TOOLS];
+}
+
+/** The agent command: `claude`, or the stand-in of a test, with the arguments of agentArgs. */
+function agentCommand(prompt: string, model: string): string[] {
+  const args = agentArgs(prompt, model);
   const fake = process.env[AGENT_ENV];
-  if (fake) return [fake, prompt];
+  if (fake) return [fake, ...args];
   const claude = Bun.which("claude");
   if (!claude) throw new KbError("kb audit starts the audit with the claude CLI, and it is not on PATH. Run /kb:audit in a Claude Code session instead.");
-  // A repo's own hooks can hang a headless run, so the agent loads the user's settings only.
-  return [claude, "-p", prompt, "--model", "opus", "--setting-sources", "user", "--allowedTools", ...AGENT_TOOLS];
+  return [claude, ...args];
+}
+
+/** A model name, or a full model id such as a Bedrock or Vertex ARN. It must not read as a flag. */
+const MODEL = /^[A-Za-z0-9][\w.:/[\]-]*$/;
+
+/** The model of the audit agent. A wrong value is a mistake to say, never a model to run in its place. */
+export function auditModel(store: Store): string {
+  const model = store.config().auditModel;
+  if (!MODEL.test(model)) throw new KbError(`auditModel in kb.config.json is ${JSON.stringify(model)}, which is not a model name. Use a name such as opus or sonnet, or a full model id.`);
+  return model;
+}
+
+/** What a user reads when an audit starts: it is a headless Claude session, and it costs like one. */
+export function costNotice(store: Store): string {
+  return `It runs a headless Claude session on ${auditModel(store)}, which counts against your Claude plan or API bill like any session. Set auditModel in kb.config.json to change the model.`;
 }
 
 /**
@@ -111,7 +156,8 @@ function agentCommand(prompt: string): string[] {
 export function startRun(store: Store, scope: string, root?: string): AuditRunState {
   if (process.env[RUN_ENV]) throw new KbError("an audit agent cannot start another audit");
   const now = runState(store, scope);
-  if (now?.status === "running") return now;
+  const notice = costNotice(store);
+  if (now?.status === "running") return { ...now, notice };
   store.ensure();
   if (scope !== "global" && !root) throw new KbError(`kb does not know where ${scope} is checked out`);
   // The empty folder of a global audit is removed when the agent ends.
@@ -123,7 +169,7 @@ export function startRun(store: Store, scope: string, root?: string): AuditRunSt
   const exit = `${log}.exit`;
   writeAtomic(log, "");
   rmSync(exit, { force: true });
-  const [command, ...args] = agentCommand(auditPrompt());
+  const [command, ...args] = agentCommand(auditPrompt(), auditModel(store));
   const out = openSync(log, "a");
   // The shell writes the exit code when the agent ends, so a later `kb audit` can tell a failure
   // from an agent that found nothing to change.
@@ -132,13 +178,13 @@ export function startRun(store: Store, scope: string, root?: string): AuditRunSt
     cwd,
     detached: true,
     stdio: ["ignore", out, out],
-    env: { ...process.env, [RUN_ENV]: scope, KB_AUDIT_EXIT: exit, ...(root ? {} : { KB_AUDIT_TMP: cwd }), PATH: `${join(PLUGIN, "bin")}:${process.env.PATH ?? ""}` },
+    env: { ...process.env, [RUN_ENV]: scope, [NO_SYNC_ENV]: "1", KB_AUDIT_EXIT: exit, ...(root ? {} : { KB_AUDIT_TMP: cwd }), PATH: `${join(PLUGIN, "bin")}:${process.env.PATH ?? ""}` },
   });
   closeSync(out);
   child.unref();
   const runs = readJson<Run>(store, RUNS);
   writeAtomic(store.statePath(RUNS), `${JSON.stringify({ ...runs, [scope]: { scope, root: cwd, pid: child.pid!, started, log, exit } }, null, 2)}\n`);
-  return { scope, started, log, status: "running" };
+  return { scope, started, log, status: "running", notice };
 }
 
 /** Wait until the run is no longer running. */

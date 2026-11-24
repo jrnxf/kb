@@ -24,6 +24,8 @@ export interface Config {
   sync: boolean;
   /** Per machine, as above. The user's global instructions file, which a global audit moves rules into. A leading ~ is the home folder. */
   globalInstructions: string;
+  /** The model of the headless agent that `kb audit` and the page's Audit button start. */
+  auditModel: string;
 }
 
 /**
@@ -74,6 +76,7 @@ const DEFAULT_CONFIG: Config = {
   autocommit: true,
   sync: true,
   globalInstructions: "~/.claude/CLAUDE.md",
+  auditModel: "opus",
 };
 
 /** The keys of the first kb.config.json. An older kb wrote all of them into every new store. */
@@ -451,6 +454,9 @@ export class Store {
       trashDays: days(raw.trashDays, DEFAULT_CONFIG.trashDays),
       decayDays: days(raw.decayDays, DEFAULT_CONFIG.decayDays),
       expireDays: days(raw.expireDays, DEFAULT_CONFIG.expireDays),
+      // The model goes on the claude command line, so audit-run checks it when an audit starts and
+      // refuses a wrong value. Here it stays as written, so a mistake stops no other command.
+      auditModel: raw.auditModel === undefined ? DEFAULT_CONFIG.auditModel : typeof raw.auditModel === "string" ? raw.auditModel : "",
     };
   }
 
