@@ -4,7 +4,7 @@
 // - _headers: immutable caching for assets/, and a Link header on the page (/) so Cloudflare can send 103 Early Hints.
 // - the files at fixed paths: favicons, robots.txt, sitemap.xml and llms.txt.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { D, NOTES, RAW, START, fonts, numbers, renderHash, src } from "./lib.ts";
 
@@ -33,22 +33,15 @@ for (const file of IMAGES) {
   pictures.set(file, `/assets/${name}`);
 }
 
-// What a reader without JavaScript sees in the two widgets that draw: the last state, from the same code as the page.
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+// What a reader without JavaScript sees in the two widgets that draw, from the same code as the page. The packer shows its last state.
+// The growth widget shows its first state, in the size of the live one.
 function packer() {
-  const S = START, tier = D.tiersOf(S), last = D.steps(S, NOTES, RAW.chars)[5], by = S.by, pct = (x: number) => Math.min(1, x / S.budget);
+  const S = START, tier = D.tiersOf(S), last = D.steps(S, NOTES, RAW.chars)[5];
   const cells = [...S.ranked].map((n) => `<i class="cell ${tier.get(n)}"></i>`).join("");
-  return `<div class="p-cap"><span class="n">Step 6 of 6</span><b>${esc(last.t)}</b><p>${esc(last.d)}</p></div>
+  return `${D.packerCap(last, 5)}
     <div class="p-field still" role="img" aria-label="${S.ranked.length} notes in rank order, colored by what each gets">${cells}</div><div class="p-legend">${D.legend()}</div>
-    <div class="p-bars"><span class="lab">characters</span><div class="cbar-wrap"><div class="cbar"><div class="s-fix" style="width:${(pct(by.fixed) * 100).toFixed(2)}%"></div><div class="seg s-body" style="left:${(pct(by.fixed) * 100).toFixed(2)}%;transform:scaleX(${pct(by.briefs).toFixed(4)})"></div><div class="seg s-idx" style="left:${(pct(by.fixed + by.briefs) * 100).toFixed(2)}%;transform:scaleX(${pct(by.index).toFixed(4)})"></div><div class="edge"></div></div></div><span class="v cval">${D.fmt(S.chars)} / ${D.fmt(S.budget)}</span></div>
+    <div class="p-bars">${D.packerBars(S, 5)}</div>
     <div class="p-tally">${D.tally(S)}</div>`;
-}
-function growth() {
-  const N = 400, ALL = D.mkNotes(800), MAXC = ALL.reduce((a: number, n: { blk: number }) => a + n.blk, 0), notes = ALL.slice(0, N);
-  const store = notes.reduce((a: number, n: { blk: number }) => a + n.blk, 0), S = D.runOn(notes, RAW.chars);
-  const stat = (label: string, v: number, color: string) => `<div class="g-stat">${label}<b>${D.fmt(v)} ch</b><div class="track"><div class="fill" style="background:${color};transform:scaleX(${(v / MAXC).toFixed(4)})"></div></div></div>`;
-  return `<p style="margin:0;font-size:13.5px;color:var(--mute)">Notes in the store: <b style="color:var(--ink)">${N}</b></p>
-    <div class="g-stats">${stat("in the store", store, "var(--mute)")}${stat("in each session", S.chars, "var(--index)")}</div>`;
 }
 
 const sess = src("session.js").replace(/^if \(typeof module.*$/m, "");
@@ -60,7 +53,7 @@ const page = (file: string) => src(file)
   .replace("/*SHARED_CSS*/", () => src("shared.css"))
   .replace("/*BASE_CSS*/", () => src("base.css"))
   .replace("<!--PACKER-->", packer)
-  .replace("<!--GROWTH-->", growth)
+  .replace("<!--GROWTH-->", D.growthHTML)
   .replace(/\{\{n\.(\w+)\}\}/g, (all, k) => numbers[k] ?? all)
   .replace(/\{\{([\w.-]+)\}\}/g, (all, name) => pictures.get(name) ?? all)
   .replace("/*SHARED_JS*/", () => js.replace(/<\/script/g, "<\\/script"));
@@ -100,8 +93,11 @@ for (const [name, out] of [["index.html", html], ["404.html", notFound]]) {
   for (const left of ["<!--FONT_PRELOADS-->", "/*FONT_FACES*/", "/*SHARED_CSS*/", "/*BASE_CSS*/", "/*SHARED_JS*/", "/*SESSION*/", "/*STORE*/", "/*RANK*/", "<!--PACKER-->", "<!--GROWTH-->"]) if (out.includes(left)) fail(`placeholder ${left} is still in ${name}`);
   if (/\{\{[\w.-]+\}\}/.test(out)) fail(`a {{name}} in ${name} names no picture in IMAGES and no number`);
   if (/fonts\.googleapis|fonts\.gstatic/.test(out)) fail(`${name} still loads Google Fonts`);
-  // The site is public: no LAN hosts, private IPs or local paths.
-  if (/\.lan\.|\/Users\/|127\.0\.0\.1|192\.168\.|\b10\.\d+\.\d+\.\d+/.test(out)) fail(`${name} has a local host, IP or path`);
+}
+// The site is public: no LAN hosts, private IPs or local paths in any file that it publishes. Fonts and pictures are binary, and are skipped.
+const TEXT = /\.(html|txt|xml|svg|json|js|css)$|^_headers$/;
+for (const name of readdirSync(dist, { recursive: true, encoding: "utf8" })) {
+  if (TEXT.test(name) && /\.lan\.|\/Users\/|127\.0\.0\.1|192\.168\.|\b10\.\d+\.\d+\.\d+/.test(readFileSync(join(dist, name), "utf8"))) fail(`${name} has a local host, IP or path`);
 }
 if (!html.includes(`content="${ORIGIN}/assets/`)) fail("og:image is not an absolute URL of a hashed picture");
 console.log(`dist: index.html ${(html.length / 1024).toFixed(1)} KB, 404.html ${(notFound.length / 1024).toFixed(1)} KB, ${faces.length} font files, preloads: ${preloads.join(", ")}`);

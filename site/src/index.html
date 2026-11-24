@@ -70,7 +70,6 @@ code { font: .87em var(--f-mono); color: var(--ink); background: var(--sunk); bo
 .tool > .b.loop { padding: 0; --in: 32px; height: calc(400px + 2 * var(--in)); }
 .tool > .b.loop .orbit { top: calc(48px + var(--in)); bottom: calc(48px + var(--in)); }
 .tool .term { border: 0; border-radius: 0; background: transparent; }
-.tool .term-bar { display: none; }
 /* The whole session start shows: the index is the point of it. Each row keeps its space while it waits, so the card does not jump. */
 .tool .term-body { padding: 16px 18px 18px; height: auto; }
 
@@ -132,14 +131,13 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
   .term { font-size: 11.5px; }
 }
 </style>
-<script>if (!matchMedia("(prefers-reduced-motion: reduce)").matches) document.documentElement.classList.add("term-anim");</script>
 </head>
 <body>
 <header class="bar pad"><div class="col">
   <a class="brand" href="#top"><span class="live" aria-hidden="true"></span>kb</a>
   <span class="path">~/acme/shop</span>
   <span class="sp"></span>
-  <span class="meter num" style="--fill: {{n.fill}}" title="Characters kb loads at session start, out of the hard budget"><span class="ml">context</span><i aria-hidden="true"></i><span class="sr">kb context: </span><span class="mv">{{n.chars}} / {{n.budget}}</span><span class="sr"> characters</span></span>
+  <span class="meter num" style="--fill: {{n.fill}}" title="Characters kb loads at session start, out of the hard budget"><span class="ml" aria-hidden="true">context</span><i aria-hidden="true"></i><span class="sr">kb context: </span><span class="mv">{{n.chars}} / {{n.budget}}</span><span class="sr"> characters</span></span>
   <nav><a href="#install">install</a><a href="https://github.com/jrnxf/kb">github</a></nav>
 </div></header>
 
@@ -164,7 +162,7 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
     <li class="sep">tuesday · new session in ~/acme/shop</li>
 
     <li class="turn ai" data-first><span class="g" aria-hidden="true">●</span><div class="msg">
-      <div class="tool"><div class="h"><b>SessionStart</b><span class="args">kb context</span><span class="ok">✓ {{n.chars}} ch</span></div><div class="b flush term w" data-w="term"><div class="term-body">
+      <div class="tool"><div class="h"><b>SessionStart</b><span class="args">kb context</span><span class="ok">✓ <span class="live-chars">{{n.chars}}</span> ch</span></div><div class="b flush term w" data-w="term"><div class="term-body">
 <div class="c-p">$ claude</div>
 <div class="c-dim">SessionStart hook ran: kb context</div>
 <div> </div>
@@ -248,7 +246,7 @@ An earlier session here ended with no /kb:save.
         <div class="mfold"><div><div class="mbody"><span class="dim">verified 2026-11-12 at 4f2c9e1 | confidence high | anchors: scripts/seed.ts</span><br><span class="txt">The seed script inserts into tables that only the latest migration creates. On a fresh database, run `bun db:migrate` first. The error is "relation users does not exist". It looks like a connection problem, but it is not.</span></div></div></div></div>
         <div class="mfoot" hidden><div class="msize"><span class="w-tag t-body tag">full body</span><div class="track"><div class="fill" style="background:var(--body)"></div></div><b>0 ch</b></div><button class="w-btn" type="button">Shrink to index line</button></div></div></div>
       <p>I rank them: the repo's notes first, then the global notes. The character budget is the only limit. These are the sizes of a real store.</p>
-      <div class="tool" id="budget"><div class="h"><b>kb budget</b><span class="args"><span class="bud-notes">{{n.notes}}</span> characters for the notes</span><span class="ok">✓ <span class="bud-count">{{n.briefs}} · {{n.lines}} lines</span></span></div><div class="b w" data-w="packer"><!--PACKER--></div></div>
+      <div class="tool" id="budget"><div class="h"><b>kb budget</b><span class="args"><span class="bud-notes">{{n.notes}}</span> characters for the notes</span><span class="ok">✓ <span class="bud-count">{{n.count}}</span></span></div><div class="b w" data-w="packer"><!--PACKER--></div></div>
     </div></li>
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">and when there are hundreds?</div></li>
@@ -342,7 +340,7 @@ A note with "changed since the last check" is on a file that changed after the n
 
     <li class="turn you prompt"><span class="g" aria-hidden="true">&gt;</span><div class="msg">/clear</div></li>
     <li class="turn ai again"><span class="g" aria-hidden="true">●</span><div class="msg">
-      <p>SessionStart · kb context · the same <span class="num">{{n.chars}}</span> characters come back.</p>
+      <p>SessionStart · kb context · the same <span class="num live-chars">{{n.chars}}</span> characters come back.</p>
     </div></li>
   </ol>
 
@@ -359,8 +357,11 @@ A note with "changed since the last check" is on a file that changed after the n
 // ---------- copy buttons: each copies the block under it. Without JavaScript or a clipboard they stay hidden. ----------
 if (navigator.clipboard) for (const b of document.querySelectorAll(".cp")) {
   const pre = b.closest(".step").querySelector("pre"), label = b.textContent; let t;
+  // The button keeps its aria-label, so a polite live region says the result to a screen reader.
+  const live = document.createElement("span");
+  live.className = "sr"; live.setAttribute("role", "status"); b.after(live);
   b.hidden = false;
-  b.addEventListener("click", () => navigator.clipboard.writeText(pre.textContent).then(() => "Copied", () => "Copy failed").then((text) => { b.textContent = text; clearTimeout(t); t = setTimeout(() => (b.textContent = label), 1600); }));
+  b.addEventListener("click", () => navigator.clipboard.writeText(pre.textContent).then(() => "Copied", () => "Copy failed").then((text) => { b.textContent = live.textContent = text; clearTimeout(t); t = setTimeout(() => { b.textContent = label; live.textContent = ""; }, 1600); }));
 }
 
 // ---------- the session reveal ----------

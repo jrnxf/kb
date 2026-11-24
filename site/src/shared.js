@@ -1,7 +1,7 @@
 /*SESSION*/
 const RAW = /*RANK*/;
 /*STORE*/
-const { fmt, kshade, mkNotes, runOn, tiersOf, steps, legend, tally } = demo(RAW, session);
+const { fmt, kshade, mkNotes, runOn, tiersOf, steps, legend, tally, packerCap, packerBars, briefCount, budgetCount, GROWTH_START, GROWTH_MAX, growthAt } = demo(RAW, session);
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const onView = (el, fn, opts) => new IntersectionObserver(([e]) => fn(e.isIntersecting), opts).observe(el);
 
@@ -10,9 +10,13 @@ const onView = (el, fn, opts) => new IntersectionObserver(([e]) => fn(e.isInters
 function mountTerm(root) {
   const rows = [...root.querySelectorAll(".term-body div")];
   if (reduce) return;
+  // The rows hide only from here on, so a page where this code never runs (or a print, or a crawler) shows them all.
+  // If the observer has not reported within 3 s, the rows show again.
+  root.classList.add("term-anim");
   let timer, i = 0;
+  const giveUp = setTimeout(() => root.classList.remove("term-anim"), 3000);
   const tick = () => { if (i < rows.length) { rows[i++].classList.add("on"); timer = setTimeout(tick, i < 3 ? 380 : 90); } else timer = setTimeout(() => { rows.forEach((r) => r.classList.remove("on")); i = 0; timer = setTimeout(tick, 600); }, 6000); };
-  onView(root, (v) => { clearTimeout(timer); if (v) tick(); });
+  onView(root, (v) => { clearTimeout(giveUp); clearTimeout(timer); if (v) tick(); });
 }
 
 // ---------- loop ----------
@@ -67,7 +71,9 @@ function meter(S, notesBudget) {
   // The budget card header says the same numbers.
   const bn = document.querySelector(".bud-notes"), bc = document.querySelector(".bud-count");
   if (bn) bn.textContent = fmt(notesBudget);
-  if (bc) bc.textContent = `${S.briefs.length} ${S.briefs.length === 1 ? "brief" : "briefs"} · ${S.listed.length} lines`;
+  if (bc) bc.textContent = budgetCount(S);
+  // The session start header and the turn after /clear say the same number as the meter.
+  for (const el of document.querySelectorAll(".live-chars")) el.textContent = fmt(S.chars);
   if (!meterEl) return;
   meterEl.querySelector(".mv").textContent = `${fmt(S.chars)} / ${fmt(S.budget)}`;
   meterEl.style.setProperty("--fill", S.chars / S.budget);
@@ -76,20 +82,21 @@ function meter(S, notesBudget) {
 // ---------- packer ----------
 function mountPacker(root) {
   const tune = root.dataset.tune !== "off";
+  const NOTES = mkNotes(RAW.notes.length), R = NOTES.length, S0 = runOn(NOTES, RAW.chars);
   root.innerHTML = `<div class="p-ctrl"><button class="w-btn primary play" type="button">Play</button><button class="w-btn next" type="button">Next step</button><div class="p-dots" aria-label="Steps"></div></div>
-    <div class="p-cap" aria-live="polite"><span class="n"></span><b></b><p></p></div>
+    <div aria-live="polite">${packerCap(steps(S0, NOTES, RAW.chars)[0], 0)}</div>
     <div class="p-field"></div><div class="p-legend"></div><div class="p-read">Point at a square to see that note's numbers.</div>
-    <div class="p-bars"><span class="lab">characters</span><div class="cbar-wrap"><div class="cbar"><div class="s-fix"></div><div class="seg s-body"></div><div class="seg s-idx"></div><div class="edge"></div></div></div><span class="v cval"></span></div><div class="p-tally"></div>
+    <div class="p-bars">${packerBars(S0, 0)}</div><div class="p-tally"></div>
     ${tune ? `<div class="p-tune"><label><span>Character budget for the notes <output class="oc"></output></span><input class="bc" type="range" min="2000" max="8400" step="100" value="${RAW.chars}"></label></div>` : ""}`;
   const $ = (s) => root.querySelector(s);
-  const NOTES = mkNotes(RAW.notes.length), R = NOTES.length, field = $(".p-field");
+  const field = $(".p-field");
   const cells = NOTES.map((n, i) => { const c = document.createElement("div"); c.className = "cell"; c.style.setProperty("--k", kshade(n.k)); c.dataset.i = i; field.appendChild(c); return c; });
   const shuffle = (() => { const a = [...Array(R).keys()]; let s = 7; for (let i = a.length - 1; i > 0; i--) { s = (s * 9301 + 49297) % 233280; const j = Math.floor(s / 233280 * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; })();
   let slotOf = shuffle.slice(), geo = { cols: 20, size: 20, gap: 4 };
   const place = (c, slot) => { const { cols, size, gap } = geo; c.style.transform = `translate(${(slot % cols) * (size + gap)}px, ${Math.floor(slot / cols) * (size + gap)}px)`; };
   function layout() { const W = field.clientWidth, cols = W < 520 ? 12 : 20, gap = W < 520 ? 3 : 5, size = Math.min(+(root.dataset.max || 46), Math.floor((W - gap * (cols - 1)) / cols)); geo = { cols, size, gap };
     const rows = Math.ceil(R / cols); field.style.height = rows * size + (rows - 1) * gap + "px"; cells.forEach((c, i) => { c.style.width = c.style.height = size + "px"; place(c, slotOf[i]); }); }
-  const B = { chars: RAW.chars }; let S = runOn(NOTES, B.chars), tier = tiersOf(S), phase = 0, playing = false, ptimer;
+  const B = { chars: RAW.chars }; let S = S0, tier = tiersOf(S), phase = 0, playing = false, ptimer;
   // The rank does not depend on the budget, so each note keeps its place while the budget moves.
   const rankOf = NOTES.map((n) => S.ranked.indexOf(n));
   // The step at which a note shows what it gets.
@@ -132,25 +139,22 @@ function mountPacker(root) {
 
 // ---------- growth: the store grows, the session does not ----------
 function mountGrowth(root) {
-  root.innerHTML = `<div class="g-box"><canvas></canvas></div>
-    <label style="display:grid;gap:6px;font-size:13.5px;color:var(--mute)"><span style="display:flex;justify-content:space-between">Notes in the store <output style="color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums"></output></span><input type="range" min="10" max="800" step="1" value="10"></label>
-    <div class="g-stats"><div class="g-stat">in the store<b class="gs">0</b><div class="track"><div class="fill gsf" style="background:var(--mute)"></div></div></div>
-    <div class="g-stat">in each session<b class="gc">0</b><div class="track"><div class="fill gcf" style="background:var(--index)"></div></div></div></div>`;
+  // The build wrote the widget at its first state, in its final size. The canvas and the slider start to work here.
   const cv = root.querySelector("canvas"), inp = root.querySelector("input"), out = root.querySelector("output"), ctx = cv.getContext("2d");
-  const ALL = mkNotes(800), MAXC = ALL.reduce((a, n) => a + n.blk, 0);
+  const MAXC = GROWTH_MAX;
+  inp.disabled = false;
   let col = {};
   const readCol = () => { const cs = getComputedStyle(root); col = { body: cs.getPropertyValue("--body").trim(), index: cs.getPropertyValue("--index").trim(), gone: cs.getPropertyValue("--gone").trim(), wait: cs.getPropertyValue("--mute").trim() }; };
   function draw(n) {
-    n = Math.round(n); const notes = ALL.slice(0, n), S = runOn(notes, RAW.chars), tier = tiersOf(S);
+    n = Math.round(n); const { notes, S, store } = growthAt(n), tier = tiersOf(S);
     const dpr = devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight; cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
     const pad = 14, cell = Math.max(3, Math.floor(Math.sqrt(((W - 2 * pad) * (H - 2 * pad)) / n))), cols = Math.max(1, Math.floor((W - 2 * pad) / cell)), gap = cell > 8 ? 2 : 1;
     S.ranked.forEach((x, i) => { ctx.fillStyle = col[tier.get(x)]; ctx.globalAlpha = { gone: 0.6, wait: 0.4 }[tier.get(x)] ?? 1; ctx.fillRect(pad + (i % cols) * cell, pad + Math.floor(i / cols) * cell, cell - gap, cell - gap); });
     ctx.globalAlpha = 1;
-    const store = notes.reduce((a, x) => a + x.blk, 0);
     out.textContent = fmt(n); root.querySelector(".gs").textContent = fmt(store) + " ch"; root.querySelector(".gc").textContent = fmt(S.chars) + " ch";
     root.querySelector(".gsf").style.transform = `scaleX(${store / MAXC})`; root.querySelector(".gcf").style.transform = `scaleX(${S.chars / MAXC})`;
   }
-  readCol(); draw(10);
+  readCol(); draw(GROWTH_START);
   inp.addEventListener("input", () => draw(+inp.value));
   new ResizeObserver(() => draw(+inp.value)).observe(cv);
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { readCol(); draw(+inp.value); });

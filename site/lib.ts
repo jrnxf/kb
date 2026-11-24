@@ -36,19 +36,22 @@ export const numbers: Record<string, string> = {
   chars: D.fmt(START.chars),
   budget: D.fmt(START.budget),
   fill: (START.chars / START.budget).toFixed(3),
-  briefs: `${START.briefs.length} ${START.briefs.length === 1 ? "brief" : "briefs"}`,
-  lines: String(START.listed.length),
+  count: D.budgetCount(START),
   notes: D.fmt(RAW.chars),
 };
 
-// A hash of everything `bun run render` reads: og.html, base.css, favicon.svg, render.ts, the numbers and the font files.
-// render.ts writes it to src/render-hash, and build.ts compares it, so a change to an input cannot ship with a stale og.png or icon.
+// A hash of the inputs of `bun run render` that change its pixels: og.html, base.css, favicon.svg, the code of render.ts (not its comments)
+// and the numbers that og.html shows. It leaves out the font files, so a font bump or a comment edit does not fail the build.
+// A font bump that you want in og.png needs a `bun run render` by hand.
+// render.ts writes the hash to src/render-hash, and build.ts compares it, so a change to an input cannot ship with a stale og.png or icon.
+const OG_NUMBERS = ["chars", "budget", "fill"];
+const noComments = (code: string) => code.replace(/^\s*\/\/.*$/gm, "").replace(/\s\/\/\s.*$/gm, "");
 export function renderHash(): string {
   const hash = createHash("sha256");
   const text = (s: string) => hash.update(s.replace(/\r\n/g, "\n") + "\0");
-  for (const f of ["og.html", "render.ts"]) text(readFileSync(join(here, f), "utf8"));
+  text(readFileSync(join(here, "og.html"), "utf8"));
+  text(noComments(readFileSync(join(here, "render.ts"), "utf8")));
   for (const f of ["base.css", "favicon.svg"]) text(src(f));
-  text(JSON.stringify(numbers));
-  for (const f of fonts()) hash.update(f.bytes);
+  text(JSON.stringify(OG_NUMBERS.map((k) => numbers[k])));
   return hash.digest("hex");
 }

@@ -15,14 +15,14 @@
 
 /* terminal */
 .term { background: var(--term-bg, #0d0e0c); color: #d8d8d0; border-radius: var(--r, 12px); border: 1px solid var(--term-line, #262724); font: 12.5px/1.65 var(--f-mono); overflow: hidden; min-width: 0; }
-.term-bar { display: flex; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--term-line, #262724); }
-.term-bar i { width: 10px; height: 10px; border-radius: 50%; background: #3a3b37; }
 .term-body { padding: 14px 16px 16px; height: var(--term-h, 360px); overflow: hidden; }
 .term-body div { white-space: pre-wrap; overflow-wrap: anywhere; }
-/* Rows show at once without JavaScript or with reduced motion. A script in the head puts "term-anim" on <html> before the first paint,
-   and then each row wipes in from the left, so a slow load never shows the rows and then hides them. A wipe, not a fade, so a row never shows at a low contrast. */
-.term-anim .term .term-body div { clip-path: inset(0 100% 0 0); transition: clip-path 220ms var(--ease-out); }
-.term-anim .term .term-body div.on { clip-path: inset(0); }
+/* Rows show at once without JavaScript, with reduced motion and in print. The code of mountTerm puts "term-anim" on the terminal,
+   and then each row wipes in from the left. A wipe, not a fade, so a row never shows at a low contrast. */
+@media not print {
+  .term.term-anim .term-body div { clip-path: inset(0 100% 0 0); transition: clip-path 220ms var(--ease-out); }
+  .term.term-anim .term-body div.on { clip-path: inset(0); }
+}
 .term .c-dim { color: #85857d; } .term .c-b { color: #7fd8a6; } .term .c-i { color: #9fb4ff; } .term .c-h { color: #f2f2ea; font-weight: 500; } .term .c-p { color: #f3b27a; }
 
 /* loop */

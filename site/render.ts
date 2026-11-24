@@ -1,5 +1,5 @@
 // Renders the pictures that the build only copies: src/og.png (the share card), src/apple-touch-icon.png and src/favicon.ico.
-// Run it by hand with `bun run render` after a change to og.html, base.css, favicon.svg, render.ts or the numbers in lib.ts, and commit the output.
+// Run it by hand with `bun run render` after a change to og.html, base.css, favicon.svg, render.ts or the numbers it shows, and commit the output.
 // It also writes src/render-hash, which build.ts checks, so the build fails when an input changed and this did not run.
 // It needs the Playwright browser of the repo root (`bunx playwright install chromium-headless-shell` once).
 import { writeFileSync } from "node:fs";
