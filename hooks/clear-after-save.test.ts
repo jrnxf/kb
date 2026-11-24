@@ -101,3 +101,13 @@ test('the watch lasts one turn', async ($, on) => {
   await w.clock.advance(1000)
   expect(w.ran).toEqual(['kb:clear'])
 })
+
+test('a Bash call keeps its result when the watch fails on it', async ($, on) => {
+  // A result whose isError cannot be read makes the watch throw after next.
+  const result = { result: { stdout: 'saved', stderr: '' }, get isError(): boolean { throw new Error('boom') } }
+  on('command.run', () => ({ text: '' }))
+  on('tool.call', () => result as never)
+  await $.command.run({ command: 'kb:clear', args: '' } as never)
+  const got = (await $.tool.call({ tool: 'Bash', command: 'kb checkpointed abc-123' } as never)) as { result?: unknown }
+  expect(got.result).toEqual({ stdout: 'saved', stderr: '' })
+})

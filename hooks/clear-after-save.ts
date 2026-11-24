@@ -23,17 +23,19 @@ export const register: Register = on => {
   let armed = false
   let saved = false
 
+  // The command and Bash hooks only watch. If one fails, the call goes on as it would without
+  // the mod: before next it runs, and after next its result stands, never run a second time.
   on('command.run', { command: 'kb:clear' }, async ($, e, next) => {
     armed = true
     saved = false
     return next(e)
-  })
+  }).catch(async ($, e, next) => next(e))
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const result = await next(e)
     if (armed && e.agentId === undefined && RECORDS_SAVE.test(e.command) && 'result' in result && !result.isError) saved = true
     return result
-  })
+  }).catch(async ($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
