@@ -1,7 +1,7 @@
 // Builds the kb site into dist/.
 // - index.html and 404.html: each page with its CSS and JS inlined, so the only other requests are the fonts and the pictures.
 // - assets/: the self-hosted woff2 files and the pictures, each name with a content hash, so they can be cached forever.
-// - _headers: immutable caching for assets/, and a Link header on the page (/) so Cloudflare can send 103 Early Hints.
+// - _headers: HSTS for every path (one year, this host only), immutable caching for assets/, and a Link header on the page (/) so Cloudflare can send 103 Early Hints.
 // - the files at fixed paths: favicons, robots.txt, sitemap.xml and llms.txt.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
@@ -70,6 +70,7 @@ writeFileSync(join(dist, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 const link = preloads.map((h) => `<${h}>; rel=preload; as=font; type=font/woff2; crossorigin`).join(", ");
 // The font Link goes only on the page: the icons, robots.txt, sitemap.xml and llms.txt do not use the fonts.
 writeFileSync(join(dist, "_headers"), `/*
+  Strict-Transport-Security: max-age=31536000
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 
@@ -95,6 +96,8 @@ for (const [name, out] of [["index.html", html], ["404.html", notFound]]) {
   if (/fonts\.googleapis|fonts\.gstatic/.test(out)) fail(`${name} still loads Google Fonts`);
 }
 // The site is public: no LAN hosts, private IPs or local paths in any file that it publishes. Fonts and pictures are binary, and are skipped.
+// HSTS must stay on every path: the browser then refuses plain http for this host for a year.
+if (!/^\/\*\n(?:  .+\n)*?  Strict-Transport-Security: max-age=31536000\n/m.test(readFileSync(join(dist, "_headers"), "utf8"))) fail("_headers has no Strict-Transport-Security: max-age=31536000 line under /*");
 const TEXT = /\.(html|txt|xml|svg|json|js|css)$|^_headers$/;
 for (const name of readdirSync(dist, { recursive: true, encoding: "utf8" })) {
   if (TEXT.test(name) && /\.lan\.|\/Users\/|127\.0\.0\.1|192\.168\.|\b10\.\d+\.\d+\.\d+/.test(readFileSync(join(dist, name), "utf8"))) fail(`${name} has a local host, IP or path`);
