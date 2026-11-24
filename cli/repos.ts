@@ -62,3 +62,25 @@ export function auditableScopes(store: Store): string[] {
   return ["global", ...Object.keys(read(store)).filter((scope) => scope !== "global" && repoRoot(store, scope)).sort()];
 }
 
+
+/** The checkout of `scope` goes to its new id, for a scope move. A checkout that `to` has already stays. */
+export function moveRepo(store: Store, from: string, to: string): void {
+  const repos = read(store);
+  if (!(from in repos)) return;
+  const { [from]: root, ...rest } = repos;
+  try {
+    writeAtomic(store.statePath(REPOS), `${JSON.stringify({ ...rest, [to]: rest[to] ?? root }, null, 2)}\n`);
+  } catch {
+    // the page only offers no Audit button for this repo until the next session start
+  }
+}
+
+/**
+ * The scopes that another checkout uses. This checkout is the one that `scope` has on record,
+ * else `root`. A scope whose checkout is this one, or is gone from disk, is not in the set.
+ */
+export function scopesElsewhere(store: Store, scope: string, root: string | null): Set<string> {
+  const repos = read(store);
+  const here = repos[scope] ?? root;
+  return new Set(Object.entries(repos).filter(([other, path]) => other !== scope && path !== here && existsSync(path)).map(([other]) => other));
+}

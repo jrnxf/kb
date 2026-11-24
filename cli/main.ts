@@ -24,7 +24,7 @@ import { Store, git } from "./store.ts";
 import { syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
 import { version, versionText } from "./version.ts";
-import { afterWrite, asOfTime, checkedHashes, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireIdOrPart, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+import { afterWrite, asOfTime, checkedHashes, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, moveScope, noteWarnings, nowIso, requireIdOrPart, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 /** `kb add` exits with this code when it wrote nothing because of close notes: an answer to read, not an error (1). */
 const NEIGHBORS_EXIT = 2;
@@ -93,6 +93,7 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          project. Each has its scope, its directory, and if that is gone
   kb unsaved --forget <session-id>       stop reporting one of them, as it holds nothing to save
   kb scope [--repo .]                    print the scope id of a directory
+  kb scope move <old> <new> [--dry-run]  give every note of a scope, also in the trash, a new repo id
   kb serve [--port n] [--no-open]        the store as a local page: read, edit and trash notes
                                          kb alone in a terminal does the same. Behind a proxy, name it in
                                          KB_SERVE_HOSTS: kb.example.com, or .example.com for every name under it
@@ -182,6 +183,18 @@ function cmdContext(store: Store, args: Args): Output {
 }
 
 function cmdScope(store: Store, args: Args): Output {
+  if (args.positional[0] === "move") {
+    const [, from, to, ...extra] = args.positional;
+    if (!from || !to || extra.length > 0) throw new UsageError("usage: kb scope move <old repo id> <new repo id> [--dry-run]");
+    const dry = args.flags.has("dry-run");
+    // An open audit is keyed to the scope and its cards name note files. Finish or drop it first.
+    if (openAudits(store).includes(from)) throw new KbError(`${from} has an audit with picks still open. Finish it on the audit page, then run the move again.`);
+    const m = moveScope(store, from, to, dry);
+    const what = [`${m.notes.length} ${m.notes.length === 1 ? "note" : "notes"}`, ...(m.trashed.length ? [`${m.trashed.length} in the trash`] : [])].join(" and ");
+    const ids = [...m.notes, ...m.trashed.map((id) => `${id} (trash)`)].join(", ");
+    return { json: { ...m, dryRun: dry }, text: `${dry ? "would move" : "moved"} ${what} from ${from} to ${to}: ${ids}${dry ? "\nNothing is written. Run it again with no --dry-run to move them." : ""}` };
+  }
+  if (args.positional.length > 0) throw new UsageError("usage: kb scope [--repo .] | kb scope move <old repo id> <new repo id> [--dry-run]");
   const info = resolveRepo(String(args.flags.get("repo") ?? "."), store);
   return { json: info, text: info.scope ?? "global" };
 }
