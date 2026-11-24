@@ -549,13 +549,19 @@ With auto-update on for the marketplace, each machine follows the default branch
 sets no `version`, so every commit is a release.
 
 The plugin puts `kb` on the PATH of Claude Code's shell only. For `kb serve` and the other commands
-in your own terminal, add this function to `~/.bashrc` or `~/.zshrc`. It runs the installed version:
+in your own terminal, add this function to `~/.bashrc` or `~/.zshrc`. It finds the installed plugin
+and hands your arguments to `bin/kb-run.ts`. That file picks the install like Claude Code does: a
+local install, then a project install that holds the current directory, then your user install.
+The function only finds the file, so a plugin update can change the lookup and you keep the same function.
 
 ```bash
 kb() {
-  local dir
-  dir=$(grep -o '"installPath": *"[^"]*/kb/[^"]*"' ~/.claude/plugins/installed_plugins.json | head -1 | cut -d'"' -f4)
-  bun "$dir/cli/main.ts" "$@"
+  local p
+  while IFS= read -r p; do
+    [ -f "$p/bin/kb-run.ts" ] && { bun "$p/bin/kb-run.ts" "$@"; return; }
+  done < <(grep -o '"installPath": *"[^"]*"' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json" 2>/dev/null | cut -d'"' -f4)
+  echo "kb: no installed kb plugin has bin/kb-run.ts. Run: claude plugin install kb@jrnxf" >&2
+  return 1
 }
 ```
 
