@@ -503,6 +503,7 @@ Report a security problem as `SECURITY.md` says.
 ## Install
 
 Requirements: Claude Code 2.1.275 or later, a recent [Bun](https://bun.sh) (tested with 1.4) and git.
+The hooks look for Bun in `KB_BUN`, on the PATH, then in `~/.bun/bin`, `~/.local/bin`, the mise and asdf shims and the Homebrew folders. Without Bun, kb is off, and a session start says so in one line.
 There is no build step and no dependency to install: the page of `kb serve` comes built in `web/dist`.
 
 kb installs from the `jrnxf` marketplace ([jrnxf/plugins](https://github.com/jrnxf/plugins)). In Claude Code:
