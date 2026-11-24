@@ -5,7 +5,7 @@ import { applyAudit, proposeAudit } from "../cli/audit.ts";
 import type { RepoInfo } from "../cli/scope.ts";
 import { LINE_LEFT_OUT, findSecret, maskSecrets, maskToolText } from "../cli/secrets.ts";
 import { updateNote } from "../cli/write.ts";
-import { kb, putNote, sh, tempStore } from "./helpers.ts";
+import { kb, machineConfig, putNote, sh, tempStore } from "./helpers.ts";
 
 // Fake tokens are put together at run time, so this file holds no string that looks like a real secret.
 const rand = (n: number, chars = "aB3dE5gH7jK9mN1pQ2sT4vW6yZ8") => Array.from({ length: n }, (_, i) => chars[(i * 7 + 3) % chars.length]).join("");
@@ -197,7 +197,7 @@ describe("a note with a secret is never written", () => {
     putNote(store, { id: "g", scope: "global", kind: "convention", body: "a rule" });
     const file = join(store.home, "..", "CLAUDE.md");
     writeFileSync(file, "# Rules\n");
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: file }));
+    machineConfig(store, { globalInstructions: file });
     proposeAudit(store, { items: [{ id: "g", action: "promote", why: "x", rule: "- A rule.", section: "Style" }] }, { scope: null, root: null, head: null } as unknown as RepoInfo);
     expect(() => applyAudit(store, "global", { picks: [{ id: "g", action: "promote", rule: secret }] })).toThrow("the rule of g looks like it holds a GitHub token");
     expect(readFileSync(file, "utf8")).toBe("# Rules\n");

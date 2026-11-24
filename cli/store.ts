@@ -1,6 +1,6 @@
 // The store on disk: paths, config, notes, the usage counters of older versions, generated files and git.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -20,12 +20,23 @@ export interface Config {
   /** A note in the trash for longer than this is deleted for good. */
   trashDays: number;
   autocommit: boolean;
+  /** Per machine: local.json wins, and kb.config.json is the fallback. */
   sync: boolean;
-  /** The user's global instructions file. A global audit moves rules into it. A leading ~ is the home folder. */
+  /** Per machine, as above. The user's global instructions file, which a global audit moves rules into. A leading ~ is the home folder. */
   globalInstructions: string;
 }
 
-export interface Local {
+/**
+ * The keys that differ per machine. They live in local.json, which is never synced. A machine
+ * copies a valid value out of kb.config.json once per store (local.json then holds `pinned`), and
+ * the shared file keeps the value for a machine that runs an older kb.
+ */
+export const MACHINE_KEYS = ["sync", "globalInstructions"] as const;
+type MachineKey = (typeof MACHINE_KEYS)[number];
+
+export interface Local extends Partial<Pick<Config, MachineKey>> {
+  /** True once this machine has copied the per-machine keys of kb.config.json. */
+  pinned?: boolean;
   machine: string;
   aliases: Record<string, string>;
 }
@@ -65,14 +76,55 @@ const DEFAULT_CONFIG: Config = {
   globalInstructions: "~/.claude/CLAUDE.md",
 };
 
+/** The keys of the first kb.config.json. An older kb wrote all of them into every new store. */
+const FIRST_KEYS = ["budgets", "decayDays", "autocommit", "sync"];
+
+/** Budgets that an older kb wrote and that this version ignores, with the default that it wrote. */
+const DEAD_BUDGETS: Record<string, number> = { indexLines: 60, globalIndexLines: 20 };
+
+/** A value that a per-machine key may hold. Anything else is a mistake, and the next source speaks. */
+const validMachine: { [K in MachineKey]: (value: unknown) => value is Config[K] } = {
+  sync: (value): value is boolean => typeof value === "boolean",
+  globalInstructions: (value): value is string => typeof value === "string" && value !== "",
+};
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * A config that an older kb wrote whole, without the keys whose value is the default. Each default
+ * that kb ever shipped is the default of today, so a value equal to it changes nothing now. The
+ * cost: a user who typed a default on purpose no longer holds it when a later kb changes it.
+ * A dead budget that differs from its old default stays, because an older kb still reads it.
+ */
+export function withoutDefaults(raw: Record<string, unknown>): Record<string, unknown> {
+  const kept: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === "budgets" && value && typeof value === "object" && !Array.isArray(value)) {
+      const budgets = Object.fromEntries(
+        Object.entries(value).filter(([name, v]) => !same(v, name in DEAD_BUDGETS ? DEAD_BUDGETS[name] : DEFAULT_CONFIG.budgets[name as keyof Config["budgets"]])),
+      );
+      if (Object.keys(budgets).length > 0) kept.budgets = budgets;
+    } else if (!(key in DEFAULT_CONFIG) || !same(value, DEFAULT_CONFIG[key as keyof Config])) {
+      kept[key] = value;
+    }
+  }
+  return kept;
+}
+
+const LOCAL_LOCK_WAIT_MS = 2000;
+const LOCAL_LOCK_STALE_MS = 10_000;
+
 const GITIGNORE = ["INDEX.md", "index.html", "local.json", ".sync-*", "*.tmp-*", ".state/"];
 
 /** A path with a leading `~` for the home folder, as a config or a shell command writes it. */
-export const tilde = (path: string) => (path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path);
+export const tilde = (path: string) => (path === "~" || path.startsWith("~/") ? join(userHome(), path.slice(1)) : path);
+
+/** The user's home folder, as an absolute path without a trailing slash. HOME wins, as in a shell. */
+export const userHome = (env: Record<string, string | undefined> = process.env) => resolve(env.HOME || homedir());
 
 /** The store's folder, always absolute: an agent that kb starts runs in another folder. */
 export function kbHome(): string {
-  return resolve(process.env.KB_HOME || join(homedir(), ".kb"));
+  return resolve(process.env.KB_HOME || join(userHome(), ".kb"));
 }
 
 export function git(cwd: string, ...args: string[]): { ok: boolean; out: string } {
@@ -110,8 +162,7 @@ export class Store {
   /** Create the store layout. Only commands that write call this. */
   ensure(): void {
     for (const dir of ["notes", "trash"]) mkdirSync(join(this.home, dir), { recursive: true });
-    const configPath = join(this.home, "kb.config.json");
-    if (!existsSync(configPath)) writeAtomic(configPath, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`);
+    this.tidyConfig();
     const ignorePath = join(this.home, ".gitignore");
     // Add lines that a store made by an older version lacks.
     const have = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
@@ -124,11 +175,69 @@ export class Store {
     return join(this.home, ".state", name);
   }
 
+  private configPath(): string {
+    return join(this.home, "kb.config.json");
+  }
+
+  /** The synced config as the file has it. A file that is not a JSON object counts as empty. */
+  private sharedConfig(): Record<string, unknown> {
+    const raw = readJson<unknown>(this.configPath());
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  }
+
+  /**
+   * Called by ensure(), so a read never writes. kb.config.json holds only the keys that the user
+   * set: a file that an older kb wrote whole (every default key) loses the keys whose value is the
+   * default. The per-machine keys stay in the shared file, because a machine that still runs an older
+   * kb reads them there. This machine copies valid ones into local.json once.
+   */
+  private tidyConfig(): void {
+    const raw = this.sharedConfig();
+    this.pinMachineKeys(raw);
+    if (!FIRST_KEYS.every((key) => key in raw)) return;
+    const kept = withoutDefaults(raw);
+    if (!same(kept, raw)) writeAtomic(this.configPath(), `${JSON.stringify(kept, null, 2)}\n`);
+  }
+
+  /**
+   * Once per store, copy each valid per-machine key of kb.config.json that differs from the default
+   * into local.json, so a later pull of that file cannot change it on this machine. A key that
+   * local.json has wins. A globalInstructions file that does not exist on this machine stays out,
+   * because it is the path of another machine. The copy sets `pinned`, and after that nothing is
+   * copied again: a key that the user deletes from local.json does not come back, and a later change
+   * of the shared file reaches this machine through the fallback in config(). Where there is nothing
+   * to copy, nothing is written. This runs in ensure(), never in a read, and it merges into the
+   * file as it is now.
+   */
+  private pinMachineKeys(shared: Record<string, unknown>): void {
+    const local = this.local();
+    if (local.pinned) return;
+    const copy = MACHINE_KEYS.filter((key) => {
+      const value = shared[key];
+      if (key in local || !validMachine[key](value) || same(value, DEFAULT_CONFIG[key])) return false;
+      return key !== "globalInstructions" || existsSync(tilde(value as string));
+    });
+    if (copy.length === 0) return;
+    this.updateLocal((fresh) => {
+      if (fresh.pinned) return;
+      for (const key of copy) if (!(key in fresh)) Object.assign(fresh, { [key]: shared[key] });
+      fresh.pinned = true;
+    });
+  }
+
   config(): Config {
-    const raw = readJson<Partial<Config>>(join(this.home, "kb.config.json")) ?? {};
+    const shared = this.sharedConfig() as Partial<Config>;
+    const local = this.local();
+    // Per key, the first valid value wins: local.json, then the shared file (as a machine that runs
+    // an older kb reads it), then the default. A wrong or empty value never hides a valid one.
+    const machine = <K extends MachineKey>(key: K): Config[K] =>
+      ([local[key], shared[key]] as unknown[]).find((value): value is Config[K] => validMachine[key](value)) ?? DEFAULT_CONFIG[key];
+    const { sync: _sync, globalInstructions: _file, ...raw } = shared;
     return {
       ...DEFAULT_CONFIG,
       ...raw,
+      sync: machine("sync"),
+      globalInstructions: machine("globalInstructions"),
       // Only the budgets of this version are read. A config of an older kb can still name
       // `indexLines` and `globalIndexLines`: both limits are gone, and the keys are ignored.
       budgets: {
@@ -148,20 +257,54 @@ export class Store {
   /** Per-machine state. It is never committed, because paths and machine ids differ per machine. */
   local(): Local {
     const raw = readJson<Partial<Local>>(join(this.home, "local.json")) ?? {};
-    return { machine: raw.machine ?? "", aliases: raw.aliases ?? {} };
+    return { ...raw, machine: raw.machine ?? "", aliases: { ...raw.aliases } };
   }
 
   saveLocal(local: Local): void {
     writeAtomic(join(this.home, "local.json"), `${JSON.stringify(local, null, 2)}\n`);
   }
 
+  /**
+   * Change local.json: take a lock, read the file as it is now, apply `change`, write it
+   * atomically. Hooks start at once, so two of them must not both read the old file and lose one
+   * write. The lock is a folder in .state/ that a waiter retries for up to two seconds. A lock that
+   * is older than ten seconds is stale and goes. If the lock stays taken, the change goes ahead
+   * without it, because a hook must never fail over a convenience.
+   */
+  updateLocal(change: (local: Local) => void): Local {
+    const lock = this.statePath("local-lock");
+    mkdirSync(dirname(lock), { recursive: true });
+    let held = false;
+    for (const start = Date.now(); !held && Date.now() - start < LOCAL_LOCK_WAIT_MS; ) {
+      try {
+        mkdirSync(lock);
+        held = true;
+      } catch {
+        try {
+          if (Date.now() - statSync(lock).mtimeMs > LOCAL_LOCK_STALE_MS) rmSync(lock, { recursive: true, force: true });
+          else Bun.sleepSync(10);
+        } catch {
+          // the holder released it between the two calls: try again at once
+        }
+      }
+    }
+    try {
+      const local = this.local();
+      change(local);
+      this.saveLocal(local);
+      return local;
+    } finally {
+      if (held) rmSync(lock, { recursive: true, force: true });
+    }
+  }
+
   /** The id of this machine, made on first use. It names the file that only this machine writes: its roll-up in activity/. */
   machine(): string {
-    const local = this.local();
-    if (local.machine) return local.machine;
-    local.machine = randomBytes(4).toString("hex");
-    this.saveLocal(local);
-    return local.machine;
+    const have = this.local().machine;
+    if (have) return have;
+    return this.updateLocal((local) => {
+      local.machine ||= randomBytes(4).toString("hex");
+    }).machine;
   }
 
   // ---- notes ----

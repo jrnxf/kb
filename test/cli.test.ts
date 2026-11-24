@@ -8,7 +8,7 @@ import { parseNote } from "../cli/note.ts";
 import { search } from "../cli/search.ts";
 import { recordUnsaved } from "../cli/session.ts";
 import { Store } from "../cli/store.ts";
-import { ROOT, daysAgo, kb, legacyUsage, logAt, logged, otherMachine, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { ROOT, daysAgo, kb, legacyUsage, logAt, logged, machineConfig, otherMachine, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const add = (store: Store | string, note: object, cwd?: string) => kb(store, ["add", "--json"], { stdin: JSON.stringify(note), cwd });
 
@@ -26,9 +26,9 @@ describe("kb instructions", () => {
     const dir = tempDir();
     writeFileSync(join(dir, "AGENTS.md"), "# Rules\n");
     sh(dir, "ln", "-s", "AGENTS.md", "CLAUDE.md");
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(dir, "CLAUDE.md") }));
+    machineConfig(store, { globalInstructions: join(dir, "CLAUDE.md") });
     expect(kb(store, ["instructions"]).stdout).toContain(`AGENTS.md (${join(dir, "CLAUDE.md")} links here)`);
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(dir, "AGENTS.md") }));
+    machineConfig(store, { globalInstructions: join(dir, "AGENTS.md") });
     expect(kb(store, ["instructions"]).stdout).not.toContain("links here");
   });
 });

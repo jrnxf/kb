@@ -132,9 +132,10 @@ notes, and a note loads when it applies.
 - **A rule goes to an instruction file when the user states it.** The agent starts `/kb:note` on
   its own when the user says "always", "never", "from now on" or corrects it. `kb instructions`
   names the files. A global rule goes into the global file, which `globalInstructions` in
-  `kb.config.json` names (`~/.claude/CLAUDE.md`). kb writes the file at the end of its links, so
-  a dotfiles repo that links it gets the change. A repo rule goes into the repo's `CLAUDE.md` or
-  `AGENTS.md` after you say yes. Nothing is committed for you.
+  `local.json` names (`~/.claude/CLAUDE.md`). kb writes the file at the end of its links, so
+  a dotfiles repo that links it gets the change. A
+  repo rule goes into the repo's `CLAUDE.md` or `AGENTS.md` after you say yes. Nothing is
+  committed for you.
 - **Before `/clear`** you run `/kb:clear`. The agent saves what the session learned,
   updates notes instead of duplicating them, writes stated rules to instruction files, trashes
   finished open work, empties Claude Code's auto memory, and gives a verdict on the notes it got with `kb verdict`.
@@ -302,6 +303,24 @@ notes, and a note loads when it applies.
   .state/log/<YYYY-MM>.jsonl                    # the event log of this machine, 12 months
   .state/triggers.json                          # the table of triggers and anchors that the hooks read
 ```
+
+Two files hold settings. kb writes no default into either one, so a new default of kb reaches you:
+
+- `kb.config.json` syncs to every machine: `budgets`, `holdback`, `decayDays`, `expireDays`,
+  `trashDays` and `autocommit`. Put in only the keys you change.
+- `local.json` stays on its machine: `sync` (true) and `globalInstructions`. Where it has no value,
+  kb reads the key from `kb.config.json`, and where that has none, the default holds. A clone of a
+  store has no `local.json`, so it syncs, and a clone you use for a test needs `"sync": false` in
+  its `local.json`.
+
+An older kb wrote every default into `kb.config.json`, with `sync` and `globalInstructions`. The
+first command that writes copies a valid `sync` or `globalInstructions` value that is not the
+default into `local.json`, once per store (`local.json` then holds `"pinned": true`). A
+`globalInstructions` path that does not exist on this machine stays out. The value stays in
+`kb.config.json`, because a machine that runs an older kb reads it there. For each key, kb takes the
+first valid value from `local.json`, then `kb.config.json`, then the default. If kb wrote the file
+whole, it also drops each key whose value is the default. A value you typed equal to the default
+then follows the default from now on.
 
 ## A note
 
