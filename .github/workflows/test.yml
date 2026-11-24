@@ -19,9 +19,8 @@ jobs:
           bun-version: 1.4.3
       - name: Install
         run: |
-          bun install --frozen-lockfile
           bun install --cwd web --frozen-lockfile
-          bunx playwright install --with-deps chromium-headless-shell
+          bun run --cwd web playwright install --with-deps chromium-headless-shell
       # test:mod runs `claude plugin test`, which needs the Claude Code CLI but no login.
       - name: Install Claude Code
         run: bun add -g --trust @anthropic-ai/claude-code@2.1.331
