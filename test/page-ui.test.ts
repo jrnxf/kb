@@ -89,6 +89,17 @@ describe("history and the tab", () => {
     await page.waitForFunction((id) => new URLSearchParams(location.hash.slice(1)).get("note") === id, first);
     expect(page.url()).toStartWith(served!.url);
   });
+
+  test("j and k move to another note without adding a history entry", async () => {
+    const page = await open();
+    const first = await selected(page);
+    const before = await page.evaluate(() => history.length);
+    await page.keyboard.press("j");
+    await page.waitForFunction((id) => new URLSearchParams(location.hash.slice(1)).get("note") !== id, first);
+    await page.keyboard.press("k");
+    await page.waitForFunction((id) => new URLSearchParams(location.hash.slice(1)).get("note") === id, first);
+    expect(await page.evaluate(() => history.length)).toBe(before);
+  });
 });
 
 describe("the keyboard", () => {

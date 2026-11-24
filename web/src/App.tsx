@@ -80,8 +80,8 @@ export function App() {
   }, [data, scopes, kinds, view.scope, view.kinds, view.trash, shown.trashCount]);
 
   // The address keeps the view, so a reload comes back to the same place. On a wide screen a note
-  // the user picks gets its own history entry, so Back goes to the note before. A phone has the
-  // drawer's entry instead.
+  // the user clicks gets its own history entry, so Back goes to the note before. A j/k move only
+  // replaces the entry, so holding j does not fill the history. A phone has the drawer's entry instead.
   const picked = useRef(false);
   const shownNote = useRef<string | null>(null);
   useEffect(() => {
@@ -468,7 +468,6 @@ export function App() {
       const list = shown.notes;
       if (list.length) {
         const i = current ? list.indexOf(current) : 0;
-        picked.current = true;
         setView((v) => ({ ...v, note: list[Math.max(0, Math.min(list.length - 1, i + by))]!.id }));
       }
     } else if (by) moveCursor(by);
