@@ -14,7 +14,7 @@ import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isVali
 import { commitAt, resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
-import { DEFAULT_PORT, isKbServer, kbServerAt, linkWithKey, runningPort, serve, serveToken, storeId } from "./serve.ts";
+import { DEFAULT_PORT, isKbServer, kbServerAt, linkToRunning, runningPort, serve, storeId } from "./serve.ts";
 import { resultGroups } from "./wire.ts";
 import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, isLive, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
 import { CHANGED_MARK, changedAsk, changedSinceCheck, clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
@@ -807,6 +807,7 @@ async function cmdServe(store: Store, args: Args, json: boolean): Promise<never>
   const open = !args.flags.has("no-open") && !json;
   // The link carries the key that lets the page change notes. It is in the fragment, so no server or proxy log sees it.
   let url: string;
+  let note = "";
   try {
     url = serve(store, { port }).link;
   } catch (error) {
@@ -815,11 +816,12 @@ async function cmdServe(store: Store, args: Args, json: boolean): Promise<never>
     if (!running) throw new KbError(`port ${port} is in use by another program. Pass --port.`);
     // A kb older than this one does not name its store.
     if (running.store !== undefined && running.store !== storeId(store)) throw new KbError(`port ${port} serves another kb store. Stop that kb serve, or pass --port.`);
-    // One server per port is enough: show the one that is already up.
-    const token = serveToken(store);
-    url = token ? linkWithKey(`http://127.0.0.1:${port}/`, token) : `http://127.0.0.1:${port}/`;
+    // One server per port is enough: show the one that is already up, with the key it uses.
+    const found = await linkToRunning(store, port);
+    url = found.link;
+    if (!found.keyed) note = `The link has no key, so the page is read only. To change notes, stop that kb serve${running.store === undefined ? " (it is from an older kb)" : ""} and run kb serve again.`;
     if (open) openInBrowser(url);
-    console.log(json ? JSON.stringify({ url, started: false }, null, 2) : `kb serve is already running at ${url}`);
+    console.log(json ? JSON.stringify({ url, started: false, ...(note ? { note } : {}) }, null, 2) : `kb serve is already running at ${url}${note ? `\n${note}` : ""}`);
     process.exit(0);
   }
   console.log(json ? JSON.stringify({ url, started: true }, null, 2) : `kb serve: ${url}
@@ -843,7 +845,8 @@ async function cmdAudit(store: Store, args: Args, input: () => Promise<string>):
   if (sub !== undefined && sub !== "propose" && sub !== "status") throw new KbError("usage: kb audit [propose | status] [--repo .] [--no-wait]");
   // The link goes to the server that is running: the port kb serve recorded, or the default.
   const port = (await runningPort(store)) ?? DEFAULT_PORT;
-  const url = `http://127.0.0.1:${port}/#audit=${encodeURIComponent(scope)}`;
+  // The link carries the key, as the serve link does, so the page can apply the picks.
+  const { link: url } = await linkToRunning(store, port, `#audit=${encodeURIComponent(scope)}`);
   const served = () => isKbServer(port);
   const open = async (cards: number, lead: string): Promise<Output> => ({
     json: { scope, status: "open", cards, url, served: await served() },

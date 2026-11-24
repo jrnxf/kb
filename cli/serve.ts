@@ -4,7 +4,8 @@
 // link that `kb serve` prints can write: the link carries the key, as a Jupyter link does.
 
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { join, normalize, sep } from "node:path";
 import { applyAudit, auditData } from "./audit.ts";
 import { startRun } from "./audit-run.ts";
@@ -44,7 +45,7 @@ const EDITABLE = ["title", "kind", "confidence", "body"] as const;
  * Names a reverse proxy in front of the server may use, from KB_SERVE_HOSTS, split by commas.
  * A name that starts with a dot, such as `.example.com`, takes that domain and every name under
  * it, the same as Vite's allowedHosts. Everybody who can open the page under such a name can
- * change notes.
+ * read the notes. Changing them still needs the key.
  */
 function extraHosts(): string[] {
   return (process.env.KB_SERVE_HOSTS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
@@ -60,7 +61,7 @@ function allowedHost(host: string, port: number): boolean {
   });
 }
 
-async function handle(store: Store, token: string, port: number, request: Request): Promise<Response> {
+async function handle(store: Store, key: Key, port: number, request: Request): Promise<Response> {
   const url = new URL(request.url);
   // A page on another site can point its own name at 127.0.0.1. The Host header gives that away.
   const host = request.headers.get("host") ?? "";
@@ -69,13 +70,13 @@ async function handle(store: Store, token: string, port: number, request: Reques
   // `write` tells the page whether its key is right, so it can say that it is read only.
   // `store` tells `kb serve` whether the server on a port serves the same store.
   if (request.method === "GET" && url.pathname === "/api/state") {
-    return json({ kb: true, version: storeVersion(store), store: storeId(store), write: request.headers.get("x-kb-token") === token });
+    return json({ kb: true, version: storeVersion(store), store: storeId(store), write: request.headers.get("x-kb-token") === key.token });
   }
   // No answer carries the key: a process that can reach the server can read, and cannot write.
   if (request.method === "GET" && url.pathname === "/api/page") {
     // A note whose time in the trash is up goes before the page shows it.
     tidy(store);
-    keepToken(store, token);
+    keepToken(store, key);
     return json(pageData(store));
   }
   if ((request.method === "GET" || request.method === "HEAD") && !url.pathname.startsWith("/api/")) return staticFile(url.pathname);
@@ -84,7 +85,7 @@ async function handle(store: Store, token: string, port: number, request: Reques
   if (request.method === "GET" && url.pathname === "/api/audit") return json(auditData(store, url.searchParams.get("scope") ?? ""));
   // The page's Audit button: one agent audits the repo in its checkout, and the page opens its cards.
   if (url.pathname === "/api/audit/start") {
-    if (request.headers.get("x-kb-token") !== token) return json({ error: NO_KEY }, 403);
+    if (request.headers.get("x-kb-token") !== key.token) return json({ error: NO_KEY }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
     const scope = (await body(request))?.scope;
     if (typeof scope !== "string") throw new KbError("scope: must be a repo id or global");
@@ -95,7 +96,7 @@ async function handle(store: Store, token: string, port: number, request: Reques
     return json(startRun(store, scope, root));
   }
   if (url.pathname === "/api/audit/apply") {
-    if (request.headers.get("x-kb-token") !== token) return json({ error: NO_KEY }, 403);
+    if (request.headers.get("x-kb-token") !== key.token) return json({ error: NO_KEY }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
     const input = await body(request);
     if (typeof input?.scope !== "string") throw new KbError("scope: must be a repo id or global");
@@ -103,7 +104,7 @@ async function handle(store: Store, token: string, port: number, request: Reques
   }
 
   if (url.pathname === "/api/trash/empty") {
-    if (request.headers.get("x-kb-token") !== token) return json({ error: NO_KEY }, 403);
+    if (request.headers.get("x-kb-token") !== key.token) return json({ error: NO_KEY }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
     // With a scope, only the trash of that project: the list shows only its notes.
     const scope = (await body(request))?.scope;
@@ -114,7 +115,7 @@ async function handle(store: Store, token: string, port: number, request: Reques
   // A project goes to the trash whole, and comes back whole. The page deletes it for good only from the trash.
   const project = url.pathname.match(/^\/api\/projects\/(trash|restore)$/);
   if (project) {
-    if (request.headers.get("x-kb-token") !== token) return json({ error: NO_KEY }, 403);
+    if (request.headers.get("x-kb-token") !== key.token) return json({ error: NO_KEY }, 403);
     if (request.method !== "POST") return json({ error: "not found" }, 404);
     const scope = (await body(request))?.scope;
     if (typeof scope !== "string") throw new KbError("scope: must be a repo id");
@@ -130,7 +131,7 @@ async function handle(store: Store, token: string, port: number, request: Reques
     return json(note);
   }
   // Only the link that `kb serve` printed holds the key.
-  if (request.headers.get("x-kb-token") !== token) return json({ error: NO_KEY }, 403);
+  if (request.headers.get("x-kb-token") !== key.token) return json({ error: NO_KEY }, 403);
 
   if (request.method === "POST" && action) {
     moveNotes(store, [id], action === "trash");
@@ -260,7 +261,7 @@ const TOKEN_FILE = "serve-token";
 /**
  * The key to change notes, kept from the last start. It stays the same across restarts, so an open
  * page keeps working after a plugin update restarts the server. Only the user can read the file.
- * Delete it to make a new key.
+ * A running server reads the file once, so to revoke a key, delete the file and restart.
  */
 export function serveToken(store: Store): string | undefined {
   try {
@@ -270,31 +271,57 @@ export function serveToken(store: Store): string | undefined {
   }
 }
 
+/** The key of a running server: the one in memory, and whether it is in the file yet. */
+interface Key {
+  token: string;
+  kept: boolean;
+}
+
 /**
- * Keep the key for the next start. A store that does not exist yet gets no file: a folder in its
- * place would stop a `git clone` into it. The page load after the first note keeps it then.
+ * Keep the key for the next start, once, when the store exists. A store that does not exist yet
+ * gets no file: a folder in its place would stop a `git clone` into it. The file is made with a
+ * link, which fails when it exists, so two servers of one store end up with the same key: the
+ * server that comes second takes the key that is in the file.
  */
-function keepToken(store: Store, token: string): void {
+function keepToken(store: Store, key: Key): void {
+  if (key.kept || !store.exists()) return;
+  const path = store.statePath(TOKEN_FILE);
+  const temp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
   try {
-    if (store.exists() && serveToken(store) !== token) writeAtomic(store.statePath(TOKEN_FILE), `${token}\n`, 0o600);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(temp, `${key.token}\n`, { mode: 0o600 });
+    try {
+      linkSync(temp, path);
+    } catch (error) {
+      if ((error as { code?: string })?.code !== "EEXIST") throw error;
+      key.token = serveToken(store) ?? key.token;
+    }
+    key.kept = true;
   } catch {
     // the key lasts until the server stops
+  } finally {
+    try {
+      unlinkSync(temp);
+    } catch {
+      // no temporary file to remove
+    }
   }
 }
 
-function makeToken(store: Store): string {
-  const token = serveToken(store) ?? randomBytes(16).toString("hex");
-  keepToken(store, token);
-  return token;
+function makeKey(store: Store): Key {
+  const token = serveToken(store);
+  const key = { token: token ?? randomBytes(16).toString("hex"), kept: token !== undefined };
+  keepToken(store, key);
+  return key;
 }
 
 /** The page's address with the key in its fragment. */
-export const linkWithKey = (url: string, token: string) => `${url}#token=${token}`;
+export const linkWithKey = (url: string, token: string) => `${url}${url.includes("#") ? "&" : "#"}token=${token}`;
 
 /** The answer to a request. An error becomes an answer too. */
-async function answer(store: Store, token: string, port: number, request: Request): Promise<Response> {
+async function answer(store: Store, key: Key, port: number, request: Request): Promise<Response> {
   try {
-    return await handle(store, token, port, request);
+    return await handle(store, key, port, request);
   } catch (error) {
     if (error instanceof KbError) return json({ error: error.message }, error.message.startsWith("no note") ? 404 : 400);
     return json({ error: `kb failed: ${(error as Error)?.message ?? error}` }, 500);
@@ -302,14 +329,14 @@ async function answer(store: Store, token: string, port: number, request: Reques
 }
 
 export function serve(store: Store, options: { port?: number } = {}): Served {
-  const token = makeToken(store);
+  const key = makeKey(store);
   tidy(store);
   const timer = setInterval(() => tidy(store), TIDY_MS);
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: options.port ?? DEFAULT_PORT,
     async fetch(request, self): Promise<Response> {
-      return withSafety(await answer(store, token, self.port!, request));
+      return withSafety(await answer(store, key, self.port!, request));
     },
   });
   // `kb audit` reads this to link to the server that is up, also one started with --port.
@@ -319,7 +346,7 @@ export function serve(store: Store, options: { port?: number } = {}): Served {
     // the link falls back to the default port
   }
   const url = `http://127.0.0.1:${server.port}/`;
-  return { url, link: linkWithKey(url, token), port: server.port!, token, stop: () => {
+  return { url, link: linkWithKey(url, key.token), port: server.port!, token: key.token, stop: () => {
     clearInterval(timer);
     server.stop(true);
   } };
@@ -336,6 +363,23 @@ export async function runningPort(store: Store): Promise<number | undefined> {
     // no record
   }
   return undefined;
+}
+
+/**
+ * An address of the running server on this port, with the key when the key in the store's file
+ * is the one the server uses. The server says so in `write`. A server that was started before the
+ * file existed, or before the file was deleted, has another key, and the page opens read only.
+ */
+export async function linkToRunning(store: Store, port: number, hash = ""): Promise<{ link: string; keyed: boolean }> {
+  const link = `http://127.0.0.1:${port}/${hash}`;
+  const token = serveToken(store);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/state`, { headers: { "x-kb-token": token ?? "" }, signal: AbortSignal.timeout(1000) });
+    if (token && ((await response.json()) as { write?: boolean }).write === true) return { link: linkWithKey(link, token), keyed: true };
+  } catch {
+    // no server answers
+  }
+  return { link, keyed: false };
 }
 
 /** True when a kb server already answers on this port. */

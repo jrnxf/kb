@@ -43,7 +43,8 @@ export function App() {
 
   const watch = useStoreWatch();
   // The poll fails while the server is down, and the first load says the same.
-  const offline = watch.isError || (!data && failed === api.OFFLINE);
+  // Only a failed fetch means the server is down: a refusal or a 500 shows its own message.
+  const offline = watch.error?.message === api.OFFLINE || (!data && failed === api.OFFLINE);
   const readOnly = !offline && watch.data?.write === false;
   const toastError = (error: Error) => void toast(error.message, { id: "kb" });
 
@@ -486,6 +487,10 @@ export function App() {
   ) : readOnly ? (
     <Banner>
       <strong>Read only.</strong> To change notes, open the link that <code>kb serve</code> printed.
+    </Banner>
+  ) : watch.isError ? (
+    <Banner>
+      <strong>kb:</strong> {watch.error.message}
     </Banner>
   ) : null;
 

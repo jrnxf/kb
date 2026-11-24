@@ -384,7 +384,7 @@ Only a page opened with the link that `kb serve` prints can change notes. The li
 `#token=...`, the key, as a Jupyter link does. The fragment never reaches a server or a proxy log.
 The page keeps the key in the browser and takes it out of the address. The key stays the same
 when `kb serve` restarts, so an open page keeps working. A page with no key reads, and its banner
-says how to get the key. Delete `.state/serve-token` in the store to make a new key.
+says how to get the key. The server writes the key once, when the store exists, and never reads the file again. To revoke a key, delete `.state/serve-token` in the store and restart `kb serve`. `kb audit` prints its link with the key too.
 
 The page is a React app in `web/` (Vite, Tailwind and shadcn/ui on Base UI). Its build in `web/dist` is
 committed. After a change to `web/` or `cli/wire.ts`, run `bun install` and `bun run build` in `web/`, and
