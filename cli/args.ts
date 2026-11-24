@@ -28,6 +28,7 @@ export const COMMAND_FLAGS: Record<string, Record<string, Kind>> = {
   show: { check: "switch" },
   search: { scope: "value", trash: "switch", check: "switch" },
   list: { scope: "value", trash: "switch" },
+  scope: { "dry-run": "switch" },
   trash: { scope: "value" },
   restore: { scope: "value" },
   delete: { scope: "value" },
