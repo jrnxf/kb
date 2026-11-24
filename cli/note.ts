@@ -54,32 +54,33 @@ export function isValidScope(scope: string): boolean {
   return SCOPE_RE.test(scope) && !scope.split("/").some((part) => part === "." || part === "..");
 }
 
-/**
- * Lowercase ASCII words joined by "-". The full form compares titles. An accent is folded into
- * its letter (Ü gives u), and a letter with no ASCII form, such as 日本語, is left out.
- */
+/** Lowercase, with an accent folded into its letter (Ü gives u). A letter with no ASCII form stays. */
+export function foldAccents(text: string): string {
+  return text.toLowerCase().normalize("NFKD").replace(/\p{M}+/gu, "");
+}
+
+/** Lowercase ASCII words joined by "-". A letter with no ASCII form, such as 日本語, is left out. */
 export function normalizeTitle(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/\p{M}+/gu, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  return foldAccents(text).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/** True when a title has a letter or digit that its ASCII words leave out, such as 日本語. */
+export function dropsLetters(text: string): boolean {
+  return /(?![a-z0-9])[\p{L}\p{N}]/u.test(foldAccents(text));
 }
 
 /**
- * The key that compares two titles. Most titles have ASCII words, and those decide. A title
- * with none, such as one only in Japanese, compares in full, with case and spaces folded.
+ * The key that compares two titles. An ASCII title compares by its words. A title that
+ * drops letters compares in full, so `v2 の問題` and `v2 のバグ` stay two notes.
  */
 export function titleKey(text: string): string {
-  return normalizeTitle(text) || text.normalize("NFKC").toLowerCase().trim().replace(/\s+/g, " ");
+  if (!dropsLetters(text)) return normalizeTitle(text);
+  return text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, "-").replace(/^-+|-+$/g, "");
 }
 
 const MAX_SLUG = 48;
 
-/** A short id from a title: cut at a word boundary, because the id sits next to the title in every index line. */
-export function slugify(text: string): string {
-  const full = normalizeTitle(text);
+function cutSlug(full: string): string {
   if (full.length <= MAX_SLUG) return full;
   const cut = full.slice(0, MAX_SLUG + 1);
   const boundary = cut.lastIndexOf("-");
@@ -87,15 +88,31 @@ export function slugify(text: string): string {
 }
 
 /**
- * The id of a new note with this title: its slug. A title with no ASCII letter or digit gets
- * "note-" and a hash of its words, so the same title always gives the same id. Empty only for
- * an empty title.
+ * The scope of a repo with no remote, from its folder name. Do not change this rule: a scope is
+ * a key of stored notes, and a new rule would orphan the notes of a folder like `café`.
+ */
+export function slugify(text: string): string {
+  const full = text
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return cutSlug(full);
+}
+
+/**
+ * The id of a new note with this title: its ASCII words, cut at a word boundary, because the id
+ * sits next to the title in every index line. A title that drops letters adds a short hash of
+ * its full key, so two such titles keep two ids, and a title with no ASCII word is "note-" and
+ * the hash. The same title always gives the same id. Empty only for an empty title.
  */
 export function titleId(title: string): string {
-  const slug = slugify(title);
-  if (slug) return slug;
   const key = titleKey(title);
-  return key ? `note-${createHash("sha256").update(key).digest("hex").slice(0, 8)}` : "";
+  if (!key) return "";
+  const slug = cutSlug(normalizeTitle(title));
+  if (!dropsLetters(title)) return slug;
+  const hash = createHash("sha256").update(key).digest("hex").slice(0, 8);
+  return `${slug || "note"}-${hash}`;
 }
 
 const isString = (v: unknown): v is string => typeof v === "string" && v.length > 0;
@@ -211,7 +228,9 @@ const DATE = /^\d{4}-\d\d?-\d\d?(?:[Tt ]|$)/;
  * double quotes with JSON escapes, which YAML reads the same. The rules are kb's own, so the
  * file does not change with the version of Bun. `time` lets a timestamp stay plain.
  */
-function scalar(text: string, time = false): string {
+function scalar(raw: string, time = false): string {
+  // A lone surrogate has no UTF-8 form: a reader gets U+FFFD, so write that, and what is saved is what is read.
+  const text = raw.toWellFormed();
   if (time && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(text)) return text;
   const plain =
     text.length > 0 &&

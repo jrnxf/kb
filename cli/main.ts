@@ -286,8 +286,8 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   }
   if (typeof input.title !== "string" || !input.title.trim()) throw new KbError("invalid note: title: required");
   rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors, triggers: input.triggers }, "the note");
+  if (!/[\p{L}\p{N}]/u.test(input.title)) throw new KbError("invalid note: title: needs letters or digits");
   const slug = titleId(input.title);
-  if (!slug) throw new KbError("invalid note: title: required");
 
   // Same normalised title in the same scope: let the caller decide to update.
   const title = titleKey(input.title);

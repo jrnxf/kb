@@ -22,9 +22,13 @@ describe("titleId", () => {
     expect(titleId("  C++ & Node.js: v2.0 (beta)  ")).toBe("c-node-js-v2-0-beta");
   });
 
-  test("folds an accent into its letter and leaves out a letter with no ASCII form", () => {
-    expect(titleId("Ünïcode 日本語 🚀 title")).toBe("unicode-title");
+  test("folds an accent into its letter, and keeps apart two titles that drop letters", () => {
     expect(titleId("Café crème brûlée")).toBe("cafe-creme-brulee");
+    expect(titleId("Ünïcode ’quoted’ — title → 🚀")).toBe("unicode-quoted-title");
+    expect(titleId("Ünïcode 日本語 🚀 title")).toMatch(/^unicode-title-[0-9a-f]{8}$/);
+    expect(titleId("v2 の問題")).toMatch(/^v2-[0-9a-f]{8}$/);
+    expect(titleId("v2 の問題")).not.toBe(titleId("v2 のバグ"));
+    expect(titleId("v2 の問題")).toBe(titleId("V2  の問題"));
     expect(titleId("ﬁle Ⅳ")).toBe("file-iv");
   });
 
@@ -35,7 +39,8 @@ describe("titleId", () => {
     // Case and spaces do not make a new note.
     expect(titleId("  日本語だけの   タイトル ")).toBe(titleId("日本語だけの タイトル"));
     expect(titleId("Привет мир")).toBe(titleId("привет  мир"));
-    expect(titleId("🚀 ✨")).toMatch(/^note-[0-9a-f]{8}$/);
+    // Only symbols: kb add refuses this title before it asks for an id.
+    expect(titleId("🚀 ✨")).toBe("");
     expect(titleId("日本語")).not.toBe(titleId("中文"));
   });
 
@@ -49,12 +54,24 @@ describe("titleId", () => {
   });
 });
 
+describe("slugify", () => {
+  test("keeps the scope of a repo folder as it was", () => {
+    // An accent in the middle of a word splits it: this is the scope an existing folder has.
+    expect(slugify("résumé")).toBe("re-sume");
+    expect(slugify("café")).toBe("cafe");
+    expect(slugify("Ünï-app")).toBe("u-ni-app");
+    expect(slugify("my-project")).toBe("my-project");
+    expect(slugify("Billing_API")).toBe("billing-api");
+  });
+});
+
 describe("titleKey", () => {
   test("compares ASCII words, and a title with none in full", () => {
     expect(titleKey("Stripe: needs the RAW body!")).toBe(titleKey("stripe needs the raw body"));
     expect(titleKey("Ünïcode title")).toBe(titleKey("unicode title"));
     expect(titleKey("日本語")).toBe("日本語");
-    expect(titleKey("Привет  Мир")).toBe("привет мир");
+    expect(titleKey("Привет  Мир")).toBe("привет-мир");
+    expect(titleKey("v2 の問題")).not.toBe(titleKey("v2 のバグ"));
   });
 });
 
@@ -112,6 +129,9 @@ describe("serializeNote", () => {
       const front = Bun.YAML.parse(file.split("\n---\n")[0]!.slice(4)) as Record<string, unknown>;
       expect([front.title, front.anchors, front.promoted_to]).toEqual([text, [text], text]);
     }
+    // A lone surrogate is written as U+FFFD, so the saved note reads back as it was written.
+    const lone = serializeNote(note({ title: "a\ud800b", anchors: ["x\udc00y"], anchor_hashes: { "x\udc00y": "h" } }));
+    expect(parseNote(lone)).toMatchObject({ title: "a\ufffdb", anchors: ["x\ufffdy"], anchor_hashes: { "x\ufffdy": "h" } });
     // The note reads back whole.
     expect(parseNote(serializeNote(note({ title: "yes: no #1", anchors: ["- a"] })))).toEqual(note({ title: "yes: no #1", anchors: ["- a"] }));
     expect(serializeNote(note({ title: "yes" }))).toContain('\ntitle: "yes"\n');

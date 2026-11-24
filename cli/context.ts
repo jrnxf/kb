@@ -2,7 +2,7 @@
 
 import { inHoldback, oldStart } from "./holdback.ts"; // HOLDBACK
 import { lastActivity } from "./log.ts";
-import { KINDS, localDate, normalizeTitle } from "./note.ts";
+import { KINDS, dropsLetters, localDate, normalizeTitle } from "./note.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
 import { anchorReader, changedAtLoad, missingAnchors } from "./stale.ts";
@@ -106,7 +106,7 @@ export function indexLine(note: StoredNote, changed = false): string {
   const head = `- ${note.id} [${note.kind}${changed ? ", changed" : ""}]`;
   const full = normalizeTitle(note.title);
   // A word that the id cannot hold, such as 日本語, would be lost, so the title comes in full.
-  if (/[^\p{ASCII}]/u.test(note.title.normalize("NFKD").replace(/\p{M}+/gu, ""))) return `${head} ${note.title}`;
+  if (dropsLetters(note.title)) return `${head} ${note.title}`;
   if (full === note.id) return head;
   if (!full.startsWith(`${note.id}-`)) return `${head} ${note.title}`;
   // The shortest start of the title that gives the id. What follows is the part that was cut.
