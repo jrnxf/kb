@@ -698,7 +698,7 @@ describe("kb-transcript", () => {
     expect(findSecret(text)).toBeNull();
     expect(text).not.toContain(token);
     expect(text).toContain("Rotate <masked: a GitHub token>");
-    expect(text).toContain("<tool-output>\nExit code 22 password: <masked: a secret value>\n</tool-output>");
+    expect(text).toContain("<tool-output>\nExit code 22 password: <masked: a password>\n</tool-output>");
 
     // The worktree of a finished run is deleted. The conversation is still read.
     const gone = join(tempDir(), "worktree");

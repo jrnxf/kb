@@ -9,6 +9,7 @@ import { kb, putNote, sh, tempStore } from "./helpers.ts";
 
 // Fake tokens are put together at run time, so this file holds no string that looks like a real secret.
 const rand = (n: number, chars = "aB3dE5gH7jK9mN1pQ2sT4vW6yZ8") => Array.from({ length: n }, (_, i) => chars[(i * 7 + 3) % chars.length]).join("");
+const hex = (n: number) => rand(n, "0123456789abcdef");
 const upper = (n: number) => rand(n, "ABCDEFGHJKLMNPQRSTUVWXYZ234567");
 const FAKES: Record<string, string> = {
   "a private key": `-----BEGIN ${"OPENSSH"} PRIVATE KEY-----\n${rand(60)}`,
@@ -26,12 +27,29 @@ const FAKES: Record<string, string> = {
   "a Hugging Face token": `${"hf_"}${rand(34, "abcdefghijkLMNOPQRSTUVwxyz")}`,
   "a password in a URL": `DATABASE_URL=postgres://app:${rand(14)}@db.example.com/app`,
   "a secret value": `API_KEY="${rand(32)}"`,
+  "a credential": `curl -H "Authorization: Bearer ${rand(32)}"`,
+  "a password": `password: ${"hunter2"}${"hunter2"}`,
+  "a Twilio key": `TWILIO=${"SK"}${hex(32)}`,
+  "an Azure key": `DefaultEndpointsProtocol=https;AccountName=shop;${"AccountKey"}=${rand(86)}==;EndpointSuffix=core.windows.net`,
+  "a Shopify token": `${"shpat_"}${hex(32)}`,
+  "a Mailgun key": `api:${"key-"}${hex(32)}`,
+  "a Telegram bot token": `bot ${"123456789"}:AA${rand(33)}`,
+  "a Google OAuth client secret": `${"GOCSPX-"}${rand(28)}`,
+  "a DigitalOcean token": `${"dop_v1_"}${hex(64)}`,
+  "an AWS secret key": `the AWS secret access key ${rand(40)} for prod`,
 };
 
 /** More shapes of the kinds above. */
 const MORE: [string, string][] = [
   ["a password in a URL", `REDIS_URL=redis://:${rand(14)}@cache.example.com:6379`],
   ["a secret value", `client_secret: ${rand(40, "0123456789abcdef")}`],
+  ["a password in a URL", `postgres://admin:${"p4ss"}@db.example.com/app`],
+  ["a Stripe key", `STRIPE_WEBHOOK=${"whsec_"}${rand(32)}`],
+  ["a Google API key", `${"AIza"}${rand(39)}`],
+  ["a credential", `Authorization: Basic ${rand(27)}=`],
+  ["a credential", `Bearer ${hex(40)}`],
+  ["a password", `"db_password": "${"S3cure!"}${"pass"}"`],
+  ["an AWS secret key", `export AWS_SECRET=${rand(20)}/${rand(19)}`],
 ];
 
 describe("findSecret", () => {
@@ -56,6 +74,42 @@ describe("findSecret", () => {
       "Read it as API_KEY=process.env.OPENAI_API_KEY_V2_xx in the server.",
       "The token: 123e4567-e89b-12d3-a456-426614174000 is the request id.",
     ]) expect(findSecret(text)).toBeNull();
+  });
+
+  test("lets normal prose and code through", () => {
+    for (const text of [
+      "Send Authorization: Bearer <token> on each call, or Authorization: Bearer ${API_TOKEN}.",
+      "Basic authentication is off, and the bearer token comes from the vault.",
+      "The password: rotation happens monthly. Set password: required in the form schema.",
+      "password = hunter2 is a famous joke, and the password: see-the-vault-docs.",
+      'const password = form.get("password"); if (password == null) return;',
+      "password_reset_token_expiry = 3600",
+      "password: process.env.DB_PASSWORD_2026 is read at boot.",
+      "Use postgres://user:password@localhost/app, postgres://postgres:postgres@localhost or redis://:pass@cache.",
+      "The docs are at https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingBucketPolicies1.html for AWS.",
+      "The AWS deploy broke in commit 0123456789abcdef0123456789abcdef01234567.",
+      "Stripe webhook secrets start with whsec_, Twilio keys with SK, and Shopify tokens with shpat_.",
+      "Mailgun keys look like key-<32 hex>, and DigitalOcean ones like dop_v1_<64 hex>.",
+      "The build took 12:34 and job 1234567890:done finished.",
+      "Run ssh://git@github.com:22/acme/app.git or git@github.com:acme/app.git.",
+    ]) expect([text, findSecret(text)]).toEqual([text, null]);
+  });
+
+  // The scan runs on every write of a note, and /kb:recover masks every line of old sessions.
+  test("1 MB of text that is almost a secret is fast: no pattern backtracks for long", () => {
+    const near = [
+      "aws ", "AWS ", "Authorization: Bearer ", "Bearer ", "Basic ", "password: ", "password=", "pwd:", "postgres://a:", "x://:", "key-", "SK", "shpat_", "dop_v1_",
+      "GOCSPX-", "AIza", "whsec_", "123456789:AA", "AccountKey=", "token=", "-----BEGIN ", "a".repeat(39), "aB3".repeat(13), "/+".repeat(20),
+    ];
+    const big = Array.from({ length: 40_000 }, (_, i) => near[i % near.length]).join("").slice(0, 1_000_000);
+    for (const text of [big, big.replaceAll(" ", "\n"), "a".repeat(1_000_000), "aws".concat(" aB3dE5gH7j".repeat(100_000))]) {
+      let started = performance.now();
+      findSecret(text);
+      expect(performance.now() - started).toBeLessThan(200);
+      started = performance.now();
+      maskSecrets(text);
+      expect(performance.now() - started).toBeLessThan(300);
+    }
   });
 
   test("a long line with no secret is fast", () => {
