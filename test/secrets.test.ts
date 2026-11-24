@@ -9,6 +9,7 @@ import { kb, putNote, sh, tempStore } from "./helpers.ts";
 
 // Fake tokens are put together at run time, so this file holds no string that looks like a real secret.
 const rand = (n: number, chars = "aB3dE5gH7jK9mN1pQ2sT4vW6yZ8") => Array.from({ length: n }, (_, i) => chars[(i * 7 + 3) % chars.length]).join("");
+const hex = (n: number) => rand(n, "0123456789abcdef");
 const upper = (n: number) => rand(n, "ABCDEFGHJKLMNPQRSTUVWXYZ234567");
 const FAKES: Record<string, string> = {
   "a private key": `-----BEGIN ${"OPENSSH"} PRIVATE KEY-----\n${rand(60)}`,
@@ -24,14 +25,31 @@ const FAKES: Record<string, string> = {
   "a Slack webhook": `${"hooks.slack.com"}/services/T${upper(8)}/B${upper(8)}/${rand(24)}`,
   "a SendGrid key": `${"SG."}${rand(22)}.${rand(43)}`,
   "a Hugging Face token": `${"hf_"}${rand(34, "abcdefghijkLMNOPQRSTUVwxyz")}`,
-  "a password in a URL": `DATABASE_URL=postgres://app:${rand(14)}@db.example.com/app`,
+  "a password in a URL": `DATABASE_URL=postgres://app:${rand(14)}@db.acme.dev/app`,
   "a secret value": `API_KEY="${rand(32)}"`,
+  "a credential": `curl -H "Authorization: Bearer ${rand(32)}"`,
+  "a password": `password: ${"hunter2"}${"hunter2"}`,
+  "a Twilio key": `TWILIO=${"SK"}${hex(32)}`,
+  "an Azure key": `DefaultEndpointsProtocol=https;AccountName=shop;${"AccountKey"}=${rand(86)}==;EndpointSuffix=core.windows.net`,
+  "a Shopify token": `${"shpat_"}${hex(32)}`,
+  "a Mailgun key": `api:${"key-"}${hex(32)}`,
+  "a Telegram bot token": `bot ${"123456789"}:AA${rand(33)}`,
+  "a Google OAuth client secret": `${"GOCSPX-"}${rand(28)}`,
+  "a DigitalOcean token": `${"dop_v1_"}${hex(64)}`,
+  "an AWS secret key": `the AWS secret access key ${rand(40)} for prod`,
 };
 
 /** More shapes of the kinds above. */
 const MORE: [string, string][] = [
-  ["a password in a URL", `REDIS_URL=redis://:${rand(14)}@cache.example.com:6379`],
+  ["a password in a URL", `REDIS_URL=redis://:${rand(14)}@cache.acme.dev:6379`],
   ["a secret value", `client_secret: ${rand(40, "0123456789abcdef")}`],
+  ["a password in a URL", `postgres://admin:${"p4ss"}@db.acme.dev/app`],
+  ["a Stripe key", `STRIPE_WEBHOOK=${"whsec_"}${rand(32)}`],
+  ["a Google API key", `${"AIza"}${rand(39)}`],
+  ["a credential", `Authorization: Basic ${rand(27)}=`],
+  ["a credential", `Bearer ${hex(40)}`],
+  ["a password", `"db_password": "${"S3cure!"}${"pass"}"`],
+  ["an AWS secret key", `export AWS_SECRET=${rand(20)}/${rand(19)}`],
 ];
 
 describe("findSecret", () => {
@@ -56,6 +74,71 @@ describe("findSecret", () => {
       "Read it as API_KEY=process.env.OPENAI_API_KEY_V2_xx in the server.",
       "The token: 123e4567-e89b-12d3-a456-426614174000 is the request id.",
     ]) expect(findSecret(text)).toBeNull();
+  });
+
+  test("lets normal prose and code through", () => {
+    for (const text of [
+      "Send Authorization: Bearer <token> on each call, or Authorization: Bearer ${API_TOKEN}.",
+      "Basic authentication is off, and the bearer token comes from the vault.",
+      "The password: rotation happens monthly. Set password: required in the form schema.",
+      "password = hunter2 is a famous joke, and the password: see-the-vault-docs.",
+      'const password = form.get("password"); if (password == null) return;',
+      "password_reset_token_expiry = 3600",
+      "password: process.env.DB_PASSWORD_2026 is read at boot.",
+      "Use postgres://user:password@localhost/app, postgres://postgres:postgres@localhost or redis://:pass@cache.",
+      "The docs are at https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingBucketPolicies1.html for AWS.",
+      "The AWS deploy broke in commit 0123456789abcdef0123456789abcdef01234567.",
+      "Stripe webhook secrets start with whsec_, Twilio keys with SK, and Shopify tokens with shpat_.",
+      "Mailgun keys look like key-<32 hex>, and DigitalOcean ones like dop_v1_<64 hex>.",
+      "The build took 12:34 and job 1234567890:done finished.",
+      "Run ssh://git@github.com:22/acme/app.git or git@github.com:acme/app.git.",
+    ]) expect([text, findSecret(text)]).toEqual([text, null]);
+  });
+
+  test("a slug, a hash that is named a key, and the example password of a doc are not secrets", () => {
+    for (const text of [
+      "a basic k8s-cluster-setup-for-production-2024 guide",
+      "Authorization: Bearer k8s-cluster-setup-for-production-2024",
+      `the cache entry ${"key-"}${hex(32)} is stale`,
+      "password: Password1 in the example and password=changeme123",
+      "password: ${DB_PASSWORD}suffix and password: %DB_PASSWORD% and password: ********",
+      "password: /run/secrets/db_password1",
+    ]) expect([text, findSecret(text)]).toEqual([text, null]);
+  });
+
+  test("a password that starts with *, % or { is a password, and one with / or ( in it is whole", () => {
+    for (const text of ["password: *Hunter2024", "password=%Tr0ub4dor", "password: {Hunter2024", "password: Q2xhdWRl1/abcDEF+ghiJKL/mnoPQR=", "password=(Hunter22)secretTail"]) {
+      expect([text, findSecret(text)?.kind]).toEqual([text, "a password"]);
+    }
+  });
+
+  test("a password in the URL of a local or example host is a dev setup, and a password for another host is not", () => {
+    for (const text of [
+      "mongodb://admin:admin123@localhost:27017",
+      "http://user:1234@localhost",
+      "postgres://app:Xk29fj3@127.0.0.1:5432/app and redis://:hunter22@[::1]:6379",
+      "http://u:Xk29fj3@db.example.com/x and http://u:Xk29fj3@192.0.2.10/x",
+    ]) expect([text, findSecret(text)]).toEqual([text, null]);
+    for (const text of ["http://user:1234@db.acme.dev", "mongodb://admin:admin123@localhost.evil.dev:27017", "http://u:Xk29fj3@localhost.acme.dev/"]) {
+      expect([text, findSecret(text)?.kind]).toEqual([text, "a password in a URL"]);
+    }
+  });
+
+  // The scan runs on every write of a note, and /kb:recover masks every line of old sessions.
+  test("1 MB of text that is almost a secret is fast: no pattern backtracks for long", () => {
+    const near = [
+      "aws ", "AWS ", "Authorization: Bearer ", "Bearer ", "Basic ", "password: ", "password=", "pwd:", "postgres://a:", "x://:", "key-", "SK", "shpat_", "dop_v1_",
+      "GOCSPX-", "AIza", "whsec_", "123456789:AA", "AccountKey=", "token=", "-----BEGIN ", "a".repeat(39), "aB3".repeat(13), "/+".repeat(20),
+    ];
+    const big = Array.from({ length: 40_000 }, (_, i) => near[i % near.length]).join("").slice(0, 1_000_000);
+    for (const text of [big, big.replaceAll(" ", "\n"), "a".repeat(1_000_000), "aws".concat(" aB3dE5gH7j".repeat(100_000))]) {
+      let started = performance.now();
+      findSecret(text);
+      expect(performance.now() - started).toBeLessThan(200);
+      started = performance.now();
+      maskSecrets(text);
+      expect(performance.now() - started).toBeLessThan(300);
+    }
   });
 
   test("a long line with no secret is fast", () => {
@@ -137,10 +220,20 @@ describe("maskSecrets", () => {
     });
   }
 
+  test("a mask covers the whole value, however long, and whatever characters it has", () => {
+    const long = `ya29.${rand(400, "aB3dE5gH7jK9mN1pQ2sT4vW6yZ8-_")}`;
+    expect(maskSecrets(`Authorization: Bearer ${long}`)).toBe("Authorization: Bearer <masked: a credential>");
+    expect(maskSecrets(`password: ${rand(300)}/${rand(30)}`)).toBe("password: <masked: a password>");
+    expect(maskSecrets("password: Q2xhdWRl1/abcDEF+ghiJKL/mnoPQR=")).toBe("password: <masked: a password>");
+    expect(maskSecrets("password=(Hunter22)secretTail")).toBe("password=<masked: a password>");
+    expect(maskToolText("password=(Hunter22)secretTail")).toBe("password=<masked: a password>");
+    expect(maskSecrets(`postgres://app:${rand(300)}@db.acme.dev/app`)).toBe("postgres://app:<masked: a password>@db.acme.dev/app");
+  });
+
   test("keeps the name of a value, and the scheme, the user and the host of a URL", () => {
     expect(maskSecrets(FAKES["a secret value"]!)).toBe('API_KEY="<masked: a secret value>"');
-    expect(maskSecrets(FAKES["a password in a URL"]!)).toBe("DATABASE_URL=postgres://app:<masked: a password>@db.example.com/app");
-    expect(maskSecrets(`redis://:${rand(12)}@cache.example.com and ${FAKES["a Stripe key"]}`)).toBe("redis://:<masked: a password>@cache.example.com and <masked: a Stripe key>");
+    expect(maskSecrets(FAKES["a password in a URL"]!)).toBe("DATABASE_URL=postgres://app:<masked: a password>@db.acme.dev/app");
+    expect(maskSecrets(`redis://:${rand(12)}@cache.acme.dev and ${FAKES["a Stripe key"]}`)).toBe("redis://:<masked: a password>@cache.acme.dev and <masked: a Stripe key>");
   });
 
   test("masks a private key from its first line to its last, as lines and as one line of a JSON file", () => {
@@ -195,7 +288,7 @@ describe("maskSecrets", () => {
   });
 
   test("leaves text with no secret as it is, also a text that names a format", () => {
-    for (const text of ["GitHub tokens start with ghp_ and have 36 more characters.", "token: ${GITHUB_TOKEN}", "postgres://app:<password>@db.example.com/app", "password = process.env.DB_PASSWORD", "", "a\n\nb"]) expect(maskSecrets(text)).toBe(text);
+    for (const text of ["GitHub tokens start with ghp_ and have 36 more characters.", "token: ${GITHUB_TOKEN}", "postgres://app:<password>@db.acme.dev/app", "password = process.env.DB_PASSWORD", "", "a\n\nb"]) expect(maskSecrets(text)).toBe(text);
   });
 
   test("a line that still holds a secret after the masks is not written", () => {
@@ -235,7 +328,7 @@ describe("maskToolText", () => {
   test("masks the value after a flag that says secret, the password after a user name, and a short password in a URL", () => {
     const cases: [string, string][] = [
       ["curl -u admin:hunter2 --token abc123 https://api.example.com", "curl -u admin:<masked: a password> --token <masked: a secret value> https://api.example.com"],
-      ["deploy --password hunter2 --host db.example.com", "deploy --password <masked: a secret value> --host db.example.com"],
+      ["deploy --password hunter2 --host db.acme.dev", "deploy --password <masked: a secret value> --host db.acme.dev"],
       ["tool --api-key k1 --client-secret 's 2' -passwd p3 --auth me:pw --credential c4 --key k5", "tool --api-key <masked: a secret value> --client-secret '<masked: a secret value>' -passwd <masked: a secret value> --auth <masked: a secret value> --credential <masked: a secret value> --key <masked: a secret value>"],
       ["tool --auth=me:pw --auth-token=t1", "tool --auth=<masked: a secret value> --auth-token=<masked: a secret value>"],
       ["curl --user 'bob:pw' --proxy-user=p:q -x proxy.example.com", "curl --user 'bob:<masked: a password>' --proxy-user=p:<masked: a password> -x proxy.example.com"],
@@ -243,7 +336,7 @@ describe("maskToolText", () => {
       ["mysqldump -u root -p'se cret' shop | gzip", "mysqldump -u root -p'<masked: a password>' shop | gzip"],
       ["sshpass -ppw ssh -p2222 host && psql -pS3cret shop", "sshpass -p<masked: a password> ssh -p2222 host && psql -p<masked: a password> shop"],
       ["git clone https://bob:pw@example.com/shop.git", "git clone https://bob:<masked: a password>@example.com/shop.git"],
-      ["redis-cli -u redis://:p1@cache.example.com:6379", "redis-cli -u redis://:<masked: a password>@cache.example.com:6379"],
+      ["redis-cli -u redis://:p1@cache.acme.dev:6379", "redis-cli -u redis://:<masked: a password>@cache.acme.dev:6379"],
     ];
     for (const [text, masked] of cases) {
       expect(maskToolText(text)).toBe(masked);
@@ -284,5 +377,91 @@ describe("maskToolText", () => {
     const started = performance.now();
     expect(maskToolText(text)).toBe(text);
     expect(performance.now() - started).toBeLessThan(200);
+  });
+});
+
+// The scan of a note may let a doc example through. The mask of a transcript may not.
+describe("the mask leans to masking, and the scan of a note leans to saving", () => {
+  test("masks the password of a URL on a local or example host, a placeholder and a repeat of the user", () => {
+    const cases: [string, string][] = [
+      ["postgres://admin:Pr0dSecret99@localhost:5432/app", "postgres://admin:<masked: a password>@localhost:5432/app"],
+      ["http://u:Xk29fj3@db.example.com/x", "http://u:<masked: a password>@db.example.com/x"],
+      ["postgres://postgres:postgres@localhost", "postgres://postgres:<masked: a password>@localhost"],
+      ["redis://:password@cache", "redis://:<masked: a password>@cache"],
+    ];
+    for (const [text, masked] of cases) {
+      expect(maskSecrets(text)).toBe(masked);
+      expect(maskToolText(text)).toBe(masked);
+    }
+    expect(maskSecrets("https://user:***@github.com and https://user:%DB_PASS%@github.com")).toBe("https://user:***@github.com and https://user:%DB_PASS%@github.com");
+  });
+
+  test("a URL password that is a reference is not refused", () => {
+    for (const text of ["https://user:***@github.com", "https://user:%DB_PASS%@github.com"]) expect([text, findSecret(text)]).toEqual([text, null]);
+  });
+
+  test("masks a password that is a placeholder, a path or code, as the scan lets it through", () => {
+    expect(maskSecrets("password: Password1")).toBe("password: <masked: a password>");
+    expect(maskSecrets("password=args.password2")).toBe("password=<masked: a password>");
+    for (const text of ["password: Password1", "password: z.string().min(8),"]) expect(findSecret(text)).toBeNull();
+  });
+
+  test("$ names a reference only in the style of an environment variable", () => {
+    for (const text of ["password: $uperSecret2024", "password=$Hunter2024x"]) {
+      expect([text, findSecret(text)?.kind]).toEqual([text, "a password"]);
+      expect(maskSecrets(text)).toBe(`${text.slice(0, text.indexOf(text.includes(": ") ? ": " : "=") + (text.includes(": ") ? 2 : 1))}<masked: a password>`);
+      expect(findSecret(maskToolText(text))).toBeNull();
+    }
+    for (const text of ["password: $DB_PASSWORD", "password: ${db_pass}x1", "password=$(pass show db)"]) expect([text, findSecret(text)]).toEqual([text, null]);
+  });
+
+  test("a password shape is not refused for code or for a SOPS value", () => {
+    for (const text of [
+      "password: z.string().min(8),",
+      "password=args.password2",
+      "password: sha256(pw)",
+      "password: ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]",
+      "const x = { password: z.string().min(8), name: z.string() }",
+    ]) expect([text, findSecret(text)]).toEqual([text, null]);
+    expect(findSecret("password=(Hunter22)secretTail")?.kind).toBe("a password");
+  });
+
+  test("a prefix of the name is still a password name, and a word that only ends alike is not", () => {
+    for (const [text, masked] of [
+      ["PGPASSWORD=Hunter2!xyz psql shop", "PGPASSWORD=<masked: a password> psql shop"],
+      ["export MYSQLPASSWORD=Hunter2!xyz", "export MYSQLPASSWORD=<masked: a password>"],
+      ["dbPassword: Hunter2!xyz", "dbPassword: <masked: a password>"],
+    ] as const) {
+      expect([text, findSecret(text)?.kind]).toEqual([text, "a password"]);
+      expect(maskSecrets(text)).toBe(masked);
+    }
+    for (const text of ["chpasswd: Hunter2!xyz", "passwordless: Hunter2!xyz"]) expect([text, findSecret(text)]).toEqual([text, null]);
+  });
+
+  test("a Basic value that decodes to name:password is refused, and a word is not", () => {
+    for (const text of ["Authorization: Basic dXNlcjpwYXNz", 'curl -H "Authorization: Basic dXNlcjpwYXNzd29yZA=="']) {
+      expect([text, findSecret(text)?.kind]).toEqual([text, "a credential"]);
+      expect(maskSecrets(text)).toContain("Basic <masked: a credential>");
+    }
+    for (const text of ["Authorization: Basic auth", "Authorization: Basic <token>", "Basic dXNlcjpwYXNz"]) expect([text, findSecret(text)]).toEqual([text, null]);
+  });
+
+  test("a Mailgun key is gated by the line as written, not by a mask on it", () => {
+    const cache = `${"key-"}${hex(32)}`;
+    expect(findSecret(`api: ${cache}`)?.kind).toBe("a Mailgun key");
+    // The mask of `access_key` says "a secret value", and that word must not open the gate for the cache key.
+    const line = `access_key=${rand(32)} and the cache entry ${cache} is stale`;
+    expect(maskSecrets(line)).toBe(`access_key=<masked: a secret value> and the cache entry ${cache} is stale`);
+  });
+
+  test("a password in a query string ends at &, and in a URL user at @", () => {
+    expect(maskSecrets("https://example.com/login?password=Hunter2!x&user=bob&db=prod")).toBe("https://example.com/login?password=<masked: a password>&user=bob&db=prod");
+    expect(maskSecrets("ftp://user:password=Hunter2!x@host/path")).toBe("ftp://user:password=<masked: a password>@host/path");
+    expect(maskSecrets("password=Hunter&2!x then more")).toBe("password=<masked: a password> then more");
+  });
+
+  test("masks a value that starts with [ and is not a whole array", () => {
+    expect(maskToolText("tool --password [Secr3t!!x")).toBe("tool --password <masked: a secret value>");
+    for (const text of ["secret: [a, b]", "tokens=[1,2,3]", "password: []"]) expect(maskToolText(text)).toBe(text);
   });
 });
