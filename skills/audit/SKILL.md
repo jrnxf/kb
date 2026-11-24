@@ -2,7 +2,7 @@
 name: audit
 description: Check the kb notes of this repo, or the global notes outside any repo, for stale, duplicate and over-budget entries, propose changes, and hand them to the user in the kb serve page. Run only when the user types /kb:audit.
 disable-model-invocation: true
-allowed-tools: Bash(kb *)
+allowed-tools: Bash(kb stale *), Bash(kb budget *), Bash(kb show *), Bash(kb list *), Bash(kb search *), Bash(kb instructions *), Bash(kb audit status *), Bash(kb audit propose *), Bash(kb add *)
 model: opus
 effort: medium
 ---

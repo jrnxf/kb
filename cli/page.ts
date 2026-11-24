@@ -79,6 +79,13 @@ export function renderBody(markdown: string): string {
         link.removeAttribute("href");
       },
     })
+    // A wide table scrolls inside its wrapper, so the table keeps its own display and its semantics.
+    .on("table", {
+      element(table) {
+        table.before('<div class="table-scroll">', { html: true });
+        table.after("</div>", { html: true });
+      },
+    })
     .on("img", {
       element(image) {
         const src = image.getAttribute("src") ?? "";

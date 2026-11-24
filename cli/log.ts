@@ -5,7 +5,7 @@
 
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { type Store, writeAtomic } from "./store.ts";
+import { DIR_MODE, FILE_MODE, type Store, writeAtomic } from "./store.ts";
 
 export const VERDICTS = ["helped", "not-needed", "wrong"] as const;
 export type Verdict = (typeof VERDICTS)[number];
@@ -175,12 +175,12 @@ export function logEvent(store: Store, events: LogEvent | LogEvent[], now: Date 
       .join("");
     const path = join(logDir(store), `${t.slice(0, 7)}.jsonl`);
     try {
-      appendFileSync(path, text);
+      appendFileSync(path, text, { mode: FILE_MODE });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
       store.ensure(); // keeps .state/ out of git in a store made by an older version
-      mkdirSync(logDir(store), { recursive: true });
-      appendFileSync(path, text);
+      mkdirSync(logDir(store), { recursive: true, mode: DIR_MODE });
+      appendFileSync(path, text, { mode: FILE_MODE });
     }
     return true;
   } catch {
@@ -682,9 +682,14 @@ export function foldOldCounters(store: Store): void {
     if (notes.size > 0) {
       mkdirSync(rollUpDir(store), { recursive: true });
       writeAtomic(path, rollUpText(notes));
+      store.track(path);
     }
     const dir = join(store.home, "usage");
-    for (const file of old.good) rmSync(join(dir, file), { force: true });
+    // The next commit takes the roll-up and each removed file. Git keeps no empty folder.
+    for (const file of old.good) {
+      rmSync(join(dir, file), { force: true });
+      store.track(join(dir, file));
+    }
     if (old.bad === 0) rmSync(dir, { recursive: true, force: true });
   } catch {
     // the files stay, and the readers still use them
@@ -726,6 +731,7 @@ export function rollUp(store: Store, now: Date = new Date()): boolean {
       }
       if (next !== current && (notes.size > 0 || current)) {
         writeAtomic(path, next);
+        store.track(path);
         changed = true;
       }
     }

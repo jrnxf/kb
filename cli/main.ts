@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { type Args, USAGE_EXIT, UsageError, parseArgs } from "./args.ts";
 import { openAudits, proposeAudit, readAudit } from "./audit.ts";
-import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
+import { costNotice, RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
 import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
@@ -911,10 +911,15 @@ async function cmdAudit(store: Store, args: Args, input: () => Promise<string>):
     if (repo.root && repo.scope) rememberRepo(store, scope, repo.root);
     let state = startRun(store, scope, repo.root ?? undefined);
     const what = scope === "global" ? "the global notes" : `the notes of ${scope}`;
-    if (args.flags.has("no-wait")) return { json: state, text: `an agent audits ${what} now. Run kb audit again to see where it stands. Log: ${state.log}` };
-    if (!args.flags.has("json")) process.stderr.write(`an agent audits ${what}. This takes a few minutes.\nlog: ${state.log}\n`);
-    state = await waitRun(store, scope);
-    if (state.status === "proposed") return open(state.cards ?? 0, `the agent proposed ${state.cards} cards for ${scope}`);
+    if (args.flags.has("no-wait")) return { json: state, text: `an agent audits ${what} now. ${costNotice(store)}\nRun kb audit again to see where it stands. Log: ${state.log}` };
+    if (!args.flags.has("json")) process.stderr.write(`an agent audits ${what}. This takes a few minutes.\n${costNotice(store)}\nlog: ${state.log}\n`);
+    const notice = state.notice;
+    state = { ...(await waitRun(store, scope)), notice };
+    // --json reads the cost too, as the text does.
+    if (state.status === "proposed") {
+      const done = await open(state.cards ?? 0, `the agent proposed ${state.cards} cards for ${scope}`);
+      return { ...done, json: { ...(done.json as object), notice } };
+    }
     if (state.status === "nothing") return { json: state, text: `the agent found nothing to change in ${scope}${state.said ? `:\n${state.said}` : ""}` };
     throw new KbError(`the audit agent stopped with no proposal. Its last lines:\n${state.said || "(no output)"}\nlog: ${state.log}`);
   }

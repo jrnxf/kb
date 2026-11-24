@@ -36,7 +36,7 @@ describe("the event log", () => {
     expect(lastActivity(missing).size).toBe(0);
 
     const blocked = tempStore();
-    mkdirSync(join(blocked.home, ".state"));
+    mkdirSync(join(blocked.home, ".state"), { recursive: true });
     writeFileSync(logDir(blocked), "a file where the folder should be");
     expect(logEvent(blocked, { ev: "checkpoint" })).toBe(false);
     expect(readLog(blocked)).toEqual([]);
@@ -362,7 +362,7 @@ describe("the roll-up of the log", () => {
     // A store with no log gets no file and no machine id.
     expect(rollUp(store, day("2026-03-01"))).toBe(false);
     expect(existsSync(join(store.home, "activity"))).toBe(false);
-    expect(existsSync(join(store.home, "local.json"))).toBe(false);
+    expect(store.local().machine).toBe("");
     // A log with no activity gives no file either.
     logAt(store, "2026-03-01T00:00:00Z", { ev: "show", note: "a", why: "check" });
     expect(rollUp(store, day("2026-03-01"))).toBe(false);
@@ -518,6 +518,9 @@ describe("the counters of an older kb", () => {
     legacyUsage(store, "machine-a", { a: { uses: 3, last_used: "2026-01-01T00:00:00Z" }, b: { uses: 1, last_used: "2026-01-05T00:00:00Z" }, never: { uses: 0 } });
     legacyUsage(store, "machine-b", { b: { uses: 2, last_used: "2026-01-09T00:00:00Z" } });
     writeFileSync(join(store.home, "usage", "broken.json"), "{ not json");
+    // The store of an older kb has all of this in its history already.
+    sh(store.home, "git", "add", "-A");
+    sh(store.home, "git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "old store");
     // A read changes nothing, and it still sees the old activity.
     expect(kb(store, ["list"]).code).toBe(0);
     expect(existsSync(join(store.home, "usage"))).toBe(true);
@@ -534,6 +537,21 @@ describe("the counters of an older kb", () => {
     expect(lastActivity(store).has("never")).toBe(false);
     // Once only: the next roll-up has nothing to fold.
     expect(rollUp(store)).toBe(false);
+  });
+
+  test("the fold is committed with the write: the roll-up and every removed file, a clean tree after", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    legacyUsage(store, "machine-a", { a: { uses: 3, last_used: "2026-01-01T00:00:00Z" } });
+    legacyUsage(store, "machine-b", { b: { uses: 2, last_used: "2026-01-09T00:00:00Z" } });
+    // The old files are in the history, as a store of an older kb has them.
+    sh(store.home, "git", "add", "-A");
+    sh(store.home, "git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "old counters");
+    expect(kb(store, ["add"], { stdin: JSON.stringify({ title: "New", kind: "gotcha", body: "x", scope: "global" }) }).code).toBe(0);
+    expect(existsSync(join(store.home, "usage"))).toBe(false);
+    expect(sh(store.home, "git", "status", "--porcelain")).toBe("");
+    expect(sh(store.home, "git", "ls-files", "usage")).toBe("");
+    expect(sh(store.home, "git", "ls-files", "activity")).toContain(`activity/${store.machine()}.json`);
   });
 
   test("a new note never takes an id that only the old counters know", () => {

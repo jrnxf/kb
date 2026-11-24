@@ -152,8 +152,9 @@ notes, and a note loads when it applies.
   headless run and a subagent do not get this rule.
 - **A trash that clears itself.** `kb trash` moves a note to `trash/`, and `kb restore` brings it
   back. A note in the trash for more than `trashDays` (30) is deleted for good, before the next
-  command. `kb delete` removes a note now, and `kb empty-trash` removes the whole trash. If the
-  store is a git repo, every write is one commit.
+  command. `kb delete` removes a note now, and `kb empty-trash` removes the whole trash. A new
+  store is a git repo, so a deleted note stays in its history. Every write is one commit with
+  only the files it changed, also when sessions write at the same time.
 - **A project goes whole.** `kb trash --scope <repo id>` moves every note of one repo to the
   trash in one commit, and `kb restore --scope` brings back that move and no older trash.
   `kb delete --scope` removes the project's notes for good, and `kb empty-trash --scope` only its
@@ -198,7 +199,7 @@ notes, and a note loads when it applies.
   card per note: each card shows the note, the new text struck against the old, and the agent's
   pick with its reason. `a` accepts the agent's pick, `k` keeps the note as is and records that
   you checked it, `t` trashes it, a meter counts the notes that still reach no session (by the characters that each pick frees), and Apply makes
-  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. In a repo it audits that repo. Outside any repo it audits the global notes, in an empty folder that no repo reaches. The Audit button in the page does the same for the global notes, and for any repo a session has opened once. `kb budget` says
+  every pick in one commit. A note you send back for a rewrite waits for the agent in `kb audit status`. Outside a session, `kb audit` starts one headless agent (`claude -p`) that does the same audit, and prints the page link when its cards are ready. The agent runs on Opus by default, and `auditModel` in `kb.config.json` sets another model. It is a full Claude session, so it counts against your Claude plan or API bill, and kb says so when it starts. The agent loads no settings file, so your allow rules and your default permission mode do not reach it, and it runs in `dontAsk` mode: anything not on its list is denied. It may run only the kb commands in the `allowed-tools` line of the audit skill (no `kb delete`, `kb restore`, `kb serve` or `kb sync`), and it may read files only in the repo or in the empty folder of a global audit. It has no Write tool for the repo. Its notes are committed in the store but never pushed: the next sync of a normal session does that. A wrong `auditModel` stops the audit with an error. In a repo it audits that repo. Outside any repo it audits the global notes, in an empty folder that no repo reaches. The Audit button in the page does the same for the global notes, and for any repo a session has opened once. `kb budget` says
   what a session start gives of each note: a brief, an index line, nothing until its trigger, or
   nothing at all. It asks for room only when the index is over its character budget and a note
   reaches no session. It counts the hidden notes of the repo and the hidden global notes apart.
@@ -293,7 +294,8 @@ notes, and a note loads when it applies.
   Nothing runs in the background. Before a compaction, a hook tells the summary what to keep, and
   the next start says once that no checkpoint ran.
 - **Sync.** If the store has a git remote, each write starts a background pull and push, and
-  each session start does the same at most once per 5 minutes. The event log stays on its
+  each session start does the same at most once per 5 minutes. With no remote, `kb sync` commits
+  on this machine and pushes nowhere. The event log stays on its
   machine, and its roll-up in `activity/` syncs. A store from an older kb can hold use counters in
   `usage/`: the first write or sync puts the last use of each note into the roll-up of its machine,
   and removes the folder. `kb add` never gives a new note an id that has a history on any machine.
@@ -304,6 +306,7 @@ notes, and a note loads when it applies.
   kb.config.json
   activity/<machine>.json                       # the roll-up of each machine's log, synced
   INDEX.md  local.json  .state/                 # generated or per-machine, not committed
+  .state/sync-error  .state/sync-last           # how the last sync ended, and when
   .state/log/<YYYY-MM>.jsonl                    # the event log of this machine, 12 months
   .state/triggers.json                          # the table of triggers and anchors that the hooks read
 ```
@@ -611,11 +614,17 @@ To work on the plugin, load a checkout for one session:
 claude --plugin-dir /path/to/kb
 ```
 
-To back up and sync the store, make it a clone of a private repo before the first note:
+Only you can read the store: kb makes `~/.kb` and its folders with mode 0700 and the files that it
+writes with 0600. The first write after an update closes a store that an older kb left open: the
+notes, the trash and `.state/` too, once. Git's own files in `.git/` keep the modes that git gives them.
+
+A new store is a git repo with no remote. To back up and sync it, give it a private remote:
 
 ```bash
-git clone <your-private-repo-url> ~/.kb
+git -C ~/.kb remote add origin <your-private-repo-url> && kb sync
 ```
+
+On a second machine, clone that repo before the first note: `git clone <your-private-repo-url> ~/.kb`.
 
 ## Develop
 

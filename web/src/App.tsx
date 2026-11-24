@@ -80,12 +80,29 @@ export function App() {
     }
   }, [data, scopes, kinds, view.scope, view.kinds, view.trash, shown.trashCount]);
 
-  // The address keeps the view, so a reload comes back to the same place.
+  // The address keeps the view, so a reload comes back to the same place. On a wide screen a note
+  // the user clicks gets its own history entry, so Back goes to the note before. A j/k move only
+  // replaces the entry, so holding j does not fill the history. A phone has the drawer's entry instead.
+  const picked = useRef(false);
+  const shownNote = useRef<string | null>(null);
   useEffect(() => {
     // A link to an audit changes the address before the page swaps to it: leave that address alone.
     if (!data || auditScope()) return;
-    history.replaceState(history.state, "", toHash({ ...view, note: current?.id ?? null, read: reading }));
-  }, [data, view, current?.id, reading]);
+    const id = current?.id ?? null;
+    const hash = toHash({ ...view, note: id, read: reading });
+    if (picked.current && !phone && shownNote.current && id && id !== shownNote.current) history.pushState(null, "", hash);
+    else history.replaceState(history.state, "", hash);
+    picked.current = false;
+    shownNote.current = id;
+  }, [data, view, current?.id, reading, phone]);
+
+  // The tab shows the open note.
+  useEffect(() => {
+    document.title = current ? `${current.title} - kb` : "kb";
+    return () => {
+      document.title = "kb";
+    };
+  }, [current?.title]);
 
   // A new note starts at its top, and an edit does not carry over to another note.
   useEffect(() => {
@@ -131,7 +148,10 @@ export function App() {
       if (was.type !== "scope") held.current = view.scope;
       setView((v) => ({ ...v, scope: scopeOf(to) }));
     } else if (was.type === "scope") setView((v) => ({ ...v, scope: held.current }));
-    document.querySelector(`[data-rail="${CSS.escape(to.key)}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const el = document.querySelector<HTMLElement>(`[data-rail="${CSS.escape(to.key)}"]`);
+    el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // The focus follows the cursor while it is in the sidebar, as the tab order has only that item.
+    if (document.activeElement?.closest("[data-rail]")) el?.focus({ preventScroll: true });
   }
 
   // On a phone the scopes are one row that scrolls sideways. Start with the picked scope in view.
@@ -167,9 +187,19 @@ export function App() {
     if (history.state?.reading) history.back();
     else closeNote();
   }
+  // Back goes to the view of the entry before, at every width. The sidebar cursor and the held scope follow it.
+  // A phone that closes the note's drawer keeps the note, as the entry of the drawer has the note before it.
+  const popView = useEffectEvent(() => {
+    const next = fromHash(location.hash);
+    held.current = next.scope;
+    setCursor(null);
+    setView((v) => ({ ...next, read: false, note: phone && v.read ? v.note : next.note }));
+  });
   useEffect(() => {
     const pop = () => {
-      if (!history.state?.reading && !auditScope()) closeNote();
+      if (history.state?.reading || auditScope()) return;
+      closeNote();
+      popView();
     };
     addEventListener("popstate", pop);
     return () => removeEventListener("popstate", pop);
@@ -268,7 +298,7 @@ export function App() {
     mutationFn: api.startAudit,
     onSuccess: (run) => {
       auditing.current = run.scope;
-      toast(`An agent audits ${scopeName(run.scope)}. This takes a few minutes.`, { id: "kb" });
+      toast(`An agent audits ${scopeName(run.scope)}. ${run.notice ?? ""} This takes a few minutes.`, { id: "kb" });
     },
     onError: toastError,
     onSettled: () => reloadPage(),
@@ -359,8 +389,10 @@ export function App() {
     setEditing(true);
   }
 
-  function pickRow(note: PageNote) {
-    blur();
+  function pickRow(note: PageNote, byKey = false) {
+    // A click gives the keys back to the page. A key keeps the focus on the row.
+    if (!byKey) blur();
+    picked.current = true;
     setView((v) => ({ ...v, note: note.id, pane: "list" }));
     if (phone) {
       // openNote reads the current note, which is this one after the render. Set it here directly.
@@ -373,6 +405,11 @@ export function App() {
       history.pushState({ reading: true }, "", location.href);
       setView((v) => ({ ...v, read: true }));
     }
+  }
+
+  /** The focus follows the pane, when a row or a sidebar item has it. */
+  function focusIn(selector: string) {
+    if (document.activeElement?.closest("[data-rail], button[data-id]")) document.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
   }
 
   /** The keys belong to the page, not to the button that took the click. */
@@ -428,6 +465,9 @@ export function App() {
     // its note takes the page's keys, as the note's pane does on a wide screen.
     const field = (event.target as HTMLElement).closest?.("input, textarea, select, [role=listbox], [role=dialog]");
     if (field && !field.hasAttribute("data-note-drawer")) return;
+    // Enter and Space on a button or link that is not a row or a sidebar item press it, as the browser does.
+    const control = (event.target as HTMLElement).closest?.("button, a[href]");
+    if ((key === "Enter" || key === " ") && control && !control.matches("button[data-id], [data-rail]")) return;
 
     const by = key === "ArrowDown" || key === "j" ? 1 : key === "ArrowUp" || key === "k" ? -1 : 0;
     const pane = view.pane;
@@ -439,8 +479,13 @@ export function App() {
         setCursor(scopeKey);
         held.current = view.scope;
         setView((v) => ({ ...v, pane: "rail" }));
+        focusIn(`[data-rail="${CSS.escape(scopeKey)}"]`);
       }
-    } else if (key === "ArrowRight" || key === "l") setView((v) => ({ ...v, pane: "list" }));
+    } else if (key === "ArrowRight" || key === "l") {
+      setView((v) => ({ ...v, pane: "list" }));
+      const row = current ?? shown.notes[0];
+      if (row) focusIn(`button[data-id="${CSS.escape(row.id)}"]`);
+    }
     else if (by && pane === "list") {
       const list = shown.notes;
       if (list.length) {
@@ -476,8 +521,16 @@ export function App() {
   });
   useEffect(() => {
     const listener = (event: KeyboardEvent) => onKey(event);
+    // Firefox presses a button on the keyup of Space, after the page took the keydown.
+    const up = (event: KeyboardEvent) => {
+      if (event.key === " " && (event.target as HTMLElement).closest?.("[data-rail], button[data-id]")) event.preventDefault();
+    };
     document.addEventListener("keydown", listener);
-    return () => document.removeEventListener("keydown", listener);
+    document.addEventListener("keyup", up);
+    return () => {
+      document.removeEventListener("keydown", listener);
+      document.removeEventListener("keyup", up);
+    };
   }, []);
 
   const banner = offline ? (
@@ -562,7 +615,20 @@ export function App() {
         data-pane={view.pane}
         className={cn("group/page wide:grid wide:h-screen wide:grid-cols-[248px_380px_minmax(0,1fr)]", banner && "wide:grid-rows-[auto_minmax(0,1fr)]")}
         onClickCapture={(event) => {
-          if ((event.target as HTMLElement).closest("[data-rail], [data-id], [data-slot=button]")) blur();
+          // A key (detail 0) keeps the focus where it is.
+          if (event.detail > 0 && (event.target as HTMLElement).closest("[data-rail], button[data-id], [data-slot=button]")) blur();
+        }}
+        // Tab into the sidebar or the list gives that pane the keys.
+        onFocus={(event) => {
+          const target = event.target as HTMLElement;
+          const rail = target.closest<HTMLElement>("[data-rail]");
+          if (rail) {
+            setCursor(rail.dataset.rail!);
+            if (view.pane !== "rail") {
+              held.current = view.scope;
+              setView((v) => ({ ...v, pane: "rail" }));
+            }
+          } else if (target.closest("button[data-id]") && view.pane !== "list") setView((v) => ({ ...v, pane: "list" }));
         }}
       >
         {/* Behind an open drawer the list shrinks back from the edges and is black around it, as in Vaul. */}
@@ -593,7 +659,7 @@ export function App() {
             onKeys={() => setHelp(true)}
             audits={data.audits}
           />
-          <NoteList notes={shown.notes} current={current} q={view.q} onQ={(q) => setView((v) => ({ ...v, q }))} searchRef={search} onOpen={pickRow} empty={empty} trash={shown.trash ? { days: data.trashDays, onEmpty: askEmpty } : undefined}
+          <NoteList notes={shown.notes} current={current} q={view.q} onQ={(q) => setView((v) => ({ ...v, q }))} searchRef={search} onOpen={(note, byKey) => pickRow(note, byKey)} empty={empty} trash={shown.trash ? { days: data.trashDays, onEmpty: askEmpty } : undefined}
             project={shown.trash || !view.scope ? undefined : view.scope === "global" ? { audit: auditButton("global") } : { onTrash: () => askTrashProject(view.scope!), audit: auditButton(view.scope) }}
           />
         </DrawerIndent>
