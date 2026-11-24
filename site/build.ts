@@ -1,7 +1,7 @@
 // Builds the kb site into dist/.
 // - index.html and 404.html: each page with its CSS and JS inlined, so the only other requests are the fonts and the pictures.
 // - assets/: the self-hosted woff2 files and the pictures, each name with a content hash, so they can be cached forever.
-// - _headers: immutable caching for assets/, and a Link header on the page (/) so Cloudflare can send 103 Early Hints.
+// - _headers: HSTS for every path (one year, this host only), immutable caching for assets/, and a Link header on the page (/) so Cloudflare can send 103 Early Hints.
 // - the files at fixed paths: favicons, robots.txt, sitemap.xml and llms.txt.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
@@ -70,6 +70,7 @@ writeFileSync(join(dist, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 const link = preloads.map((h) => `<${h}>; rel=preload; as=font; type=font/woff2; crossorigin`).join(", ");
 // The font Link goes only on the page: the icons, robots.txt, sitemap.xml and llms.txt do not use the fonts.
 writeFileSync(join(dist, "_headers"), `/*
+  Strict-Transport-Security: max-age=31536000
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 
