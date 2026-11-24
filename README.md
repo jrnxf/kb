@@ -153,9 +153,9 @@ notes, and a note loads when it applies.
   trash in one commit, and `kb restore --scope` brings back that move and no older trash.
   `kb delete --scope` removes the project's notes for good, and `kb empty-trash --scope` only its
   trash. Each takes the exact repo id, and none touches `global`.
-- **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: an
-  anchored file changed since the note was verified, an anchor is gone, the verified commit left
-  the history, the note had no activity and nobody checked it for `expireDays` (90), nobody
+- **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: the
+  code of an anchor changed since the note was verified, an anchor is gone, the verified commit
+  left the history while an anchor has no hash, the note had no activity and nobody checked it for `expireDays` (90), nobody
   verified it for `decayDays` (180), or another note says much the same in its words. Activity is a `kb show` for a task,
   a trigger that loaded the note, or a verdict `helped`, on any machine. An expired note goes to the audit
   as trash, and you decide: kb never deletes a note on its own. Two reasons come from the verdicts
