@@ -1,9 +1,10 @@
-// The store on disk: paths, config, notes, the usage counters of older versions, generated files and git.
+// The store on disk: paths, config, notes, generated files and git.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import { foldOldCounters } from "./log.ts";
 import { KINDS, KbError, type Note, parseNote, serializeNote } from "./note.ts";
 
 export interface Config {
@@ -157,6 +158,7 @@ export class Store {
   ensure(): void {
     for (const dir of ["notes", "trash"]) mkdirSync(join(this.home, dir), { recursive: true });
     this.tidyConfig();
+    foldOldCounters(this); // counters of an older kb go into the roll-up, before any command reads the ids
     const ignorePath = join(this.home, ".gitignore");
     // Add lines that a store made by an older version lacks.
     const have = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";

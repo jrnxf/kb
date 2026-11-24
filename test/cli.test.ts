@@ -599,6 +599,18 @@ describe("kb add with triggers", () => {
   });
 });
 
+describe("commands that are gone", () => {
+  test("kb checkpointed names kb saved, and kb use says it is gone", () => {
+    const store = tempStore();
+    const old = kb(store, ["checkpointed", "s1"]);
+    expect(old.code).toBe(1);
+    expect(old.stderr).toContain("kb saved");
+    const use = kb(store, ["use", "a"]);
+    expect(use.code).toBe(1);
+    expect(use.stderr).toContain("gone");
+  });
+});
+
 describe("a read is not a write", () => {
   test("show, search, verdict and log leave the store as it was: no commit, no changed file, no usage file", () => {
     const store = tempStore();
@@ -749,7 +761,7 @@ describe("the event log from the CLI", () => {
     // A session may judge a note it trashed a moment ago.
     expect(kb(store, ["verdict", "wrong", "trashed"], { env }).code).toBe(0);
     // The older kb use is gone.
-    expect(kb(store, ["use", "a", "b"], { env })).toMatchObject({ code: 1, stderr: 'unknown command "use". Run `kb help`.\n' });
+    expect(kb(store, ["use", "a", "b"], { env })).toMatchObject({ code: 1, stderr: 'unknown command "use". It is gone: kb keeps no use counts. Run `kb help`.\n' });
     expect(logged(store).slice(1)).toEqual([
       { ev: "verdict", session: "s1", scope: "global", note: "a", verdict: "helped" },
       { ev: "verdict", session: "s1", scope: "global", note: "b", verdict: "not-needed" },

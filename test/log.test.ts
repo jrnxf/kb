@@ -518,18 +518,64 @@ describe("the counters of an older kb", () => {
     legacyUsage(store, "machine-a", { a: { uses: 3, last_used: "2026-01-01T00:00:00Z" }, b: { uses: 1, last_used: "2026-01-05T00:00:00Z" }, never: { uses: 0 } });
     legacyUsage(store, "machine-b", { b: { uses: 2, last_used: "2026-01-09T00:00:00Z" } });
     writeFileSync(join(store.home, "usage", "broken.json"), "{ not json");
-    // A read changes nothing, and nothing reads the folder.
+    // A read changes nothing, and it still sees the old activity.
     expect(kb(store, ["list"]).code).toBe(0);
     expect(existsSync(join(store.home, "usage"))).toBe(true);
-    expect(lastActivity(store).has("b")).toBe(false);
+    expect(lastActivity(store).get("b")).toBe("2026-01-09T00:00:00Z");
     // A write folds it, in the commit of the write.
     expect(kb(store, ["add"], { stdin: JSON.stringify({ title: "New", kind: "gotcha", body: "x", scope: "global" }) }).code).toBe(0);
-    expect(existsSync(join(store.home, "usage"))).toBe(false);
+    // The file that does not parse stays, and the folder with it. The others go.
+    expect(readdirSync(join(store.home, "usage"))).toEqual(["broken.json"]);
     expect(sh(store.home, "git", "status", "--porcelain")).toBe("");
     expect(lastActivity(store).get("a")).toBe("2026-02-01T00:00:00Z");
     expect(lastActivity(store).get("b")).toBe("2026-01-09T00:00:00Z");
-    expect(idsWithHistory(store).has("never")).toBe(false);
+    // A note with no time keeps its id, and has no activity.
+    expect(idsWithHistory(store).has("never")).toBe(true);
+    expect(lastActivity(store).has("never")).toBe(false);
     // Once only: the next roll-up has nothing to fold.
     expect(rollUp(store)).toBe(false);
+  });
+
+  test("a new note never takes an id that only the old counters know", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    legacyUsage(store, "machine-a", { old: { uses: 2, last_used: "2026-01-01T00:00:00Z" }, never: { uses: 0 } });
+    for (const [title, id] of [["Old", "old-2"], ["Never", "never-2"]]) {
+      const out = kb(store, ["add", "--json"], { stdin: JSON.stringify({ title, kind: "gotcha", body: "x", scope: "global" }) });
+      expect(JSON.parse(out.stdout).id).toBe(id);
+    }
+    expect(lastActivity(store).get("old")).toBe("2026-01-01T00:00:00Z");
+    expect(lastActivity(store).has("old-2")).toBe(false);
+  });
+
+  test("a read before the fold sees the old activity and ids", () => {
+    const store = tempStore();
+    legacyUsage(store, "machine-a", { a: { uses: 1, last_used: "2026-01-01T00:00:00Z" }, b: { uses: 0 } });
+    expect(lastActivity(store).get("a")).toBe("2026-01-01T00:00:00Z");
+    expect([...idsWithHistory(store)].sort()).toEqual(["a", "b"]);
+    expect(existsSync(join(store.home, "usage"))).toBe(true);
+  });
+
+  test("a file that does not parse is kept, and the good files fold", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    legacyUsage(store, "machine-a", { a: { uses: 1, last_used: "2026-01-01T00:00:00Z" } });
+    writeFileSync(join(store.home, "usage", "broken.json"), "{ not json");
+    store.ensure();
+    expect(readFileSync(join(store.home, "usage", "broken.json"), "utf8")).toBe("{ not json");
+    expect(existsSync(join(store.home, "usage", "machine-a.json"))).toBe(false);
+    expect(lastActivity(store).get("a")).toBe("2026-01-01T00:00:00Z");
+  });
+
+  test("a machine id that is no file name folds nothing, and the files are still read", () => {
+    const store = tempStore();
+    store.updateLocal((local) => {
+      local.machine = "bad/machine";
+    });
+    legacyUsage(store, "machine-a", { a: { uses: 1, last_used: "2026-01-01T00:00:00Z" } });
+    store.ensure();
+    expect(existsSync(join(store.home, "usage", "machine-a.json"))).toBe(true);
+    expect(lastActivity(store).get("a")).toBe("2026-01-01T00:00:00Z");
+    expect(idsWithHistory(store).has("a")).toBe(true);
   });
 });

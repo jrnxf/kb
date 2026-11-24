@@ -974,6 +974,12 @@ const HANDLERS: Record<string, (store: Store, args: Args, json: boolean) => Outp
   sync: (store) => cmdSync(store),
 };
 
+/** Commands of older versions that are gone, with what to say of each. */
+const REMOVED_COMMANDS: Record<string, string> = {
+  checkpointed: "It is now `kb saved`.",
+  use: "It is gone: kb keeps no use counts. Run `kb help`.",
+};
+
 const INFO_COMMANDS = ["help", "--help", "-h", "version", "--version"];
 
 async function main(): Promise<number> {
@@ -984,7 +990,10 @@ async function main(): Promise<number> {
     const end = rest.indexOf("--");
     json = (end < 0 ? rest : rest.slice(0, end)).includes("--json");
     // The flags are checked against the command, so an unknown command is named first.
-    if (command !== undefined && !Object.hasOwn(HANDLERS, command) && !INFO_COMMANDS.includes(command)) throw new UsageError(`unknown command "${command}". Run \`kb help\`.`);
+    if (command !== undefined && !Object.hasOwn(HANDLERS, command) && !INFO_COMMANDS.includes(command)) {
+      const gone = Object.hasOwn(REMOVED_COMMANDS, command) ? REMOVED_COMMANDS[command] : undefined;
+      throw new UsageError(`unknown command "${command}". ${gone ?? "Run `kb help`."}`);
+    }
     const args = parseArgs(rest, command);
     json = args.flags.has("json");
     const store = new Store();

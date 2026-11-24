@@ -92,7 +92,7 @@ const NAME_MAX = 200;
 /**
  * Claude Code's auto memory folder of the project in this directory, and its files but MEMORY.md.
  * The folder is named after the real path of the project, with each character that is not a
- * letter or a digit changed to `-`. The checkpoint skill runs this command: in the default
+ * letter or a digit changed to `-`. The save and clear skills run this command: in the default
  * permission mode, Claude Code asks before a shell command with a variable, or a list of a folder
  * outside the project.
  */
