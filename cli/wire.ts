@@ -26,8 +26,6 @@ export interface PageNote {
 export interface PageData {
   /** Changes whenever a note or the trash changes. */
   version: string;
-  /** Every request that changes the store must carry this. */
-  token: string;
   kinds: string[];
   /** A note in the trash for longer than this is deleted for good. */
   trashDays: number;
@@ -138,7 +136,6 @@ export interface AuditResult {
 }
 
 export interface AuditData {
-  token: string;
   scope: string;
   created: string;
   cards: AuditCard[];

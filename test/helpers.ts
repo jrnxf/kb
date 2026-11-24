@@ -1,6 +1,7 @@
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Page } from "playwright";
 import { type LogEvent, type NoteRollUp, logEvent, readLog } from "../cli/log.ts";
 import type { Note } from "../cli/note.ts";
 import { Store } from "../cli/store.ts";
@@ -11,9 +12,11 @@ process.env.GIT_CONFIG_SYSTEM = "/dev/null";
 process.env.GIT_AUTHOR_NAME = process.env.GIT_COMMITTER_NAME = "kb test";
 process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = "kb@example.com";
 
-// The home folder is the temp folder: a test never reads or writes the user's own files, and a
-// global instructions file in a temp folder is in the home folder, where kb writes it.
-process.env.HOME = realpathSync(tmpdir());
+// Each test run has its own home folder: a test never reads or writes the user's own files, and
+// two runs at once never share one.
+const testHome = realpathSync(mkdtempSync(join(tmpdir(), "kb-home-")));
+process.env.HOME = testHome;
+process.on("exit", () => rmSync(testHome, { recursive: true, force: true }));
 
 // The session of the developer or the agent that runs the tests must not reach the event log of a test.
 delete process.env.KB_SESSION;
@@ -24,6 +27,18 @@ export const MAIN = join(ROOT, "cli", "main.ts");
 
 export function tempDir(prefix = "kb-test-"): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
+/**
+ * Records what the page policy of kb serve blocks in a browser page, from before the page loads.
+ * The returned function lists it. The built page must work under the policy, so a test expects none.
+ */
+export async function watchPolicy(page: Page): Promise<() => Promise<string[]>> {
+  await page.addInitScript(() => {
+    const seen: string[] = ((globalThis as { kbBlocked?: string[] }).kbBlocked = []);
+    document.addEventListener("securitypolicyviolation", (e) => seen.push(`${e.effectiveDirective} ${e.blockedURI} ${e.sample}`.trim()));
+  });
+  return () => page.evaluate(() => (globalThis as { kbBlocked?: string[] }).kbBlocked ?? []);
 }
 
 export function tempStore(): Store {

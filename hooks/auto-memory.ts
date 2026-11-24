@@ -2,8 +2,13 @@
 // the agent to save user preferences there, so the session start has to say which store wins.
 
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { userHome } from "../cli/store.ts";
+
+/** Claude Code's config folder: `CLAUDE_CONFIG_DIR`, else `.claude` in the home folder. */
+export function claudeConfigDir(env: Record<string, string | undefined> = process.env): string {
+  return env.CLAUDE_CONFIG_DIR || join(userHome(env), ".claude");
+}
 
 /** Sent at every session start while auto memory is on, and not at all while it is off. */
 export const MEMORY_RULE =
@@ -30,7 +35,7 @@ export function autoMemoryOn(env: Record<string, string | undefined>, projectDir
   const flag = env.CLAUDE_CODE_DISABLE_AUTO_MEMORY?.trim().toLowerCase();
   if (flag && ["1", "true", "yes", "on"].includes(flag)) return false;
   if (flag && ["0", "false", "no", "off"].includes(flag)) return true;
-  const configDir = env.CLAUDE_CONFIG_DIR || join(env.HOME || homedir(), ".claude");
+  const configDir = claudeConfigDir(env);
   const files = [join(configDir, "settings.json"), join(projectDir, ".claude", "settings.json"), join(projectDir, ".claude", "settings.local.json")];
   let on = true;
   for (const file of files) on = setting(file) ?? on;

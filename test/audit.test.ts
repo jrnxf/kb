@@ -11,7 +11,7 @@ import { type Served, runningPort, serve } from "../cli/serve.ts";
 import type { Store } from "../cli/store.ts";
 import type { AuditCard, AuditData, AuditNote } from "../cli/wire.ts";
 import { type Pick, changes, choiceForKey, choiceLabel, choices, leaving, steps, stillHidden, summary, toPicks } from "../web/src/lib/audit.ts";
-import { MAIN, machineConfig, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { MAIN, machineConfig, putNote, sh, tempDir, tempRepo, tempStore, watchPolicy } from "./helpers.ts";
 
 const SCOPE = "example.com/team/app";
 const repo = (head = "abc1234"): RepoInfo => ({ scope: SCOPE, root: null, head });
@@ -90,7 +90,7 @@ describe("the audit page data", () => {
     const store = setup();
     proposeAudit(store, { items: ITEMS }, repo());
     store.move(store.find("t")!, true, "2026-01-02T00:00:00Z");
-    const data = auditData(store, SCOPE, "tok");
+    const data = auditData(store, SCOPE);
     expect(data.cards.map((c) => c.id)).toEqual(["v", "r", "m", "d", "ask", "keepme"]);
     const card = (id: string) => data.cards.find((c) => c.id === id)!;
     expect(card("r").proposed).toEqual({ title: "Title of r", body: "the new body" });
@@ -106,13 +106,13 @@ describe("the audit page data", () => {
     putNote(store, { id: "at-cmd", triggers: ["cmd: zorp --wipe"] });
     const items = ["work", "plain", "at-cmd"].map((id) => ({ id, action: "keep", why: "x" }));
     proposeAudit(store, { items }, GLOBAL);
-    const places = () => Object.fromEntries(auditData(store, "global", "tok").cards.map((c) => [c.id, c.note.place]));
+    const places = () => Object.fromEntries(auditData(store, "global").cards.map((c) => [c.id, c.note.place]));
     expect(places()).toEqual({ work: "brief", plain: "index", "at-cmd": "trigger" });
-    expect(auditData(store, "global", "tok")).toMatchObject({ index: { lines: 1, hidden: 0, others: 0 }, hidden: [] });
+    expect(auditData(store, "global")).toMatchObject({ index: { lines: 1, hidden: 0, others: 0 }, hidden: [] });
     // Over the character budget, the lowest ranked lines are gone: those notes reach no session.
     writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ budgets: { contextChars: 500 } }));
     for (let i = 0; i < 30; i++) putNote(store, { id: `more-${String(i).padStart(2, "0")}` });
-    const over = auditData(store, "global", "tok");
+    const over = auditData(store, "global");
     expect(over.index.hidden).toBeGreaterThan(0);
     expect(over.hidden).toHaveLength(over.index.hidden);
     expect(over.hidden.at(-1)!.id).toBe("plain");
@@ -135,17 +135,17 @@ describe("the audit page data", () => {
     // A few global notes fit outside a repo, and the notes of the repo push some out: its audit makes room for them.
     for (let i = 0; i < 20; i++) putNote(store, { id: `g-${pad(i)}`, kind: "decision" });
     for (let i = 0; i < 14; i++) putNote(store, { id: `r-${pad(i)}`, scope: SCOPE });
-    const pushed = auditData(store, SCOPE, "tok");
+    const pushed = auditData(store, SCOPE);
     expect(contextFor(store, null).hidden).toEqual([]);
     expect(pushed.index.hidden).toBeGreaterThan(0);
     expect(pushed.hidden.every((n) => n.id.startsWith("g-"))).toBe(true);
     expect(pushed.index.others).toBe(0);
     // The global notes do not fit on their own: an audit of the repo cannot change that, so its page counts none.
     for (let i = 20; i < 60; i++) putNote(store, { id: `g-${pad(i)}`, kind: "decision" });
-    expect(auditData(store, SCOPE, "tok")).toMatchObject({ index: { hidden: 0, others: 0 }, hidden: [] });
+    expect(auditData(store, SCOPE)).toMatchObject({ index: { hidden: 0, others: 0 }, hidden: [] });
     // The repo's own notes do not fit: the page counts those, and the global notes behind them are the others.
     for (let i = 14; i < 60; i++) putNote(store, { id: `r-${pad(i)}`, scope: SCOPE });
-    const own = auditData(store, SCOPE, "tok");
+    const own = auditData(store, SCOPE);
     expect(own.index.hidden).toBeGreaterThan(0);
     expect(own.hidden.every((n) => n.id.startsWith("r-"))).toBe(true);
     expect(own.index.others).toBe(60);
@@ -217,7 +217,7 @@ describe("Apply", () => {
     proposeAudit(store, { items: [ITEMS[0]!, ITEMS[3]!] }, repo());
     const path = store.statePath("audits.json");
     writeFileSync(path, readFileSync(path, "utf8").replace('"action": "trash"', '"action": "archive"'));
-    expect(auditData(store, SCOPE, "tok").cards.map((c) => c.id)).toEqual(["v"]);
+    expect(auditData(store, SCOPE).cards.map((c) => c.id)).toEqual(["v"]);
   });
 
   test.each([
@@ -251,7 +251,7 @@ describe("Apply", () => {
     const store = setup();
     proposeAudit(store, { items: [ITEMS[1]!] }, repo());
     putNote(store, { id: "r", scope: SCOPE, body: "edited by the user" });
-    expect(auditData(store, SCOPE, "tok").cards).toEqual([]);
+    expect(auditData(store, SCOPE).cards).toEqual([]);
     expect(openAudits(store)).toEqual([]);
     expect(() => applyAudit(store, SCOPE, { picks: [{ id: "r", action: "rewrite" }] })).toThrow("r changed after the agent proposed it");
     expect(store.find("r")!.body).toBe("edited by the user");
@@ -298,7 +298,7 @@ describe("the global audit", () => {
   test("the card shows the lines Apply adds, at the end of the section, and nothing is written yet", () => {
     const { store, real } = globalSetup();
     proposeAudit(store, { items: [MOVE] }, GLOBAL);
-    const [card] = auditData(store, "global", "tok").cards;
+    const [card] = auditData(store, "global").cards;
     expect(card!.merge!.map((n) => n.id)).toEqual(["g3"]);
     expect(card!.promote).toEqual({ file: expect.stringContaining("CLAUDE.md"), path: expect.stringContaining("AGENTS.md"), link: true, section: "Style", above: ["## Style", "", "- Never use the em dash."], added: ["- Write short sentences in the active voice."], rule: MOVE.rule });
     expect(readFileSync(real, "utf8")).toBe(RULES);
@@ -323,7 +323,7 @@ describe("the global audit", () => {
     const one = { id: "g2", action: "promote", why: "x", rule: "- One.", section: "Writing" };
     const two = { id: "g3", action: "promote", why: "x", rule: "- Two.", section: "Writing" };
     proposeAudit(store, { items: [one, two] }, GLOBAL);
-    const [first, second] = auditData(store, "global", "tok").cards;
+    const [first, second] = auditData(store, "global").cards;
     expect(first!.promote!.added).toEqual(["", "## Writing", "", "- One."]);
     expect(second!.promote!.above).toEqual(["", "## Writing", "", "- One."].slice(-3));
     expect(second!.promote!.added).toEqual(["- Two."]);
@@ -343,7 +343,7 @@ describe("the global audit", () => {
   test("a card whose rule the file holds already says Apply adds nothing", () => {
     const { store } = globalSetup();
     proposeAudit(store, { items: [{ ...MOVE, rule: "- Never use the em dash." }] }, GLOBAL);
-    expect(auditData(store, "global", "tok").cards[0]!.promote!.present).toBe(true);
+    expect(auditData(store, "global").cards[0]!.promote!.present).toBe(true);
   });
 
   test("a missing instructions file stops Apply before any change", () => {
@@ -380,7 +380,7 @@ describe("a repo audit moves a rule to the repo's own file", () => {
 
   test("creates CLAUDE.md when the repo has no instruction file, and the notes stop loading", () => {
     const { store, root } = repoSetup();
-    expect(auditData(store, SCOPE, "tok").cards[0]!.promote).toMatchObject({ file: "CLAUDE.md", create: true, link: false, added: ["## Build", "", MOVE.rule] });
+    expect(auditData(store, SCOPE).cards[0]!.promote).toMatchObject({ file: "CLAUDE.md", create: true, link: false, added: ["## Build", "", MOVE.rule] });
     expect(applyAudit(store, SCOPE, { picks: [{ id: "v", action: "promote" }] }).promoted).toEqual(["v", "keepme"]);
     expect(readFileSync(join(root, "CLAUDE.md"), "utf8")).toBe(`## Build\n\n${MOVE.rule}\n`);
     expect([store.find("v")!.promoted_to, store.find("keepme")!.promoted_to]).toEqual(["CLAUDE.md", "CLAUDE.md"]);
@@ -389,8 +389,8 @@ describe("a repo audit moves a rule to the repo's own file", () => {
 
   test("writes AGENTS.md when the repo has only that, and the file behind a CLAUDE.md link", () => {
     const only = repoSetup((root) => writeFileSync(join(root, "AGENTS.md"), "# Agents\n"));
-    expect(auditData(only.store, SCOPE, "tok").cards[0]!.promote).toMatchObject({ file: "AGENTS.md", link: false });
-    expect(auditData(only.store, SCOPE, "tok").cards[0]!.promote!.create).toBeUndefined();
+    expect(auditData(only.store, SCOPE).cards[0]!.promote).toMatchObject({ file: "AGENTS.md", link: false });
+    expect(auditData(only.store, SCOPE).cards[0]!.promote!.create).toBeUndefined();
     applyAudit(only.store, SCOPE, { picks: [{ id: "v", action: "promote" }] });
     expect(readFileSync(join(only.root, "AGENTS.md"), "utf8")).toBe(`# Agents\n\n## Build\n\n${MOVE.rule}\n`);
     expect(existsSync(join(only.root, "CLAUDE.md"))).toBe(false);
@@ -399,7 +399,7 @@ describe("a repo audit moves a rule to the repo's own file", () => {
       writeFileSync(join(root, "AGENTS.md"), "# Agents\n");
       symlinkSync("AGENTS.md", join(root, "CLAUDE.md"));
     });
-    expect(auditData(linked.store, SCOPE, "tok").cards[0]!.promote).toMatchObject({ file: "CLAUDE.md", link: true, path: expect.stringContaining("AGENTS.md") });
+    expect(auditData(linked.store, SCOPE).cards[0]!.promote).toMatchObject({ file: "CLAUDE.md", link: true, path: expect.stringContaining("AGENTS.md") });
     applyAudit(linked.store, SCOPE, { picks: [{ id: "v", action: "promote" }] });
     expect(readFileSync(join(linked.root, "AGENTS.md"), "utf8")).toContain(MOVE.rule);
   });
@@ -418,7 +418,7 @@ describe("a repo audit moves a rule to the repo's own file", () => {
       mkdirSync(join(root, ".claude"));
       writeFileSync(join(root, ".claude", "CLAUDE.md"), "# Rules\n");
     });
-    expect(auditData(store, SCOPE, "tok").cards[0]!.promote).toMatchObject({ file: ".claude/CLAUDE.md" });
+    expect(auditData(store, SCOPE).cards[0]!.promote).toMatchObject({ file: ".claude/CLAUDE.md" });
     applyAudit(store, SCOPE, { picks: [{ id: "v", action: "promote" }] });
     expect(readFileSync(join(root, ".claude", "CLAUDE.md"), "utf8")).toContain(MOVE.rule);
     expect(existsSync(join(root, "CLAUDE.md"))).toBe(false);
@@ -430,7 +430,7 @@ describe("a repo audit moves a rule to the repo's own file", () => {
       symlinkSync(outside, join(root, "CLAUDE.md"));
       writeFileSync(join(root, "AGENTS.md"), "# Agents\n");
     });
-    expect(() => auditData(store, SCOPE, "tok")).toThrow("is a link to a file that does not exist");
+    expect(() => auditData(store, SCOPE)).toThrow("is a link to a file that does not exist");
     expect(() => applyAudit(store, SCOPE, { picks: [{ id: "v", action: "promote" }] })).toThrow("is a link to a file that does not exist");
     expect([existsSync(outside), readFileSync(join(root, "AGENTS.md"), "utf8"), store.find("v")!.promoted_to]).toEqual([false, "# Agents\n", undefined]);
   });
@@ -438,7 +438,7 @@ describe("a repo audit moves a rule to the repo's own file", () => {
   test("a checkout that kb does not know stops the page and Apply before any change", () => {
     const store = setup();
     proposeAudit(store, { items: [MOVE] }, repo());
-    expect(() => auditData(store, SCOPE, "tok")).toThrow(`the checkout of ${SCOPE} is not on this machine`);
+    expect(() => auditData(store, SCOPE)).toThrow(`the checkout of ${SCOPE} is not on this machine`);
     expect(() => applyAudit(store, SCOPE, { picks: [{ id: "v", action: "promote" }] })).toThrow("is not on this machine");
     expect(store.find("v")!.promoted_to).toBeUndefined();
   });
@@ -605,7 +605,7 @@ describe("the deck", () => {
 
   test("the meter counts by characters: a note that leaves makes room by the size of its line, and the hidden lines take it in rank order", () => {
     const note = (id: string, place: AuditNote["place"], chars: number): AuditNote => ({ ...card({}).note, id, place, chars });
-    const data = (cards: AuditCard[], hidden = [40, 30, 30]): AuditData => ({ token: "t", scope: SCOPE, created: "", cards, index: { lines: 3, hidden: hidden.length, room: 5, others: 0 }, hidden: hidden.map((chars, i) => ({ id: `h${i}`, chars })) });
+    const data = (cards: AuditCard[], hidden = [40, 30, 30]): AuditData => ({ scope: SCOPE, created: "", cards, index: { lines: 3, hidden: hidden.length, room: 5, others: 0 }, hidden: hidden.map((chars, i) => ({ id: `h${i}`, chars })) });
     const short = card({ id: "short", note: note("short", "index", 20) });
     const long = card({ id: "long", note: note("long", "index", 80) });
     const keep: Pick = { action: "keep" };
@@ -665,13 +665,14 @@ describe("the deck", () => {
 describe("the audit page in a browser", () => {
   let browser: Browser;
   let served: Served | undefined;
+  // A cold browser start can take longer than the 5 s that a hook gets by default.
   beforeAll(async () => {
     browser = await chromium.launch();
-  });
+  }, 30_000);
   afterEach(() => served?.stop());
   afterAll(async () => {
     await browser?.close();
-  });
+  }, 30_000);
 
   test("keys pick, edit, undo and apply, and the store changes", async () => {
     const store = setup();
@@ -679,7 +680,8 @@ describe("the audit page in a browser", () => {
     served = serve(store, { port: 0 });
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     page.setDefaultTimeout(3000);
-    await page.goto(`${served.url}#audit=${encodeURIComponent(SCOPE)}`);
+    const blocked = await watchPolicy(page);
+    await page.goto(`${served.link}&audit=${encodeURIComponent(SCOPE)}`);
     await page.locator('[data-card="v"]').waitFor();
     await page.keyboard.press("t"); // v: trash
     await page.locator('[data-card="r"]').waitFor();
@@ -706,6 +708,8 @@ describe("the audit page in a browser", () => {
     expect(readAudit(store, SCOPE)!.result).toMatchObject({ rewritten: ["r"], checked: ["v", "t"], kept: ["keepme"] });
     // keepme went with its group: nobody looked, so it records no check.
     expect(store.find("keepme")!.verified_at_commit).toBeUndefined();
+    // The audit page works under the page policy of kb serve.
+    expect(await blocked()).toEqual([]);
     await page.close();
   });
 
@@ -715,7 +719,7 @@ describe("the audit page in a browser", () => {
     served = serve(store, { port: 0 });
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     page.setDefaultTimeout(3000);
-    await page.goto(`${served.url}#audit=${encodeURIComponent(SCOPE)}`);
+    await page.goto(`${served.link}&audit=${encodeURIComponent(SCOPE)}`);
     await page.locator('[data-card="v"]').waitFor();
     await page.keyboard.press("t"); // v: trash, not the agent's keep
     await page.locator('[data-card="t"]').waitFor();
@@ -741,7 +745,7 @@ describe("the audit page in a browser", () => {
       served = serve(store, { port: 0 });
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
       page.setDefaultTimeout(15000);
-      await page.goto(served.url);
+      await page.goto(served.link);
       await page.locator(`[data-rail="scope:${SCOPE}"]`).click();
       await page.locator('[data-audit-start="start"]').click();
       await page.locator('[data-card="v"]').waitFor();
@@ -766,7 +770,7 @@ describe("the audit page in a browser", () => {
       served = serve(store, { port: 0 });
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
       page.setDefaultTimeout(15000);
-      await page.goto(served.url);
+      await page.goto(served.link);
       await page.locator('[data-rail="scope:global"]').click();
       await page.locator('[data-audit-start="start"]').click();
       await page.locator('[data-card="g"]').waitFor();
@@ -784,7 +788,7 @@ describe("the audit page in a browser", () => {
     served = serve(store, { port: 0 });
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     page.setDefaultTimeout(3000);
-    await page.goto(served.url);
+    await page.goto(served.link);
     await page.getByRole("heading", { level: 1, name: "kb" }).waitFor();
     await page.locator(`[data-audit="${SCOPE}"]`).click();
     await page.locator('[data-card="v"]').waitFor();
