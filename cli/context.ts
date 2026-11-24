@@ -8,6 +8,7 @@ import { rememberRepo, repoRoot, scopesElsewhere } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
 import { anchorReader, changedAtLoad, missingAnchors } from "./stale.ts";
 import { HARD_CONTEXT_CAP, type Config, type Store, type StoredNote, writeAtomic } from "./store.ts";
+import { mergedNotices } from "./sync.ts";
 import { readTriggers } from "./trigger.ts";
 
 /**
@@ -272,6 +273,8 @@ interface Session {
   /** The notes on a file that is not what their last check saw. */
   changed: Set<string>;
   syncError: string | null;
+  /** A line for each note that a sync merged, while its other copy is in the trash. */
+  merged: string[];
   /** When the repo has no notes, a line that names the scopes of the same repo name that have some. */
   moved: string | null;
   charBudget: number;
@@ -291,8 +294,9 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
   const syncError = store.syncError();
   const hint = scope ? movedHint(all, scope, new Set([...scopesElsewhere(store, scope, root), ...shownHints(store, scope)])) : null;
   const moved = hint?.text ?? null;
+  const merged = mergedNotices(store);
   const movedFrom = hint?.from ?? null;
-  if (visible.length === 0 && !syncError && !moved) return { context: { ...EMPTY, scope, holdback }, ranked: [], changed: none, config, movedFrom };
+  if (visible.length === 0 && !syncError && !moved && merged.length === 0) return { context: { ...EMPTY, scope, holdback }, ranked: [], changed: none, config, movedFrom };
 
   const ranked = rank(visible, lastActivity(store));
   const goneOf = new Map<string, string>();
@@ -308,7 +312,7 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
       else if (changedOf(note).length > 0) changed.add(note.id);
     }
   }
-  const laid: Session = { scope, ranked, goneOf, changed, syncError, moved, charBudget: contextBudget(config.budgets.contextChars), briefChars: config.budgets.briefChars };
+  const laid: Session = { scope, ranked, goneOf, changed, syncError, merged, moved, charBudget: contextBudget(config.budgets.contextChars), briefChars: config.budgets.briefChars };
   if (holdback) return { context: heldStart(laid), ranked, changed, config, movedFrom }; // HOLDBACK
 
   const context = newStart(laid);
@@ -366,16 +370,22 @@ export function movedHint(notes: StoredNote[], scope: string, skip: ReadonlySet<
   return { from: top, text: `No note has the scope ${scope}, but ${top} has ${n} ${n === 1 ? "note" : "notes"} and the same repo name${also}. If they belong to this repo, tell the user: \`kb scope move ${top} ${scope} --dry-run\` shows what moves, and with no --dry-run it moves them. This line shows once.` };
 }
 
+const MERGED_LINES = 3;
+
 /**
  * The parts of the text that every start has: `head`, the lines before the notes, and `index`, the
  * index section of the notes listed, with a last line that counts the hidden ones. `goneIn` gives
  * what is gone from the notes shown.
  */
-function partsOf({ scope, goneOf, changed, syncError, moved }: Session, line: (note: StoredNote) => string) {
+function partsOf({ scope, goneOf, changed, syncError, merged, moved }: Session, line: (note: StoredNote) => string) {
   const goneIn = (shown: StoredNote[]): ContextResult["gone"] => (goneOf.size === 0 ? [] : shown.filter((n) => goneOf.has(n.id)).map((n) => ({ id: n.id, detail: goneOf.get(n.id)! })));
   const head = (shown: StoredNote[]): string[] => {
     const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, FORMAT_LINE, SAVE_RULE];
-    if (syncError) lines.push(`kb sync did not finish: ${syncError} \`kb sync\` shows the detail.`);
+    // The error says what to do. An error from an older kb has no next step, so it gets the pointer.
+    if (syncError) lines.push(`kb sync did not finish: ${syncError}${syncError.includes("`kb sync`") ? "" : " `kb sync` shows the detail."}`);
+    // A merged note is named while its other copy is in the trash.
+    lines.push(...merged.slice(0, MERGED_LINES));
+    if (merged.length > MERGED_LINES) lines.push(`kb sync merged ${merged.length - MERGED_LINES} more notes. \`kb list --trash\` shows each copy, with an id that ends in -conflict.`);
     if (moved) lines.push(moved);
     // A note whose file or symbol is gone may be wrong now. The session checks it before it acts on it.
     const gone = goneIn(shown);

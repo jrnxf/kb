@@ -348,7 +348,8 @@ export function tidyTrash(store: Store, now = nowIso()): string[] {
       writeAtomic(path, serializeNote({ ...rest, trashed_at: now }));
       store.track(path);
       stamped++;
-    } else if (clearsAt(note.trashed_at, days) <= now) expired.push(note);
+    // A conflict copy waits for the user: it holds an edit that no machine kept.
+    } else if (!note.conflict_of && clearsAt(note.trashed_at, days) <= now) expired.push(note);
   }
   let cleared: string[] = [];
   if (expired.length > 0) cleared = removeNotes(store, expired, `kb: clear ${expired.length} from the trash after ${days} days: ${expired.map((n) => n.id).join(" ")}`);

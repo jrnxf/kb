@@ -299,6 +299,27 @@ notes, and a note loads when it applies.
   machine, and its roll-up in `activity/` syncs. A store from an older kb can hold use counters in
   `usage/`: the first write or sync puts the last use of each note into the roll-up of its machine,
   and removes the folder. `kb add` never gives a new note an id that has a history on any machine.
+- **A conflict loses nothing.** When two machines change the same note, the sync keeps both: the
+  copy verified last stays, and the other goes to the trash as `<id>-conflict`. The copy syncs, so
+  each session start on every machine names it until the copy leaves the trash. The trash never
+  clears it on its own: `trashDays` does not apply to it. Compare the two with `kb show`, bring what
+  the copy adds into the note, then `kb delete <id>-conflict`. `kb restore` makes it a note. A note
+  that one machine trashed and the other changed goes to the trash with the change.
+
+  Any other conflict, such as `kb.config.json` changed on two machines, stops the sync. `kb sync`
+  names each file and exits with 1 (`"ok": false` with `--json`), the store keeps its own copy,
+  and each session start shows the steps until a sync works:
+
+  ```bash
+  git -C ~/.kb rebase origin/main   # git stops at each file that conflicts
+  # edit the file to keep what is right, then:
+  git -C ~/.kb add <file>
+  git -C ~/.kb rebase --continue
+  kb sync
+  ```
+
+  To take the remote copy and drop this machine's changes instead: `git -C ~/.kb reset --hard
+  origin/main`.
 
 ```
 ~/.kb/

@@ -21,7 +21,7 @@ import { resultGroups } from "./wire.ts";
 import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, isLive, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
 import { CHANGED_MARK, changedAsk, changedSinceCheck, clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store, git } from "./store.ts";
-import { syncNow } from "./sync.ts";
+import { syncFailed, syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
 import { version, versionText } from "./version.ts";
 import { afterWrite, asOfTime, checkedHashes, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, moveScope, noteWarnings, nowIso, requireIdOrPart, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
@@ -97,7 +97,8 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb serve [--port n] [--no-open]        the store as a local page: read, edit and trash notes
                                          kb alone in a terminal does the same. Behind a proxy, name it in
                                          KB_SERVE_HOSTS: kb.example.com, or .example.com for every name under it
-  kb sync                                commit, pull and push the store
+  kb sync                                commit, pull and push the store. Exits with 1 on a conflict it
+                                         cannot merge, and names each file
   kb version                             the commit kb runs from. Also kb --version
 
 Every command accepts --json. The store is ~/.kb, or KB_HOME.
@@ -951,7 +952,8 @@ function cmdInstructions(store: Store, args: Args): Output {
 
 function cmdSync(store: Store): Output {
   const result = syncNow(store);
-  return { json: result, text: `${result.status}: ${result.detail}` };
+  const ok = !syncFailed(result);
+  return { json: { ok, ...result }, text: `${result.status}: ${result.detail}`, code: ok ? 0 : 1 };
 }
 
 /** Each command that runs, by name. The words that print the help or the version are in main(). */
