@@ -1,17 +1,18 @@
 // Sync between machines through the store's git remote. Never blocks a session.
 
-import { mkdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { rollUp } from "./log.ts";
 import { clearStaleCache } from "./stale.ts";
-import type { Store } from "./store.ts";
+import { type Store, withLock } from "./store.ts";
 
 export interface SyncResult {
   status: "ok" | "no-remote" | "busy" | "conflict" | "error";
   detail: string;
 }
 
-const LOCK_STALE_MS = 120_000;
+/** A sync can run several git calls of 30 seconds each, so a live holder keeps its lock a long time. */
+const LOCK_STALE_MS = 600_000;
 
 function run(store: Store, ...args: string[]): { ok: boolean; out: string; err: string } {
   const env = {
@@ -50,21 +51,30 @@ function touch(path: string): void {
  * The commit takes the roll-up of this machine's log, which is due once per day.
  */
 export function syncNow(store: Store, now: Date = new Date()): SyncResult {
-  if (!store.hasRemote()) return { status: "no-remote", detail: "the store has no git remote" };
+  if (!store.hasRemote()) {
+    // A store with git and no remote keeps its history on this machine: commit, and push nowhere.
+    if (store.isGitRepo()) {
+      store.ensure();
+      rollUp(store, now);
+      store.commit("kb: sync", { all: true });
+    }
+    return { status: "no-remote", detail: store.isGitRepo() ? "the store has no git remote, so its commits stay on this machine" : "the store has no git remote" };
+  }
   // A fresh clone of an empty remote has no layout yet. Sync is a write, so create it.
   store.ensure();
 
-  const lock = join(store.home, ".sync-lock");
-  if (Date.now() - mtime(lock) > LOCK_STALE_MS) rmSync(lock, { recursive: true, force: true });
   try {
-    mkdirSync(lock);
-  } catch {
-    return { status: "busy", detail: "another sync is in progress" };
+    const result = withLock(store.statePath("sync-lock"), () => syncLocked(store, now), { waitMs: 0, staleMs: LOCK_STALE_MS });
+    return result ?? { status: "busy", detail: "another sync is in progress" };
+  } catch (error) {
+    return { status: "error", detail: `kb cannot lock the store: ${(error as Error).message}` };
   }
+}
 
+function syncLocked(store: Store, now: Date): SyncResult {
   try {
     rollUp(store, now);
-    store.commit("kb: sync");
+    store.commit("kb: sync", { all: true });
     const fail = (status: "conflict" | "error", detail: string): SyncResult => {
       writeFileSync(store.syncErrorPath(), `${detail}\n`);
       return { status, detail };
@@ -79,9 +89,15 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
     const hasLocal = run(store, "rev-parse", "-q", "--verify", "HEAD").ok;
     const hasRemoteBranch = run(store, "rev-parse", "-q", "--verify", `${remote}/${branch}`).ok;
     if (hasRemoteBranch && hasLocal) {
-      const rebase = run(store, "rebase", "-q", "--autostash", `${remote}/${branch}`);
+      // A write that commits while the rebase runs would break it, so the two take turns.
+      const rebase = store.withGitLock(() => {
+        const result = run(store, "rebase", "-q", "--autostash", `${remote}/${branch}`);
+        if (!result.ok) run(store, "rebase", "--abort");
+        return result;
+      });
+      // A write that holds the lock for a long time is not a conflict: nothing is wrong, and the next sync tries again.
+      if (!rebase) return { status: "busy", detail: "a write holds the store's git lock" };
       if (!rebase.ok) {
-        run(store, "rebase", "--abort");
         return fail("conflict", "two machines changed the same note. Local notes are kept.");
       }
     } else if (hasRemoteBranch) {
@@ -98,8 +114,7 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
     clearStaleCache(store);
     return { status: "ok", detail: "the store matches the remote" };
   } finally {
-    touch(join(store.home, ".sync-last"));
-    rmSync(lock, { recursive: true, force: true });
+    touch(store.statePath("sync-last"));
   }
 }
 
@@ -114,7 +129,7 @@ export function kickSync(store: Store, throttleMs = 0): boolean {
   try {
     if (process.env[NO_SYNC_ENV]) return false;
     if (!store.exists() || !store.config().sync || !store.hasRemote()) return false;
-    const stamp = join(store.home, ".sync-last");
+    const stamp = store.statePath("sync-last");
     if (throttleMs > 0 && Date.now() - mtime(stamp) < throttleMs) return false;
     touch(stamp);
     return detached(store, ["sync", "--quiet"]);

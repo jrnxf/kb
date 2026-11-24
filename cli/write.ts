@@ -298,6 +298,7 @@ export function moveScope(store: Store, from: string, to: string, dryRun = false
   }
   for (const { path, trashed: inTrash } of all) {
     rmSync(path, { force: true });
+    store.track(path);
     pruneEmpty(dirname(path), join(store.home, inTrash ? "trash" : "notes"));
   }
   moveRepo(store, from, to);
@@ -345,6 +346,7 @@ export function tidyTrash(store: Store, now = nowIso()): string[] {
     if (!note.trashed_at) {
       const { path, trashed: _trashed, ...rest } = note;
       writeAtomic(path, serializeNote({ ...rest, trashed_at: now }));
+      store.track(path);
       stamped++;
     } else if (clearsAt(note.trashed_at, days) <= now) expired.push(note);
   }

@@ -168,7 +168,7 @@ describe("the Read hook names the notes on a file", () => {
     const repo = tempRepo();
     writeFileSync(join(repo, "a.ts"), "x\n");
     expect(context(store.home, join(repo, "a.ts"))).toBe("");
-    expect(existsSync(join(store.home, "local.json"))).toBe(false);
+    expect(store.local().aliases).toEqual({});
   });
 
   test("names five notes at a time, and the rest on the next read", () => {
