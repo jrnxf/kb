@@ -249,20 +249,20 @@ describe("the transcript reader", () => {
       const key = `-----BEGIN ${"RSA"} PRIVATE KEY-----\n${"MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEA".repeat(2)}\n${"q".repeat(40)}\n-----END ${"RSA"} PRIVATE KEY-----`;
       const read = readConversation(
         write([
-          user(`Deploy with the token ${TOKEN} to postgres://app:${"hunter2"}${"secret"}@db.example.com/shop`),
+          user(`Deploy with the token ${TOKEN} to postgres://app:${"hunter2"}${"secret"}@db.acme.dev/shop`),
           call("t1", "Bash", { command: `curl -H "Authorization: token ${TOKEN}" https://api.example.com/deploy` }),
           result("t1", `Exit code 22\nAPI_KEY=${VALUE} was refused\n${key}\nthe key above is not allowed`, true),
-          call("t2", "Bash", { command: `deploy --url redis://:${"s3cret"}${"Passw0rd"}@cache.example.com` }),
+          call("t2", "Bash", { command: `deploy --url redis://:${"s3cret"}${"Passw0rd"}@cache.acme.dev` }),
           result("t2", "ok"),
           says(`I used AWS key ${"AKIA"}${"ABCDEFGHIJKLMNOP"}.`),
         ]),
       );
       expect(read.text).toBe(
         [
-          "## user\n\nDeploy with the token <masked: a GitHub token> to postgres://app:<masked: a password>@db.example.com/shop\n",
+          "## user\n\nDeploy with the token <masked: a GitHub token> to postgres://app:<masked: a password>@db.acme.dev/shop\n",
           "## agent\n",
           `(a tool call failed)\ncall: Bash: curl -H "Authorization: token <masked: a GitHub token>" https://api.example.com/deploy\n${output("Exit code 22 API_KEY=<masked: a secret value> was refused <masked: a private key> the key above is not allowed")}\n`,
-          "(the next tool call)\ncall: Bash: deploy --url redis://:<masked: a password>@cache.example.com\n",
+          "(the next tool call)\ncall: Bash: deploy --url redis://:<masked: a password>@cache.acme.dev\n",
           "I used AWS key <masked: an AWS access key>.\n",
         ].join("\n"),
       );

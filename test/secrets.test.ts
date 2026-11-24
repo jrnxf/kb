@@ -25,7 +25,7 @@ const FAKES: Record<string, string> = {
   "a Slack webhook": `${"hooks.slack.com"}/services/T${upper(8)}/B${upper(8)}/${rand(24)}`,
   "a SendGrid key": `${"SG."}${rand(22)}.${rand(43)}`,
   "a Hugging Face token": `${"hf_"}${rand(34, "abcdefghijkLMNOPQRSTUVwxyz")}`,
-  "a password in a URL": `DATABASE_URL=postgres://app:${rand(14)}@db.example.com/app`,
+  "a password in a URL": `DATABASE_URL=postgres://app:${rand(14)}@db.acme.dev/app`,
   "a secret value": `API_KEY="${rand(32)}"`,
   "a credential": `curl -H "Authorization: Bearer ${rand(32)}"`,
   "a password": `password: ${"hunter2"}${"hunter2"}`,
@@ -41,9 +41,9 @@ const FAKES: Record<string, string> = {
 
 /** More shapes of the kinds above. */
 const MORE: [string, string][] = [
-  ["a password in a URL", `REDIS_URL=redis://:${rand(14)}@cache.example.com:6379`],
+  ["a password in a URL", `REDIS_URL=redis://:${rand(14)}@cache.acme.dev:6379`],
   ["a secret value", `client_secret: ${rand(40, "0123456789abcdef")}`],
-  ["a password in a URL", `postgres://admin:${"p4ss"}@db.example.com/app`],
+  ["a password in a URL", `postgres://admin:${"p4ss"}@db.acme.dev/app`],
   ["a Stripe key", `STRIPE_WEBHOOK=${"whsec_"}${rand(32)}`],
   ["a Google API key", `${"AIza"}${rand(39)}`],
   ["a credential", `Authorization: Basic ${rand(27)}=`],
@@ -93,6 +93,35 @@ describe("findSecret", () => {
       "The build took 12:34 and job 1234567890:done finished.",
       "Run ssh://git@github.com:22/acme/app.git or git@github.com:acme/app.git.",
     ]) expect([text, findSecret(text)]).toEqual([text, null]);
+  });
+
+  test("a slug, a hash that is named a key, and the example password of a doc are not secrets", () => {
+    for (const text of [
+      "a basic k8s-cluster-setup-for-production-2024 guide",
+      "Authorization: Bearer k8s-cluster-setup-for-production-2024",
+      `the cache entry ${"key-"}${hex(32)} is stale`,
+      "password: Password1 in the example and password=changeme123",
+      "password: ${DB_PASSWORD}suffix and password: %DB_PASSWORD% and password: ********",
+      "password: /run/secrets/db_password1",
+    ]) expect([text, findSecret(text)]).toEqual([text, null]);
+  });
+
+  test("a password that starts with *, % or { is a password, and one with / or ( in it is whole", () => {
+    for (const text of ["password: *Hunter2024", "password=%Tr0ub4dor", "password: {Hunter2024", "password: Q2xhdWRl1/abcDEF+ghiJKL/mnoPQR=", "password=(Hunter22)secretTail"]) {
+      expect([text, findSecret(text)?.kind]).toEqual([text, "a password"]);
+    }
+  });
+
+  test("a password in the URL of a local or example host is a dev setup, and a password for another host is not", () => {
+    for (const text of [
+      "mongodb://admin:admin123@localhost:27017",
+      "http://user:1234@localhost",
+      "postgres://app:Xk29fj3@127.0.0.1:5432/app and redis://:hunter22@[::1]:6379",
+      "http://u:Xk29fj3@db.example.com/x and http://u:Xk29fj3@192.0.2.10/x",
+    ]) expect([text, findSecret(text)]).toEqual([text, null]);
+    for (const text of ["http://user:1234@db.acme.dev", "mongodb://admin:admin123@localhost.evil.dev:27017", "http://u:Xk29fj3@localhost.acme.dev/"]) {
+      expect([text, findSecret(text)?.kind]).toEqual([text, "a password in a URL"]);
+    }
   });
 
   // The scan runs on every write of a note, and /kb:recover masks every line of old sessions.
@@ -191,10 +220,20 @@ describe("maskSecrets", () => {
     });
   }
 
+  test("a mask covers the whole value, however long, and whatever characters it has", () => {
+    const long = `ya29.${rand(400, "aB3dE5gH7jK9mN1pQ2sT4vW6yZ8-_")}`;
+    expect(maskSecrets(`Authorization: Bearer ${long}`)).toBe("Authorization: Bearer <masked: a credential>");
+    expect(maskSecrets(`password: ${rand(300)}/${rand(30)}`)).toBe("password: <masked: a password>");
+    expect(maskSecrets("password: Q2xhdWRl1/abcDEF+ghiJKL/mnoPQR=")).toBe("password: <masked: a password>");
+    expect(maskSecrets("password=(Hunter22)secretTail")).toBe("password=<masked: a password>");
+    expect(maskToolText("password=(Hunter22)secretTail")).toBe("password=<masked: a password>");
+    expect(maskSecrets(`postgres://app:${rand(300)}@db.acme.dev/app`)).toBe("postgres://app:<masked: a password>@db.acme.dev/app");
+  });
+
   test("keeps the name of a value, and the scheme, the user and the host of a URL", () => {
     expect(maskSecrets(FAKES["a secret value"]!)).toBe('API_KEY="<masked: a secret value>"');
-    expect(maskSecrets(FAKES["a password in a URL"]!)).toBe("DATABASE_URL=postgres://app:<masked: a password>@db.example.com/app");
-    expect(maskSecrets(`redis://:${rand(12)}@cache.example.com and ${FAKES["a Stripe key"]}`)).toBe("redis://:<masked: a password>@cache.example.com and <masked: a Stripe key>");
+    expect(maskSecrets(FAKES["a password in a URL"]!)).toBe("DATABASE_URL=postgres://app:<masked: a password>@db.acme.dev/app");
+    expect(maskSecrets(`redis://:${rand(12)}@cache.acme.dev and ${FAKES["a Stripe key"]}`)).toBe("redis://:<masked: a password>@cache.acme.dev and <masked: a Stripe key>");
   });
 
   test("masks a private key from its first line to its last, as lines and as one line of a JSON file", () => {
@@ -249,7 +288,7 @@ describe("maskSecrets", () => {
   });
 
   test("leaves text with no secret as it is, also a text that names a format", () => {
-    for (const text of ["GitHub tokens start with ghp_ and have 36 more characters.", "token: ${GITHUB_TOKEN}", "postgres://app:<password>@db.example.com/app", "password = process.env.DB_PASSWORD", "", "a\n\nb"]) expect(maskSecrets(text)).toBe(text);
+    for (const text of ["GitHub tokens start with ghp_ and have 36 more characters.", "token: ${GITHUB_TOKEN}", "postgres://app:<password>@db.acme.dev/app", "password = process.env.DB_PASSWORD", "", "a\n\nb"]) expect(maskSecrets(text)).toBe(text);
   });
 
   test("a line that still holds a secret after the masks is not written", () => {
@@ -289,7 +328,7 @@ describe("maskToolText", () => {
   test("masks the value after a flag that says secret, the password after a user name, and a short password in a URL", () => {
     const cases: [string, string][] = [
       ["curl -u admin:hunter2 --token abc123 https://api.example.com", "curl -u admin:<masked: a password> --token <masked: a secret value> https://api.example.com"],
-      ["deploy --password hunter2 --host db.example.com", "deploy --password <masked: a secret value> --host db.example.com"],
+      ["deploy --password hunter2 --host db.acme.dev", "deploy --password <masked: a secret value> --host db.acme.dev"],
       ["tool --api-key k1 --client-secret 's 2' -passwd p3 --auth me:pw --credential c4 --key k5", "tool --api-key <masked: a secret value> --client-secret '<masked: a secret value>' -passwd <masked: a secret value> --auth <masked: a secret value> --credential <masked: a secret value> --key <masked: a secret value>"],
       ["tool --auth=me:pw --auth-token=t1", "tool --auth=<masked: a secret value> --auth-token=<masked: a secret value>"],
       ["curl --user 'bob:pw' --proxy-user=p:q -x proxy.example.com", "curl --user 'bob:<masked: a password>' --proxy-user=p:<masked: a password> -x proxy.example.com"],
@@ -297,7 +336,7 @@ describe("maskToolText", () => {
       ["mysqldump -u root -p'se cret' shop | gzip", "mysqldump -u root -p'<masked: a password>' shop | gzip"],
       ["sshpass -ppw ssh -p2222 host && psql -pS3cret shop", "sshpass -p<masked: a password> ssh -p2222 host && psql -p<masked: a password> shop"],
       ["git clone https://bob:pw@example.com/shop.git", "git clone https://bob:<masked: a password>@example.com/shop.git"],
-      ["redis-cli -u redis://:p1@cache.example.com:6379", "redis-cli -u redis://:<masked: a password>@cache.example.com:6379"],
+      ["redis-cli -u redis://:p1@cache.acme.dev:6379", "redis-cli -u redis://:<masked: a password>@cache.acme.dev:6379"],
     ];
     for (const [text, masked] of cases) {
       expect(maskToolText(text)).toBe(masked);

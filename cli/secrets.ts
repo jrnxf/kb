@@ -7,8 +7,9 @@ const URL_PASSWORD = "a password in a URL";
 
 /**
  * A shape of a secret. `re` matches it. A shape that needs more than a regex has `ok`, which reads
- * the match, or `line`, which the whole line must match. The part of the match in the group named `keep` stays when the mask replaces it, so a
- * reader still sees the name or the header that held the secret.
+ * the match, or `line`, which the whole line must match. The part of the match in the group named
+ * `keep` stays when the mask replaces it, so a reader still sees the name or the header that held
+ * the secret.
  */
 interface Shape {
   kind: string;
@@ -18,8 +19,13 @@ interface Shape {
   line?: RegExp;
 }
 
-/** A placeholder, a variable or a value that only names a secret: `<token>`, `${PASS}`, `process.env.X`. */
-const isReference = (value: string) => /^[$<{%*]/.test(value) || /^(?:process\.env|import\.meta\.env|os\.environ)\./.test(value);
+/**
+ * A value that names a secret and holds none: `<token>`, a `<masked: ...>` mask that is there
+ * already, `${PASS}`, `$PASS`, `$(cmd)`, `{{ pass }}`, `%PASS%`, `***` and `process.env.X`. A value
+ * that only starts with `*`, `%` or `{` is a password: `*Hunter2024`.
+ */
+const isReference = (value: string) =>
+  /^(?:<[\w:. -]*(?:>|$)|\$(?:[{(]|[A-Za-z_0-9@*#?!-]\w*$)|\{\{|%[A-Za-z_]\w*%$|\*{3,}$)/.test(value) || /^(?:process\.env|import\.meta\.env|os\.environ)\b/.test(value);
 
 /**
  * A value counts only when it looks random: upper case, lower case and digits together, or a long
@@ -31,18 +37,33 @@ function looksRandom(value: string): boolean {
   return /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value);
 }
 
-/** A token after a header or a scheme: random, or long with letters and digits, as a hex or base64 token is. */
-const looksToken = (value: string) => !isReference(value) && (looksRandom(value) || (value.length >= 32 && /[a-z]/i.test(value) && /\d/.test(value)));
+/** The start of an authorization header, the words that can follow it, and the characters of a token. One rule for the scan and for the tool text. */
+const AUTH_HEAD = String.raw`authorization["']?\s*[:=]\s*["']?`;
+const AUTH_WORDS = "bearer|basic|token|digest|negotiate|apikey|bot";
+const TOKEN_CHARS = String.raw`A-Za-z0-9._~+/=_-`;
 
-/** The passwords that a doc or an example writes, which hold no secret. */
-const PLACEHOLDER = /^(?:pass(?:word)?|passwd|pwd?|secret|changeme|example|test|x+|\.+)$/i;
+/** A token after a header or a scheme: random, or long with letters and digits, as a hex or base64 token is. */
+const looksToken = (value: string) => !isReference(value) && (looksRandom(value) || (value.length >= 32 && /[a-z]/i.test(value) && /\d/.test(value) && !SLUG.test(value)));
+/** Lower case words and digits with `-`, `_` or `.` between them, as in a file name or a title: `k8s-cluster-setup-2024`. A UUID is one too. */
+const SLUG = /^[a-z0-9]+(?:[-_.][a-z0-9]+)+$/;
+
+/** The passwords that a doc or an example writes, which hold no secret, also with a number after: `Password1`. */
+const PLACEHOLDER = /^(?:pass(?:word)?|passwd|pwd?|secret|changeme|example|test|x+|\.+)\d*$/i;
+/** A path, as in `password: /run/secrets/db`, names where the secret is. */
+const PATH = /^(?:\/|\.{1,2}\/|~\/)/;
+/**
+ * The host of a URL that a note can show with a made-up or a local password: the machine itself,
+ * a name that is reserved for examples and tests (RFC 2606, 6761), or a documentation address (RFC 5737).
+ */
+const LOCAL_HOST = /^(?:localhost|[^.]+\.localhost|127(?:\.\d{1,3}){3}|\[::1\]|0\.0\.0\.0|(?:[^.]+\.)*example(?:\.(?:com|net|org))?|[^.]+\.(?:example|test|invalid)|192\.0\.2\.\d{1,3}|198\.51\.100\.\d{1,3}|203\.0\.113\.\d{1,3})$/i;
 
 /**
  * Token formats with a fixed shape. Each pattern needs the full length of a real token, so a note
- * that names a format ("GitHub tokens start with ghp_") still saves. Every repeat has a bound or
- * stops at a fixed character, so a long line cannot make a match slow.
+ * that names a format ("GitHub tokens start with ghp_") still saves. A repeat with no upper bound
+ * (`{30,}`) takes a whole value, so a mask never leaves a tail. Such a repeat runs over one class
+ * from a fixed start, so each pass is linear and a long line cannot make a match slow.
  */
-const PATTERNS: Shape[] = [
+const SHAPES: Shape[] = [
   { kind: "a private key", re: /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY(?: BLOCK)?-----/ },
   { kind: "an AWS access key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
   { kind: "a GitHub token", re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{50,}/ },
@@ -59,7 +80,8 @@ const PATTERNS: Shape[] = [
   { kind: "a Twilio key", re: /\bSK[0-9a-f]{32}\b/ },
   { kind: "an Azure key", re: /\b(?:AccountKey|SharedAccessKey)=[A-Za-z0-9+/]{30,}={0,2}/ },
   { kind: "a Shopify token", re: /\bshp(?:at|ss|ca|pa)_[0-9a-fA-F]{32}\b/ },
-  { kind: "a Mailgun key", re: /\bkey-[0-9a-f]{32}\b/ },
+  // `key-` and 32 hex characters is also a cache key or a hash, so the line must speak of a credential.
+  { kind: "a Mailgun key", line: /mailgun|\bapi\b|secret|token|credential|passw|auth/i, re: /\bkey-[0-9a-f]{32}\b/ },
   { kind: "a Telegram bot token", re: /\b\d{8,10}:AA[A-Za-z0-9_-]{33}(?![A-Za-z0-9_-])/ },
   { kind: "a DigitalOcean token", re: /\bdo[opr]_v1_[0-9a-f]{64}\b/ },
   { kind: "a JSON web token", re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
@@ -74,38 +96,43 @@ const PATTERNS: Shape[] = [
   // The value of an authorization header, and of a Bearer or Basic scheme, as /kb:recover masks it.
   {
     kind: "a credential",
-    re: /(?<keep>\b(?:authorization["']?\s*[:=]\s*["']?(?:(?:bearer|basic|token|digest|apikey|bot)[ \t]+)?|(?:bearer|basic)[ \t]+))[A-Za-z0-9._~+/=-]{20,200}/i,
+    re: new RegExp(String.raw`(?<keep>\b(?:${AUTH_HEAD}(?:(?:${AUTH_WORDS})[ \t]+)?|(?:bearer|basic)[ \t]+))[${TOKEN_CHARS}]{20,}`, "i"),
     ok: (m) => looksToken(m[0].slice(m.groups!.keep!.length)),
   },
   // A password given to its name, as in `password: hunter2hunter2`. A word or a slug is prose, so
   // the value needs a digit or a sign. A short value is a joke or an example as often as a secret.
   {
     kind: "a password",
-    re: /(?<keep>(?<![A-Za-z])(?:passw(?:or)?d|pwd|passphrase)["']?\s{0,20}[:=]\s{0,20}["']?)[^\s"'`,;<>()/]{8,200}/i,
+    re: /(?<keep>(?<![A-Za-z])(?:passw(?:or)?d|pwd|passphrase)["']?\s{0,20}[:=]\s{0,20}["']?)[^\s"'`,;<>]{8,}/i,
     ok: (m) => {
       const value = m[0].slice(m.groups!.keep!.length);
-      return !isReference(value) && /[a-z]/i.test(value) && /[\d!@#$%^&*+=?~]/.test(value);
+      return !isReference(value) && !PLACEHOLDER.test(value) && !PATH.test(value) && /[a-z]/i.test(value) && /[\d!@#$%^&*+=?~]/.test(value);
     },
   },
   // A password in a URL, as in scheme://user:password@host. A placeholder such as <password>,
   // ${PASSWORD} or the word "password" is not a secret, so the password must be plain characters.
   // A password that is the user again, as in postgres://postgres:postgres@localhost, is a default.
-  // The user can be empty, as in redis://:password@host. Bounded repeats keep a long line from a slow match.
+  // The user can be empty, as in redis://:password@host. The host of a local or example URL
+  // (localhost, 127.0.0.1, example.com) can have any password: it is a dev setup, not a secret.
+  // The user is bounded, so a line of `x://` with no end is not a slow match.
   {
     kind: URL_PASSWORD,
-    re: /(?<keep>\b[a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,100}:)[A-Za-z0-9._~%!*+-]{1,200}@/i,
+    re: /(?<keep>\b[a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,100}:)[A-Za-z0-9._~%!*+-]+@(?=(?<host>\[[^\]\s]*\]|[^\s/:?#@]*))/i,
     ok: (m) => {
       const keep = m.groups!.keep!;
       const password = m[0].slice(keep.length, -1);
-      return !PLACEHOLDER.test(password) && password !== keep.slice(keep.indexOf("://") + 3, -1);
+      return !PLACEHOLDER.test(password) && password !== keep.slice(keep.indexOf("://") + 3, -1) && !LOCAL_HOST.test(m.groups!.host!);
     },
   },
 ];
 
+/** The shapes, with each pattern also built once as a global regex, so a scan makes no regex per line. */
+const PATTERNS = SHAPES.map((shape) => ({ ...shape, all: new RegExp(shape.re.source, `${shape.re.flags.replace("g", "")}g`) }));
+
 /** Each match of a shape in a line, with `ok` checked. */
-function* matches(line: string, shape: Shape): Generator<RegExpMatchArray> {
+function* matches(line: string, shape: (typeof PATTERNS)[number]): Generator<RegExpMatchArray> {
   if (shape.line && !shape.line.test(line)) return;
-  for (const match of line.matchAll(new RegExp(shape.re.source, `${shape.re.flags.replace("g", "")}g`))) if (!shape.ok || shape.ok(match)) yield match;
+  for (const match of line.matchAll(shape.all)) if (!shape.ok || shape.ok(match)) yield match;
 }
 
 /**
@@ -190,8 +217,8 @@ export function maskKeys(text: string): string {
  * or plain value there is a secret as often as a long random one. These masks are wider than the
  * scan: a note may say `token: abc`, and a command line that says it shows a real token.
  */
-const AUTH_HEADER = /\b(authorization["']?\s*[:=]\s*["']?)((?:(?:bearer|basic|token|digest|negotiate|apikey|bot)[ \t]+)?)([^\s"',;]+)/gi;
-const AUTH_SCHEME = /\b(bearer|basic)([ \t]+)([A-Za-z0-9._~+/=_-]{6,})/gi;
+const AUTH_HEADER = new RegExp(String.raw`\b(${AUTH_HEAD})((?:(?:${AUTH_WORDS})[ \t]+)?)([^\s"',;]+)`, "gi");
+const AUTH_SCHEME = new RegExp(String.raw`\b(bearer|basic)([ \t]+)([${TOKEN_CHARS}]{6,})`, "gi");
 /**
  * A name, then `=` or `:`, or only a space as after a flag (`--token abc`). The name is taken
  * whole and from its first character, so a long run of letters costs one pass. The value comes
@@ -208,7 +235,7 @@ const saysSecret = (name: string) => /(?:secret|token|passw(?:or)?d|pwd|credenti
 const USER_FLAG = /^-(?:u|-(?:[a-z-]+-)?user)$/;
 /** The user and the group of `docker run -u 1000:1000` are no name and password. */
 const NUMBERS = /^\d+:\d+$/;
-/** A password in a URL, of any length. The scan of a note wants 6 characters, and a command has `admin:pw@host`. */
+/** A password in a URL, of any length and for any host: a command has `admin:pw@host`, and what a tool shows is not a note. */
 const URL_USERINFO = /\b([a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,100}:)([^\s/@]+)@/gi;
 /**
  * `-p` with its value glued on is the password of a mysql client and of sshpass. For psql it is
@@ -217,8 +244,8 @@ const URL_USERINFO = /\b([a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,100}:)([^\s/@]+)@
  */
 const GLUED_PASSWORD = /\b((mysql|mariadb|mycli|sshpass|psql|pg_)[\w-]*[^\n|;&]{0,200}?\s-p)(?:"([^"]*)"|'([^']*)'|([^\s"'`|;&-][^\s"'`|;&]*))/gi;
 
-/** A value that names a secret and holds none: a variable, a placeholder, or a mask that is there already. */
-const reference = (value: string) => value === "" || /^[$<{%]/.test(value) || /^(?:process\.env|import\.meta\.env|os\.environ)\b/.test(value);
+/** An empty value, or a reference. A `{` or `[` opens a JSON or a YAML value, which is no scalar. */
+const reference = (value: string) => value === "" || isReference(value) || /^[{[]/.test(value);
 /** One plain word, as in "basic authentication". */
 const plainWord = (value: string) => /^[A-Z]?[a-z]+$/.test(value);
 
