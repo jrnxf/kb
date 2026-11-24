@@ -11,7 +11,7 @@ import { type Served, runningPort, serve } from "../cli/serve.ts";
 import type { Store } from "../cli/store.ts";
 import type { AuditCard, AuditData, AuditNote } from "../cli/wire.ts";
 import { type Pick, changes, choiceForKey, choiceLabel, choices, leaving, steps, stillHidden, summary, toPicks } from "../web/src/lib/audit.ts";
-import { MAIN, putNote, sh, tempDir, tempRepo, tempStore, watchPolicy } from "./helpers.ts";
+import { MAIN, machineConfig, putNote, sh, tempDir, tempRepo, tempStore, watchPolicy } from "./helpers.ts";
 
 const SCOPE = "example.com/team/app";
 const repo = (head = "abc1234"): RepoInfo => ({ scope: SCOPE, root: null, head });
@@ -279,7 +279,7 @@ describe("the global audit", () => {
     const real = join(dir, "AGENTS.md");
     writeFileSync(real, RULES);
     symlinkSync(real, join(dir, "CLAUDE.md"));
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(dir, "CLAUDE.md") }));
+    machineConfig(store, { globalInstructions: join(dir, "CLAUDE.md") });
     sh(store.home, "git", "add", "-A");
     sh(store.home, "git", "commit", "-q", "-m", "global");
     return { store, real, link: join(dir, "CLAUDE.md") };
@@ -349,7 +349,7 @@ describe("the global audit", () => {
   test("a missing instructions file stops Apply before any change", () => {
     const { store } = globalSetup();
     proposeAudit(store, { items: [MOVE] }, GLOBAL);
-    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ globalInstructions: join(tempDir(), "missing.md") }));
+    machineConfig(store, { globalInstructions: join(tempDir(), "missing.md") });
     expect(() => applyAudit(store, "global", { picks: [{ id: "g2", action: "promote" }] })).toThrow("does not exist");
     expect(store.find("g2")!.promoted_to).toBeUndefined();
     expect(readAudit(store, "global")!.result).toBeUndefined();

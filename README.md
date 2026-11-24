@@ -31,7 +31,9 @@ notes, and a note loads when it applies.
     `global` is an index line in a repo, and a brief only outside any repo.
   - The index: one line for each other note, the repo's notes first. A line is the id of the note,
     which is its title in short form, and after `...` the words of the title that the id cut. So a
-    title that states the rule in full reaches every session. A global note with a `cmd`, `stop` or
+    title that states the rule in full reaches every session. The id folds accents (`Ünïcode` gives
+    `unicode`) and leaves out a word with no ASCII form, such as `日本語`, so that line gives the
+    title in full. A title with no ASCII letter or digit gets `note-` and a short hash as its id. A global note with a `cmd`, `stop` or
     `err` trigger gets no line: it loads at its trigger. Open work always keeps its line.
   - A pointer to `kb show` and `kb search`. It counts the global notes that load only at their trigger.
 
@@ -132,9 +134,10 @@ notes, and a note loads when it applies.
 - **A rule goes to an instruction file when the user states it.** The agent starts `/kb:note` on
   its own when the user says "always", "never", "from now on" or corrects it. `kb instructions`
   names the files. A global rule goes into the global file, which `globalInstructions` in
-  `kb.config.json` names (`~/.claude/CLAUDE.md`). kb writes the file at the end of its links, so
-  a dotfiles repo that links it gets the change. A repo rule goes into the repo's `CLAUDE.md` or
-  `AGENTS.md` after you say yes. Nothing is committed for you.
+  `local.json` names (`~/.claude/CLAUDE.md`). kb writes the file at the end of its links, so
+  a dotfiles repo that links it gets the change. A
+  repo rule goes into the repo's `CLAUDE.md` or `AGENTS.md` after you say yes. Nothing is
+  committed for you.
 - **Before `/clear`** you run `/kb:clear`. The agent saves what the session learned,
   updates notes instead of duplicating them, writes stated rules to instruction files, trashes
   finished open work, empties Claude Code's auto memory, and gives a verdict on the notes it got with `kb verdict`.
@@ -302,6 +305,24 @@ notes, and a note loads when it applies.
   .state/log/<YYYY-MM>.jsonl                    # the event log of this machine, 12 months
   .state/triggers.json                          # the table of triggers and anchors that the hooks read
 ```
+
+Two files hold settings. kb writes no default into either one, so a new default of kb reaches you:
+
+- `kb.config.json` syncs to every machine: `budgets`, `holdback`, `decayDays`, `expireDays`,
+  `trashDays` and `autocommit`. Put in only the keys you change.
+- `local.json` stays on its machine: `sync` (true) and `globalInstructions`. Where it has no value,
+  kb reads the key from `kb.config.json`, and where that has none, the default holds. A clone of a
+  store has no `local.json`, so it syncs, and a clone you use for a test needs `"sync": false` in
+  its `local.json`.
+
+An older kb wrote every default into `kb.config.json`, with `sync` and `globalInstructions`. The
+first command that writes copies a valid `sync` or `globalInstructions` value that is not the
+default into `local.json`, once per store (`local.json` then holds `"pinned": true`). A
+`globalInstructions` path that does not exist on this machine stays out. The value stays in
+`kb.config.json`, because a machine that runs an older kb reads it there. For each key, kb takes the
+first valid value from `local.json`, then `kb.config.json`, then the default. If kb wrote the file
+whole, it also drops each key whose value is the default. A value you typed equal to the default
+then follows the default from now on.
 
 ## A note
 
@@ -517,7 +538,7 @@ Report a security problem as `SECURITY.md` says.
 
 ## Install
 
-Requirements: Claude Code 2.1.275 or later, a recent [Bun](https://bun.sh) (tested with 1.4) and git.
+Requirements: Claude Code 2.1.275 or later, [Bun](https://bun.sh) 1.3.14 or later (tested with 1.3 and 1.4) and git.
 The hooks look for Bun in `KB_BUN`, on the PATH, then in `~/.bun/bin`, `~/.local/bin`, the mise and asdf shims and the Homebrew folders. Without Bun, kb is off, and a session start says so in one line.
 There is no build step and no dependency to install: the page of `kb serve` comes built in `web/dist`.
 

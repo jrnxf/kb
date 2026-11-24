@@ -2,7 +2,7 @@
 
 import { inHoldback, oldStart } from "./holdback.ts"; // HOLDBACK
 import { lastActivity } from "./log.ts";
-import { KINDS, localDate, normalizeTitle } from "./note.ts";
+import { KINDS, dropsLetters, localDate, normalizeTitle } from "./note.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
 import { anchorReader, changedAtLoad, missingAnchors } from "./stale.ts";
@@ -99,12 +99,14 @@ export function rank(notes: StoredNote[], active: Map<string, string>): StoredNo
  * says the same thing twice and doubles the cost of the index. For most notes the line is the
  * only thing a session gets, so it must not lose the words that the cut removed: they follow
  * after "...". The full title is added only when the id does not come from it: a rewritten
- * title, or an id with a number suffix. `changed` adds the word to the kind: an anchored file of
- * the note changed after its last check.
+ * title, an id with a number suffix, or a title with a word that has no ASCII form. `changed`
+ * adds the word to the kind: an anchored file of the note changed after its last check.
  */
 export function indexLine(note: StoredNote, changed = false): string {
   const head = `- ${note.id} [${note.kind}${changed ? ", changed" : ""}]`;
   const full = normalizeTitle(note.title);
+  // A word that the id cannot hold, such as 日本語, would be lost, so the title comes in full.
+  if (dropsLetters(note.title)) return `${head} ${note.title}`;
   if (full === note.id) return head;
   if (!full.startsWith(`${note.id}-`)) return `${head} ${note.title}`;
   // The shortest start of the title that gives the id. What follows is the part that was cut.
