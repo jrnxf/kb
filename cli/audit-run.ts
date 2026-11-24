@@ -14,7 +14,7 @@ import { nowIso } from "./write.ts";
 
 /** Set in the agent's environment. There `kb audit` only reports, so an agent never starts another one. */
 export const RUN_ENV = "KB_AUDIT_RUN";
-/** A command to run in place of `claude`, for tests. Its arguments are the prompt only. */
+/** A command to run in place of `claude`, for tests. It gets the arguments `claude` would get. */
 export const AGENT_ENV = "KB_AUDIT_AGENT";
 
 const RUNS = "audit-runs.json";
@@ -87,20 +87,51 @@ export function auditPrompt(): string {
 }
 
 /**
- * What the headless agent may do with no question: kb, and reading the code. The skill has it
- * write the proposal to a file in its scratchpad directory. A write there needs no permission, so
- * no Write is allowed here: the agent can change no file of the repo.
+ * What the headless agent may do with no question: the kb commands that skills/audit/SKILL.md runs,
+ * and reading the code. No kb delete, restore, serve, sync or empty-trash. The skill has it write
+ * the proposal to a file in its scratchpad directory. A write there needs no permission, so no
+ * Write is allowed here: the agent can change no file of the repo.
  */
-export const AGENT_TOOLS = ["Bash(kb *)", "Read", "Grep", "Glob"];
+export const AGENT_TOOLS = [
+  "Bash(kb stale *)",
+  "Bash(kb budget *)",
+  "Bash(kb show *)",
+  "Bash(kb list *)",
+  "Bash(kb search *)",
+  "Bash(kb instructions *)",
+  "Bash(kb audit status *)",
+  "Bash(kb audit propose *)",
+  "Bash(kb add *)",
+  "Read",
+  "Grep",
+  "Glob",
+];
 
-/** The agent command. `claude -p` with only what the skill needs. */
-function agentCommand(prompt: string): string[] {
+/**
+ * Read, Grep and Glob reach the working directory only: the repo, or the empty folder of a global
+ * audit. The agent reads the notes and the instruction files through kb.
+ */
+export const AGENT_SETTINGS = { permissions: { blockReadsOutsideWorkingDirectories: true } };
+
+/** The arguments of `claude`: print mode with only what the skill needs. */
+export function agentArgs(prompt: string, model: string): string[] {
+  // A repo's own hooks can hang a headless run, so the agent loads the user's settings only.
+  return ["-p", prompt, "--model", model, "--setting-sources", "user", "--settings", JSON.stringify(AGENT_SETTINGS), "--allowedTools", ...AGENT_TOOLS];
+}
+
+/** The agent command: `claude`, or the stand-in of a test, with the arguments of agentArgs. */
+function agentCommand(prompt: string, model: string): string[] {
+  const args = agentArgs(prompt, model);
   const fake = process.env[AGENT_ENV];
-  if (fake) return [fake, prompt];
+  if (fake) return [fake, ...args];
   const claude = Bun.which("claude");
   if (!claude) throw new KbError("kb audit starts the audit with the claude CLI, and it is not on PATH. Run /kb:audit in a Claude Code session instead.");
-  // A repo's own hooks can hang a headless run, so the agent loads the user's settings only.
-  return [claude, "-p", prompt, "--model", "opus", "--setting-sources", "user", "--allowedTools", ...AGENT_TOOLS];
+  return [claude, ...args];
+}
+
+/** What a user reads when an audit starts: it is a headless Claude session, and it costs like one. */
+export function costNotice(store: Store): string {
+  return `It runs a headless Claude session on ${store.config().auditModel}, which counts against your Claude plan or API bill like any session. Set auditModel in kb.config.json to change the model.`;
 }
 
 /**
@@ -123,7 +154,7 @@ export function startRun(store: Store, scope: string, root?: string): AuditRunSt
   const exit = `${log}.exit`;
   writeAtomic(log, "");
   rmSync(exit, { force: true });
-  const [command, ...args] = agentCommand(auditPrompt());
+  const [command, ...args] = agentCommand(auditPrompt(), store.config().auditModel);
   const out = openSync(log, "a");
   // The shell writes the exit code when the agent ends, so a later `kb audit` can tell a failure
   // from an agent that found nothing to change.

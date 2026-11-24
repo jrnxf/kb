@@ -264,7 +264,7 @@ export function App() {
     mutationFn: api.startAudit,
     onSuccess: (run) => {
       auditing.current = run.scope;
-      toast(`An agent audits ${scopeName(run.scope)}. This takes a few minutes.`, { id: "kb" });
+      toast(`An agent audits ${scopeName(run.scope)}. It is a headless Claude session, and it counts against your Claude usage. This takes a few minutes.`, { id: "kb" });
     },
     onError: toastError,
     onSettled: () => reloadPage(),

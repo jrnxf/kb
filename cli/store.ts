@@ -23,6 +23,8 @@ export interface Config {
   sync: boolean;
   /** The user's global instructions file. A global audit moves rules into it. A leading ~ is the home folder. */
   globalInstructions: string;
+  /** The model of the headless agent that `kb audit` and the page's Audit button start. */
+  auditModel: string;
 }
 
 export interface Local {
@@ -63,6 +65,7 @@ const DEFAULT_CONFIG: Config = {
   autocommit: true,
   sync: true,
   globalInstructions: "~/.claude/CLAUDE.md",
+  auditModel: "opus",
 };
 
 const GITIGNORE = ["INDEX.md", "index.html", "local.json", ".sync-*", "*.tmp-*", ".state/"];
@@ -142,6 +145,8 @@ export class Store {
       trashDays: days(raw.trashDays, DEFAULT_CONFIG.trashDays),
       decayDays: days(raw.decayDays, DEFAULT_CONFIG.decayDays),
       expireDays: days(raw.expireDays, DEFAULT_CONFIG.expireDays),
+      // The model goes on the claude command line, so a value that could read as a flag is a mistake.
+      auditModel: typeof raw.auditModel === "string" && /^[A-Za-z0-9][\w.:[\]-]*$/.test(raw.auditModel) ? raw.auditModel : DEFAULT_CONFIG.auditModel,
     };
   }
 
