@@ -1,6 +1,6 @@
 // The store on disk: paths, config, notes, the usage counters of older versions, generated files and git.
 
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -117,9 +117,6 @@ const LOCAL_LOCK_STALE_MS = 10_000;
 // `index.html` and `.sync-*` are files of an older kb in the store's top folder. They stay ignored.
 const GITIGNORE = ["INDEX.md", "index.html", "local.json", ".sync-*", "*.tmp-*", ".state/"];
 
-/** Files of the store itself, which ensure() writes. Each commit takes them when they changed. */
-const STORE_FILES = [".gitignore", "kb.config.json"];
-
 /** Files that an older kb kept in the store's top folder, and their place in .state/ now. */
 const MOVED_TO_STATE: Record<string, string> = { ".sync-error": "sync-error", ".sync-last": "sync-last" };
 
@@ -162,28 +159,106 @@ export function writeAtomic(path: string, content: string, mode: number = FILE_M
   renameSync(temp, path);
 }
 
-/** A lock older than this is left over from a process that died. */
-const LOCK_STALE_MS = 30_000;
+export interface LockOptions {
+  /** How long to wait for a lock that another process holds. */
+  waitMs?: number;
+  /** A lock whose holder is alive but older than this is stale too: a hung holder must not block for ever. */
+  staleMs?: number;
+}
+
+const NO_OWNER_GRACE_MS = 2000;
+
+/** True when a process with this pid runs. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * The owner text of a lock that has no live holder, or null when the lock is held (or gone).
+ * The holder writes "pid token" in the file `owner` of the lock folder. A lock is stale when its
+ * pid is gone, or when it is older than `staleMs`. A lock with no owner file yet is stale after a
+ * short grace time, which covers a holder that died between mkdir and the write.
+ */
+function staleOwner(path: string, staleMs: number): string | null {
+  try {
+    const file = join(path, "owner");
+    let owner: string;
+    try {
+      owner = readFileSync(file, "utf8");
+    } catch {
+      return Date.now() - statSync(path).mtimeMs > Math.min(NO_OWNER_GRACE_MS, staleMs) ? "" : null;
+    }
+    const pid = Number.parseInt(owner, 10);
+    if (!Number.isInteger(pid) || pid <= 0 || !alive(pid) || Date.now() - statSync(file).mtimeMs > staleMs) return owner;
+    return null;
+  } catch {
+    return null; // the holder released it between two calls
+  }
+}
+
+/**
+ * Take over a stale lock. The rename is atomic, so only one waiter wins it. The winner checks that
+ * it moved the lock it judged stale: a lock that a new holder made in between goes back.
+ */
+function takeOver(path: string, owner: string): void {
+  const moved = `${path}.stale-${process.pid}-${randomBytes(4).toString("hex")}`;
+  try {
+    renameSync(path, moved);
+  } catch {
+    return; // another waiter won, or the holder released it
+  }
+  let found = "";
+  try {
+    found = readFileSync(join(moved, "owner"), "utf8");
+  } catch {
+    // no owner file: the lock that we judged had none
+  }
+  if (found !== owner) {
+    try {
+      renameSync(moved, path);
+      return;
+    } catch {
+      // a third process holds the lock now: drop the copy
+    }
+  }
+  rmSync(moved, { recursive: true, force: true });
+}
 
 /**
  * Run `fn` while this process holds the lock folder `path`. Another process waits for it, up to
- * `waitMs`. Returns undefined when the lock stays taken.
+ * `waitMs` (0 tries once). Returns undefined when the lock stays taken. A lock whose holder died
+ * goes to the first waiter that renames it away. The holder removes only its own lock. Throws when the
+ * lock folder cannot be made (a read-only store): a caller that must not throw catches it.
  */
-export function withLock<T>(path: string, fn: () => T, waitMs = 10_000): T | undefined {
+export function withLock<T>(path: string, fn: () => T, { waitMs = 10_000, staleMs = 300_000 }: LockOptions = {}): T | undefined {
+  const token = `${process.pid} ${randomBytes(8).toString("hex")}`;
   const until = Date.now() + waitMs;
   for (;;) {
     try {
       mkdirSync(path, { mode: DIR_MODE });
+      try {
+        writeFileSync(join(path, "owner"), token, { mode: FILE_MODE });
+      } catch (error) {
+        rmSync(path, { recursive: true, force: true });
+        throw error;
+      }
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") mkdirSync(dirname(path), { recursive: true, mode: DIR_MODE });
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") mkdirSync(dirname(path), { recursive: true, mode: DIR_MODE });
+      else if (code !== "EEXIST") throw error;
       else {
-        try {
-          if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) rmSync(path, { recursive: true, force: true });
-        } catch {
-          // the holder removed it: try again
+        const owner = staleOwner(path, staleMs);
+        if (owner !== null) {
+          takeOver(path, owner);
+          continue;
         }
-        if (Date.now() > until) return undefined;
+        if (Date.now() >= until) return undefined;
         Bun.sleepSync(10 + Math.random() * 20);
       }
     }
@@ -191,7 +266,11 @@ export function withLock<T>(path: string, fn: () => T, waitMs = 10_000): T | und
   try {
     return fn();
   } finally {
-    rmSync(path, { recursive: true, force: true });
+    try {
+      if (readFileSync(join(path, "owner"), "utf8") === token) rmSync(path, { recursive: true, force: true });
+    } catch {
+      // another process took the lock over: it is not ours to remove
+    }
   }
 }
 
@@ -227,22 +306,49 @@ export class Store {
     const fresh = !existsSync(join(this.home, "notes")) && !this.isGitRepo();
     mkdirSync(this.home, { recursive: true, mode: DIR_MODE });
     for (const dir of ["notes", "trash", ".state"]) mkdirSync(join(this.home, dir), { recursive: true, mode: DIR_MODE });
-    // A store made by an older version can be readable by every user of the machine.
-    for (const dir of [this.home, join(this.home, ".state")]) {
-      try {
-        if ((statSync(dir).mode & 0o077) !== 0) chmodSync(dir, DIR_MODE);
-      } catch {
-        // a store on a file system with no modes still works
-      }
-    }
+    this.closeOldStore();
     this.moveToState();
     this.tidyConfig();
     const ignorePath = join(this.home, ".gitignore");
     // Add lines that a store made by an older version lacks.
     const have = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
     const missing = GITIGNORE.filter((line) => !have.split("\n").includes(line));
-    if (missing.length > 0) writeAtomic(ignorePath, `${have}${have && !have.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
+    if (missing.length > 0) {
+      writeAtomic(ignorePath, `${have}${have && !have.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
+      this.track(ignorePath);
+    }
     if (fresh) git(this.home, "init", "-q");
+  }
+
+  /**
+   * A store made by an older version can be readable by every user of the machine. Once per store
+   * (the file .state/private marks it), close the root, the notes, the trash and the state: folders
+   * to 0700 and files to 0600. The .git folder stays as git made it, because the root is closed.
+   */
+  private closeOldStore(): void {
+    const mark = this.statePath("private");
+    try {
+      if (existsSync(mark) && (statSync(this.home).mode & 0o077) === 0) return;
+    } catch {
+      return;
+    }
+    const close = (path: string): void => {
+      try {
+        const info = lstatSync(path);
+        if (info.isSymbolicLink()) return;
+        const want = info.isDirectory() ? DIR_MODE : FILE_MODE;
+        if ((info.mode & 0o777) !== want) chmodSync(path, want);
+        if (info.isDirectory()) for (const entry of readdirSync(path)) if (entry !== ".git") close(join(path, entry));
+      } catch {
+        // a store on a file system with no modes still works
+      }
+    };
+    close(this.home);
+    try {
+      writeAtomic(mark, "");
+    } catch {
+      // the next write tries again
+    }
   }
 
   /** Move the files that an older kb kept in the store's top folder into .state/. */
@@ -287,7 +393,10 @@ export class Store {
     this.pinMachineKeys(raw);
     if (!FIRST_KEYS.every((key) => key in raw)) return;
     const kept = withoutDefaults(raw);
-    if (!same(kept, raw)) writeAtomic(this.configPath(), `${JSON.stringify(kept, null, 2)}\n`);
+    if (!same(kept, raw)) {
+      writeAtomic(this.configPath(), `${JSON.stringify(kept, null, 2)}\n`);
+      this.track(this.configPath());
+    }
   }
 
   /**
@@ -363,30 +472,21 @@ export class Store {
    * without it, because a hook must never fail over a convenience.
    */
   updateLocal(change: (local: Local) => void): Local {
-    const lock = this.statePath("local-lock");
-    mkdirSync(dirname(lock), { recursive: true });
-    let held = false;
-    for (const start = Date.now(); !held && Date.now() - start < LOCAL_LOCK_WAIT_MS; ) {
-      try {
-        mkdirSync(lock);
-        held = true;
-      } catch {
-        try {
-          if (Date.now() - statSync(lock).mtimeMs > LOCAL_LOCK_STALE_MS) rmSync(lock, { recursive: true, force: true });
-          else Bun.sleepSync(10);
-        } catch {
-          // the holder released it between the two calls: try again at once
-        }
-      }
-    }
-    try {
+    let ran: { local: Local } | undefined;
+    const run = () => {
       const local = this.local();
       change(local);
       this.saveLocal(local);
+      ran = { local };
       return local;
-    } finally {
-      if (held) rmSync(lock, { recursive: true, force: true });
+    };
+    try {
+      withLock(this.statePath("local-lock"), run, { waitMs: LOCAL_LOCK_WAIT_MS, staleMs: LOCAL_LOCK_STALE_MS });
+    } catch (error) {
+      if (ran) throw error;
     }
+    // A lock that stays taken, or cannot be made, does not stop the change.
+    return (ran as { local: Local } | undefined)?.local ?? run();
   }
 
   /** The id of this machine, made on first use. It names the file that only this machine writes: its roll-up in activity/. */
@@ -525,27 +625,44 @@ export class Store {
    * was made.
    */
   commit(message: string, options: { all?: boolean } = {}): boolean {
-    // The store's own files go with any write: ensure() may have changed them in an earlier command.
-    const touched = [...this.touched, ...STORE_FILES];
-    this.touched.clear();
-    if (!this.isGitRepo() || !this.config().autocommit) return false;
-    return this.withGitLock(() => {
-      // Only the paths that changed: a path that was made and removed again is not a pathspec git knows.
-      const status = gitRaw(this.home, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--", ...(options.all ? ["."] : touched.map((path) => `:(literal)${path}`)));
-      if (!status.ok) return false;
-      const changed = status.out.split("\0").filter(Boolean).map((entry) => entry.slice(3));
-      if (changed.length === 0) return false;
-      const paths = changed.map((path) => `:(literal)${path}`);
-      if (!git(this.home, "add", "-A", "--", ...paths).ok) return false;
-      // A machine with no git identity still keeps its history.
-      const who = git(this.home, "config", "user.email").out ? [] : ["-c", "user.name=kb", "-c", "user.email=kb@localhost"];
-      return git(this.home, ...who, "commit", "-q", "-m", message, "--", ...paths).ok;
-    }) ?? false;
+    if (!this.isGitRepo() || !this.config().autocommit) {
+      this.touched.clear();
+      return false;
+    }
+    // A path leaves the set only after a commit that took it, so a lock timeout keeps it for the next one.
+    const touched = [...this.touched];
+    try {
+      return (
+        this.withGitLock(() => {
+          // isGitRepo() looks for .git in the store itself, so the store is the repo root and git's paths are relative to it.
+          // Only the paths that changed: a path that was made and removed again is not a pathspec git knows.
+          const status = gitRaw(this.home, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--", ...(options.all ? ["."] : touched.map((path) => `:(literal)${path}`)));
+          if (!status.ok) return false;
+          const changed = status.out.split("\0").filter(Boolean).map((entry) => entry.slice(3));
+          if (changed.length > 0) {
+            const paths = changed.map((path) => `:(literal)${path}`);
+            if (!git(this.home, "add", "-A", "--", ...paths).ok) return false;
+            // A machine with no git identity still keeps its history.
+            const who = git(this.home, "config", "user.email").out ? [] : ["-c", "user.name=kb", "-c", "user.email=kb@localhost"];
+            if (!git(this.home, ...who, "commit", "-q", "-m", message, "--", ...paths).ok) return false;
+          }
+          for (const path of touched) this.touched.delete(path);
+          return changed.length > 0;
+        }) ?? false
+      );
+    } catch (error) {
+      // The note is saved already: a store that git cannot lock must not fail the write.
+      process.stderr.write(`kb: warning: could not commit to the store's git history (${(error as Error).message})\n`);
+      return false;
+    }
   }
+
+  /** How long a commit waits for the git lock. A test sets it low. */
+  gitLockWaitMs = 10_000;
 
   /** Run `fn` while no other kb process changes the store's git index. */
   withGitLock<T>(fn: () => T): T | undefined {
-    return withLock(this.statePath("git-lock"), fn);
+    return withLock(this.statePath("git-lock"), fn, { waitMs: this.gitLockWaitMs, staleMs: 600_000 });
   }
 
   syncErrorPath(): string {

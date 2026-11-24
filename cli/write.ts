@@ -275,6 +275,7 @@ export function tidyTrash(store: Store, now = nowIso()): string[] {
     if (!note.trashed_at) {
       const { path, trashed: _trashed, ...rest } = note;
       writeAtomic(path, serializeNote({ ...rest, trashed_at: now }));
+      store.track(path);
       stamped++;
     } else if (clearsAt(note.trashed_at, days) <= now) expired.push(note);
   }

@@ -1,17 +1,18 @@
 // Sync between machines through the store's git remote. Never blocks a session.
 
-import { mkdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { rollUp } from "./log.ts";
 import { clearStaleCache } from "./stale.ts";
-import type { Store } from "./store.ts";
+import { type Store, withLock } from "./store.ts";
 
 export interface SyncResult {
   status: "ok" | "no-remote" | "busy" | "conflict" | "error";
   detail: string;
 }
 
-const LOCK_STALE_MS = 120_000;
+/** A sync can run several git calls of 30 seconds each, so a live holder keeps its lock a long time. */
+const LOCK_STALE_MS = 600_000;
 
 function run(store: Store, ...args: string[]): { ok: boolean; out: string; err: string } {
   const env = {
@@ -62,14 +63,15 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
   // A fresh clone of an empty remote has no layout yet. Sync is a write, so create it.
   store.ensure();
 
-  const lock = store.statePath("sync-lock");
-  if (Date.now() - mtime(lock) > LOCK_STALE_MS) rmSync(lock, { recursive: true, force: true });
   try {
-    mkdirSync(lock);
-  } catch {
-    return { status: "busy", detail: "another sync is in progress" };
+    const result = withLock(store.statePath("sync-lock"), () => syncLocked(store, now), { waitMs: 0, staleMs: LOCK_STALE_MS });
+    return result ?? { status: "busy", detail: "another sync is in progress" };
+  } catch (error) {
+    return { status: "error", detail: `kb cannot lock the store: ${(error as Error).message}` };
   }
+}
 
+function syncLocked(store: Store, now: Date): SyncResult {
   try {
     rollUp(store, now);
     store.commit("kb: sync", { all: true });
@@ -92,7 +94,9 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
         const result = run(store, "rebase", "-q", "--autostash", `${remote}/${branch}`);
         if (!result.ok) run(store, "rebase", "--abort");
         return result;
-      }) ?? { ok: false };
+      });
+      // A write that holds the lock for a long time is not a conflict: nothing is wrong, and the next sync tries again.
+      if (!rebase) return { status: "busy", detail: "a write holds the store's git lock" };
       if (!rebase.ok) {
         return fail("conflict", "two machines changed the same note. Local notes are kept.");
       }
@@ -111,7 +115,6 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
     return { status: "ok", detail: "the store matches the remote" };
   } finally {
     touch(store.statePath("sync-last"));
-    rmSync(lock, { recursive: true, force: true });
   }
 }
 
