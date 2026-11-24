@@ -572,7 +572,8 @@ There is no build step and no dependency to install: the page of `kb serve` come
 kb installs from the `jrnxf` marketplace ([jrnxf/plugins](https://github.com/jrnxf/plugins)). In Claude Code:
 
 ```bash
-/plugin install kb --marketplace jrnxf/plugins
+/plugin marketplace add jrnxf/plugins
+/plugin install kb@jrnxf
 ```
 
 Or in a terminal:
