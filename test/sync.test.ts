@@ -212,8 +212,8 @@ describe("kb sync", () => {
     expect(result.code).toBe(1);
     expect(result.json).toMatchObject({ ok: false, status: "conflict", files: ["kb.config.json"] });
     expect(result.json.detail).toContain("two machines changed kb.config.json, and kb cannot merge it.");
-    // The home folder of the tests is the temp folder, so the store's path starts with ~.
-    expect(result.json.detail).toContain(`\`git -C ~${b.home.slice(process.env.HOME!.length)} rebase origin/main\``);
+    // The store is outside the home folder of the tests, so its path stays whole.
+    expect(result.json.detail).toContain(`git -C ${b.home} rebase origin/main`);
     expect(existsSync(join(b.home, ".git", "rebase-merge"))).toBe(false);
     expect(sh(b.home, "git", "status", "--porcelain")).toBe("");
     expect(b.find("only-b")).toBeDefined();
