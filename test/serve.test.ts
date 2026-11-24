@@ -88,7 +88,7 @@ describe("kb serve", () => {
     } finally {
       await browser.close();
     }
-  });
+  }, 20_000);
 
   test("serves no file from outside the built page, and no other path", async () => {
     start(tempStore());

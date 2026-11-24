@@ -665,9 +665,10 @@ describe("the deck", () => {
 describe("the audit page in a browser", () => {
   let browser: Browser;
   let served: Served | undefined;
+  // Chromium can take more than 5 s to start on a busy machine.
   beforeAll(async () => {
     browser = await chromium.launch();
-  });
+  }, 20_000);
   afterEach(() => served?.stop());
   afterAll(async () => {
     await browser?.close();

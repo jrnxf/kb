@@ -8,9 +8,10 @@ import { putNote, tempStore, watchPolicy } from "./helpers.ts";
 // shows no error anywhere, so only a browser finds it.
 
 let browser: Browser;
+// Chromium can take more than 5 s to start on a busy machine.
 beforeAll(async () => {
   browser = await chromium.launch();
-});
+}, 20_000);
 afterAll(async () => {
   await browser?.close();
 });
@@ -51,7 +52,7 @@ describe("keys on a wide screen", () => {
   let page: Page, store: Store, served: Served;
   beforeEach(async () => {
     ({ page, store, served } = await open(1280));
-  });
+  }, 20_000);
   afterEach(async () => {
     const policy = await blocked();
     served.stop();
@@ -189,7 +190,7 @@ describe("keys on a phone", () => {
     ({ page, store, served } = await open(390));
     await page.keyboard.press("Enter");
     await drawer().waitFor();
-  });
+  }, 20_000);
   afterEach(async () => {
     const policy = await blocked();
     served.stop();

@@ -32,9 +32,10 @@ async function until<T>(value: () => Promise<T>, check: (v: T) => boolean, what:
 }
 
 let browser: Browser;
+// Chromium can take more than 5 s to start on a busy machine.
 beforeAll(async () => {
   browser = await chromium.launch();
-});
+}, 20_000);
 afterAll(async () => {
   await browser?.close();
 });
