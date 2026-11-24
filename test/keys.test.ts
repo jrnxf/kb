@@ -8,10 +8,10 @@ import { putNote, tempStore, watchPolicy } from "./helpers.ts";
 // shows no error anywhere, so only a browser finds it.
 
 let browser: Browser;
-// Chromium can take more than 5 s to start on a busy machine.
+// A cold browser start can take longer than the 5 s that a hook gets by default.
 beforeAll(async () => {
   browser = await chromium.launch();
-}, 20_000);
+}, 30_000);
 afterAll(async () => {
   await browser?.close();
 });
@@ -137,7 +137,7 @@ describe("keys on a wide screen", () => {
     await page.locator(`[data-rail="scope:${web}"]`).waitFor({ state: "detached" });
     expect(store.notes().map((n) => n.id).sort()).toEqual(["one", "three", "two"]);
     await page.getByText("Moved the project to the trash", { exact: true }).waitFor();
-    await page.keyboard.press("Meta+z");
+    await page.keyboard.press("ControlOrMeta+z");
     await until(() => store.notes().filter((n) => n.scope === web).length === 2, "the project is back");
     await until(async () => (await page.locator(`[data-rail="scope:${web}"]`).getAttribute("aria-pressed")) === "true", "the project is picked again");
   });
@@ -176,7 +176,7 @@ describe("keys on a wide screen", () => {
         for (const row of document.querySelectorAll("[data-id][aria-current=true]")) seen.push(row.getAttribute("data-id")!);
       }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-current"] });
     });
-    await page.keyboard.press("Meta+z");
+    await page.keyboard.press("ControlOrMeta+z");
     await until(async () => (await selected(page)) === id, "the restored note is selected");
     const seen = await page.evaluate(() => (window as unknown as { seen: string[] }).seen);
     expect(seen.filter((row) => row !== id && row !== before)).toEqual([]);

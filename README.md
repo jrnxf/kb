@@ -165,6 +165,18 @@ notes, and a note loads when it applies.
   body or the anchors. A session start also checks the
   anchors of the repo's notes on disk, and tells the agent which notes name a file or a symbol that
   is gone.
+- **A note on a changed file says so when it loads.** `kb stale` records which notes name a file
+  that changed after their last check. From then on such a note has the word `changed` in its
+  index line, and the line `changed since the last check` with the paths when a command, an error
+  or a file loads it. `kb show` runs the check itself, in the repo of the note. The mark comes with
+  what to do: read the code, then `kb verify <id>` when the note still holds, an update with
+  `kb add` when it does not, or `kb verdict wrong <id>`. So the session that uses a note checks it,
+  and the audit is the backstop. A check gives the note the commit of HEAD, which ends the mark.
+  The record is as new as the last `kb stale`: a session start runs it in the background when HEAD
+  moved, so the index of the first session after a pull can lack the mark, and the loads in that
+  session have it. The compare is by content, so a note checked on a branch that was squash-merged or
+  rebased is compared too, while the clone still has that commit. A note with no anchor gets no
+  mark, so `kb add` warns when a repo note has none.
   `kb stale` and `/kb:audit` cover one scope: the repo's notes in a repo, the global notes outside
   any repo. `/kb:audit` reads the code for each candidate, checks the budget, and proposes keep, rewrite,
   merge, shorten or trash with `kb audit propose`. Each audit also moves rules to the
@@ -313,8 +325,9 @@ Pass `--project <name>`. A wipe with no project takes ten minutes to rebuild.
 
 kb also writes `promoted_to` (the instruction file a rule moved to), `supersedes` (the notes a merge
 took in) and `trashed_at`. `kb add` answers with `warnings`, and still saves the note, when a gotcha
-or a how-to has no trigger and no anchor, when a session in a repo saves open work with the scope
-`global`, and when a body is over 700 characters.
+or a how-to has no trigger and no anchor, when a repo note that is not open work has no anchor,
+when a session in a repo saves open work with the scope `global`, and when a body is over 700
+characters.
 
 ## Hooks
 
@@ -522,6 +535,9 @@ bun test && bun run test:mod && bun run typecheck && claude plugin validate .
 
 `test/keys.test.ts` presses the page's keys in a headless Chromium, at desktop and phone width.
 The `playwright install` step downloads that browser once.
+
+The `test` workflow in `.github/workflows/test.yml` runs these checks on each pull request and each push to `main`.
+It also rebuilds `web/` and fails when the committed `web/dist` differs.
 
 To try a change on a store that looks like months of use (about 165 invented notes, 9 repos):
 

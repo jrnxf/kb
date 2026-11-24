@@ -3,6 +3,7 @@
 
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
+import { covers } from "./by-path.ts";
 import { NOT_NEEDED_SESSIONS, judgments, lastActivity } from "./log.ts";
 import { neighborCheck } from "./neighbors.ts";
 import { resolveRepo } from "./scope.ts";
@@ -17,6 +18,9 @@ export interface StaleCandidate {
   scope: string;
   reason: StaleReason;
   detail: string;
+  /** For anchor-changed only: the commit of the last check, and the anchored paths that changed after it. */
+  commit?: string;
+  paths?: string[];
 }
 
 export interface StaleResult {
@@ -77,27 +81,56 @@ export function missingAnchors(note: Pick<StoredNote, "anchors">, root: string, 
   return missing;
 }
 
+/**
+ * The files that differ between a commit and HEAD. null when the clone does not have the commit.
+ * The compare is by content, so the commit need not be in the history of HEAD: a note checked on a
+ * branch that was squash-merged, or rebased, is compared with the files it was checked against.
+ */
+function filesChangedSince(root: string, commit: string): Set<string> | null {
+  const known = git(root, "cat-file", "-e", `${commit}^{commit}`).ok;
+  const diff = known ? git(root, "diff", "--name-only", commit, "HEAD") : null;
+  return diff?.ok ? new Set(diff.out.split("\n").filter(Boolean)) : null;
+}
+
+/**
+ * The anchored paths of a note that are in `changed`, each once. A path#symbol anchor counts as
+ * changed when its file changed. An anchor in `gone` is missing, which says more, so it is not
+ * counted twice. Another anchor on the same file still counts.
+ */
+function movedAnchors(note: Pick<StoredNote, "anchors">, changed: Set<string>, gone: Set<string> = new Set()): string[] {
+  const moved = note.anchors
+    .filter((anchor) => !gone.has(anchor))
+    .map((anchor) => splitAnchor(anchor).path)
+    .filter((path) => [...changed].some((file) => file === path || file.startsWith(`${path.replace(/\/+$/, "")}/`)));
+  return [...new Set(moved)];
+}
+
+/**
+ * The anchored paths of one note that changed after its last check, in the checkout at `root`. It
+ * runs git, so it is for a command (`kb show`), not for a hook. Empty when nothing changed, and
+ * when the note has no commit or the clone does not have its commit.
+ */
+export function changedSinceCheck(note: Pick<StoredNote, "anchors" | "verified_at_commit">, root: string): string[] {
+  if (!note.verified_at_commit || note.anchors.length === 0) return [];
+  const changed = filesChangedSince(root, note.verified_at_commit);
+  return changed ? movedAnchors(note, changed, new Set(missingAnchors(note, root).map((m) => m.anchor))) : [];
+}
+
+type Found = Pick<StaleCandidate, "reason" | "detail" | "commit" | "paths">;
+
 /** Anchor checks need the repo on disk, so they cover only notes of the repo at `repoPath`. */
-function anchorCandidates(note: StoredNote, root: string, changedSince: (commit: string) => Set<string> | null, read: AnchorReader): { reason: StaleReason; detail: string }[] {
-  const found: { reason: StaleReason; detail: string }[] = [];
+function anchorCandidates(note: StoredNote, root: string, changedSince: (commit: string) => Set<string> | null, read: AnchorReader): Found[] {
+  const found: Found[] = [];
   const commit = note.verified_at_commit;
   const changed = commit ? changedSince(commit) : null;
   if (commit && changed === null) {
-    found.push({ reason: "commit-unknown", detail: `commit ${commit} is not in the history of HEAD (a rebase, or a shallow clone)` });
+    found.push({ reason: "commit-unknown", detail: `commit ${commit} is not in this clone (a shallow clone, or a commit of a branch that was never fetched or is deleted)` });
   }
 
   const missing = missingAnchors(note, root, read);
-  // A path#symbol anchor counts as changed when its file changed. A missing anchor says more, so
-  // it is not counted twice. Another anchor on the same file still counts.
-  const gone = new Set(missing.map((m) => m.anchor));
-  const moved = changed
-    ? note.anchors
-        .filter((anchor) => !gone.has(anchor))
-        .map((anchor) => splitAnchor(anchor).path)
-        .filter((path) => [...changed].some((file) => file === path || file.startsWith(`${path.replace(/\/+$/, "")}/`)))
-    : [];
+  const moved = changed ? movedAnchors(note, changed, new Set(missing.map((m) => m.anchor))) : [];
   if (missing.length > 0) found.push({ reason: "anchor-missing", detail: missing.map((m) => m.detail).join("; ") });
-  if (moved.length > 0) found.push({ reason: "anchor-changed", detail: `changed since ${commit}: ${[...new Set(moved)].join(", ")}` });
+  if (commit && moved.length > 0) found.push({ reason: "anchor-changed", detail: `changed since ${commit}: ${moved.join(", ")}`, commit, paths: moved });
   return found;
 }
 
@@ -111,17 +144,12 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
   const scope = repo.scope ?? "global";
   const all = store.notes();
   const notes = all.filter((n) => !n.promoted_to && n.scope === scope);
-  const add = (note: StoredNote, reason: StaleReason, detail: string) => result.candidates.push({ id: note.id, title: note.title, scope: note.scope, reason, detail });
+  const add = (note: StoredNote, reason: StaleReason, detail: string, more: Pick<StaleCandidate, "commit" | "paths"> = {}) => result.candidates.push({ id: note.id, title: note.title, scope: note.scope, reason, detail, ...more });
 
   // One git call per distinct commit, not one per anchor.
   const diffs = new Map<string, Set<string> | null>();
   const changedSince = (commit: string): Set<string> | null => {
-    if (!diffs.has(commit)) {
-      const root = repo.root!;
-      const known = git(root, "merge-base", "--is-ancestor", commit, "HEAD").ok;
-      const diff = known ? git(root, "diff", "--name-only", commit, "HEAD") : null;
-      diffs.set(commit, diff?.ok ? new Set(diff.out.split("\n").filter(Boolean)) : null);
-    }
+    if (!diffs.has(commit)) diffs.set(commit, filesChangedSince(repo.root!, commit));
     return diffs.get(commit)!;
   };
 
@@ -133,7 +161,7 @@ export function findStale(store: Store, repoPath: string, now: Date = new Date()
   const ago = (n: number) => (n <= 0 ? "today" : `${n} ${n === 1 ? "day" : "days"} ago`);
   for (const note of notes) {
     if (repo.root && repo.head && note.scope === repo.scope) {
-      for (const found of anchorCandidates(note, repo.root, changedSince, read)) add(note, found.reason, found.detail);
+      for (const { reason, detail, ...more } of anchorCandidates(note, repo.root, changedSince, read)) add(note, reason, detail, more);
     }
     // Expired: the note had no activity and nobody checked it for expireDays. It says more than
     // decayed, so a note gets one of the two.
@@ -196,12 +224,14 @@ function readCache(store: Store): Record<string, CacheEntry> {
   }
 }
 
+/** Save what `kb stale` found for the hooks: the count for a session start, and the notes on changed files for each load of a note. */
 export function saveStaleCount(store: Store, result: StaleResult, now: Date = new Date()): void {
   if (!store.exists()) return;
   store.ensure(); // keeps .state/ out of git in a store made by an older version
   const cache = readCache(store);
   cache[result.scope ?? "global"] = { head: result.head, day: today(now), notes: result.notes };
   writeAtomic(cachePath(store), JSON.stringify(cache));
+  saveChanged(store, result);
 }
 
 /** The cached count for a scope. `fresh` is false when HEAD or the day changed since it was computed. */
@@ -214,4 +244,65 @@ export function cachedStaleCount(store: Store, scope: string | null, head: strin
 /** Every write to the store can change the answer. */
 export function clearStaleCache(store: Store): void {
   rmSync(cachePath(store), { force: true });
+}
+
+// ---- the notes on changed files, so a hook can say it when a note loads ----
+
+/** The commit of the last check of a note, and its anchored paths that changed after it. */
+interface Changed {
+  commit: string;
+  paths: string[];
+}
+
+/** The line that marks a note on a changed file, at a load and in `kb show`. */
+export const CHANGED_MARK = "changed since the last check";
+
+/** What to do with a note on a changed file. The session that uses the note has the code open, so it does the check. */
+export const changedAsk = (note = "such a note", id = "<id>") =>
+  `Read the code before you act on ${note}. If the note still holds, run \`kb verify ${id}\`. If it does not, update it with \`kb add\`. If you cannot fix it now, run \`kb verdict wrong ${id}\`.`;
+export const CHANGED_ASK = changedAsk();
+
+/**
+ * A file apart from the count. A write to the store clears the count. This file stays, because
+ * each record holds for one commit of one note: a check of the note gives the note a new commit,
+ * and the record then says nothing.
+ */
+const changedPath = (store: Store) => store.statePath("changed.json");
+
+function readChanged(store: Store): Record<string, Record<string, Changed>> {
+  try {
+    return JSON.parse(readFileSync(changedPath(store), "utf8")) as Record<string, Record<string, Changed>>;
+  } catch {
+    return {};
+  }
+}
+
+/** The anchor checks need a checkout, so only a `kb stale` in a repo replaces the record of its scope. */
+function saveChanged(store: Store, result: StaleResult): void {
+  if (!result.scope || !result.head) return;
+  const all = readChanged(store);
+  const mine: Record<string, Changed> = {};
+  for (const c of result.candidates) if (c.reason === "anchor-changed" && c.commit && c.paths) mine[c.id] = { commit: c.commit, paths: c.paths };
+  if (Object.keys(mine).length === 0 && !all[result.scope]) return;
+  all[result.scope] = mine;
+  writeAtomic(changedPath(store), JSON.stringify(all));
+}
+
+/**
+ * For the notes of one repo: the anchored paths of a note that changed after its last check, as
+ * the last `kb stale` found them. It reads one small file and runs no git, so a hook can afford
+ * it. A session start runs `kb stale` in the background when HEAD moved, so the answer can lack
+ * the changes of the newest commits for a moment. It never names a change that a check covered.
+ */
+export function changedNotes(store: Store, scope: string): (note: Pick<StoredNote, "id" | "scope" | "anchors" | "verified_at_commit">) => string[] {
+  let records: Record<string, Changed> | undefined;
+  return (note) => {
+    if (note.scope !== scope || !note.verified_at_commit || note.anchors.length === 0) return [];
+    records ??= readChanged(store)[scope] ?? {};
+    const record = records[note.id];
+    if (!record || record.commit !== note.verified_at_commit || !Array.isArray(record.paths)) return [];
+    // An anchor that left the note since then is no reason.
+    const anchored = note.anchors.map((anchor) => splitAnchor(anchor).path.replace(/\/+$/, ""));
+    return record.paths.filter((path) => typeof path === "string" && anchored.some((anchor) => covers(anchor, path.replace(/\/+$/, ""))));
+  };
 }

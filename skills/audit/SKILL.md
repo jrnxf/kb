@@ -23,7 +23,7 @@ kb budget --json
 - `kb stale` lists candidates for this scope: the repo's notes in a repo, the global notes outside any repo. Each has a `reason`:
   - `anchor-changed` - an anchored file changed since the note was verified.
   - `anchor-missing` - an anchored path is gone, or the symbol is no longer in the file.
-  - `commit-unknown` - the verified commit is not in the history (a rebase or a shallow clone).
+  - `commit-unknown` - the clone does not have the verified commit (a shallow clone, or a branch that was never fetched or is deleted).
   - `judged-wrong` - a session gave the note the verdict `wrong` after its last check. Read the note and the code. Then propose a rewrite, or trash when the fact is gone. When a session corrected the note already and it is true now, propose keep with `checked`.
   - `expired` - the note had no activity on any machine and nobody checked it for `expireDays` (90). Activity is a `kb show` for a task, a trigger that loaded the note, or a verdict `helped`. Propose trash, also for a gotcha or a convention, but not for open work that is not done. If the note still holds, the user picks keep on the card, and the keep records a check that resets the clock.
   - `decayed` - the note has not expired, but nobody verified it within the decay window.
