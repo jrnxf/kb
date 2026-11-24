@@ -5,7 +5,9 @@ import { MAC } from "@/hooks/use-media";
 
 const KEYS = (kinds: number): [string[], string][] => [
   [["↑", "↓"], "move"],
+  [["j", "k"], "move, as ↓ and ↑ do"],
   [["←", "→"], "sidebar or list"],
+  [["h", "l"], "sidebar or list, as ← and → do"],
   [["enter"], "pick in the sidebar"],
   [["1", String(kinds)], "kinds on or off"],
   [["/"], "filter"],

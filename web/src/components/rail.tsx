@@ -38,16 +38,18 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
       <button
         key={it.key}
         type="button"
-        tabIndex={-1}
+        // One item of the sidebar is in the tab order: the one the keys are on. The arrows move it.
+        tabIndex={cursor === it.key ? 0 : -1}
         data-rail={it.key}
         aria-pressed={pressed(it)}
         title={it.type === "scope" && it.scope !== "*" ? it.scope : undefined}
         onClick={() => onPick(it)}
         className={cn(
           "group/item flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13.5px] text-muted-foreground hover:bg-muted hover:text-foreground aria-pressed:bg-muted aria-pressed:font-[550] aria-pressed:text-foreground",
-          "wide:scroll-my-(--scroll-fade) max-wide:w-auto max-wide:flex-none max-wide:scroll-mx-4 max-wide:rounded-full max-wide:border max-wide:px-3",
+          "wide:scroll-my-(--scroll-fade) max-wide:min-h-9 max-wide:w-auto max-wide:flex-none max-wide:scroll-mx-4 max-wide:rounded-full max-wide:border max-wide:px-3",
           it.type === "kind" && `k-${it.kind}`,
-          it.type !== "trash" && n === 0 && "opacity-40",
+          // An item with no notes is quieter, but its text still passes AA. Only its dot fades.
+          it.type !== "trash" && n === 0 && "text-faint [&>[aria-hidden]]:opacity-40",
           cursor === it.key && "group-data-[pane=rail]/page:bg-secondary group-data-[pane=rail]/page:text-foreground group-data-[pane=rail]/page:ring-1 group-data-[pane=rail]/page:ring-edge group-data-[pane=rail]/page:ring-inset",
         )}
       >
@@ -62,7 +64,8 @@ export function Rail({ items, pressed, count, cursor, onPick, theme, onTheme, on
   const heading = (text: string, first = false) => <h3 className={cn(first ? "mt-2.5" : "mt-[22px]", "mb-1.5 px-2 text-[11px] font-semibold tracking-wider text-faint uppercase max-wide:hidden")}>{text}</h3>;
   const sep = <Separator className="mx-2 my-1.5 !w-auto max-wide:hidden" />;
   // A strip runs to both edges of a phone's screen, so a chip that is cut at the edge says that there are more.
-  const strip = "max-wide:-mx-4 max-wide:mt-2.5 max-wide:flex max-wide:gap-1.5 max-wide:overflow-x-auto max-wide:px-4 max-wide:[scrollbar-width:none]";
+  // Its padding leaves room for the larger tap area of each chip, which the sideways scroll would cut.
+  const strip = "max-wide:-mx-4 max-wide:mt-1 max-wide:-mb-1.5 max-wide:py-1.5 max-wide:flex max-wide:gap-1.5 max-wide:overflow-x-auto max-wide:px-4 max-wide:[scrollbar-width:none]";
   const global = scopes.filter((s) => s.scope === "*" || s.scope === "global");
   const repos = scopes.filter((s) => s.scope !== "*" && s.scope !== "global");
   const kinds = rest.filter((i) => i.type === "kind");

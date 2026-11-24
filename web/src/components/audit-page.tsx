@@ -47,6 +47,12 @@ export function AuditPage({ scope }: { scope: string }) {
   const { data, error } = useQuery(auditQuery(scope));
   const failed = error?.message ?? "";
   const { resolved } = useTheme();
+  useEffect(() => {
+    document.title = `Audit of ${scopeName(scope)} - kb`;
+    return () => {
+      document.title = "kb";
+    };
+  }, [scope]);
   // Tell up front when the link has no key: the picks are made, and Apply is refused at the end.
   const { data: state } = useQuery({ queryKey: ["store-state", "audit"], queryFn: api.storeState });
 

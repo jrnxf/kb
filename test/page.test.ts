@@ -53,6 +53,13 @@ describe("the data behind the page", () => {
     expect(renderBody("[file](docs/a.md?x=1)")).toContain('<a href="docs/a.md?x=1">file</a>');
   });
 
+  test("wraps a table in a box that scrolls, and keeps the table", () => {
+    expect(renderBody("|a|b|\n|-|-|\n|1|2|")).toStartWith('<div class="table-scroll"><table>');
+    expect(renderBody("|a|b|\n|-|-|\n|1|2|")).toContain("</table></div>");
+    // A table typed as raw HTML shows as text, so no box and no table come from it.
+    expect(renderBody("<table><tr><td>x</td></tr></table>")).not.toContain("<table");
+  });
+
   test("loads only an image of this server or one held in the note, and shows any other as its alt text", () => {
     expect(renderBody("![a <b> & c](https://tracker.example.com/p.png)")).toBe("<p>a &lt;b&gt; &amp; c</p>\n");
     expect(renderBody("![x](//tracker.example.com/p.png)")).toBe("<p>x</p>\n");

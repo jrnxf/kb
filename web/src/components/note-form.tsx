@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { NoteEdit, PageNote } from "../../../cli/wire.ts";
 import { Button } from "@/components/ui/button";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -18,21 +19,50 @@ interface Props {
 }
 
 const CONFIDENCES = ["high", "medium", "low"];
+
+type Problems = { title?: string; body?: string; other?: string };
+
+/** The server says "invalid note: title: required; body: required". Each problem goes to its own field. */
+export function problems(message: string): Problems {
+  const out: Problems = {};
+  const add = (key: keyof Problems, text: string) => (out[key] = out[key] ? `${out[key]} ${text}` : text);
+  for (const part of message.replace(/^invalid note:\s*/, "").split(/;\s*/)) {
+    const field = /^(title|body):\s*(.*)$/.exec(part);
+    if (field) add(field[1] as "title" | "body", `${field[1] === "title" ? "The title" : "The body"} ${field[2] === "required" ? "is required" : field[2]}.`);
+    else if (part) add("other", part);
+  }
+  return out;
+}
+
 const label = "text-xs font-normal text-muted-foreground";
 
 /** Esc cancels and ⌘↵ saves, from any field. */
 export function NoteForm({ note, kinds, onCancel, onSave }: Props) {
   const [edit, setEdit] = useState<NoteEdit>({ title: note.title, kind: note.kind, confidence: note.confidence, body: note.body });
-  const [error, setError] = useState("");
+  const [error, setError] = useState<Problems>({});
   const [saving, setSaving] = useState(false);
   const form = useRef<HTMLFormElement>(null);
+  const title = useRef<HTMLInputElement>(null);
   const body = useRef<HTMLTextAreaElement>(null);
+  const other = useRef<HTMLDivElement>(null);
   // The caret starts at the end of the body, where an edit most often goes.
   useEffect(() => {
     const el = body.current;
     if (!el) return;
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);
+  }, []);
+  // Escape cancels also when the focus is outside the form, as after a failed save. Inside the form
+  // the form's own handler takes it, as the phone's drawer stops the key before the document.
+  const cancel = useEffectEvent(() => onCancel());
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || form.current?.contains(event.target as Node) || (event.target as HTMLElement).closest?.("[role=listbox]")) return;
+      event.preventDefault();
+      cancel();
+    };
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
   }, []);
   const set = (key: keyof NoteEdit) => (value: string | null) => setEdit((e) => ({ ...e, [key]: value ?? "" }));
 
@@ -43,8 +73,13 @@ export function NoteForm({ note, kinds, onCancel, onSave }: Props) {
     try {
       await onSave(edit);
     } catch (problem) {
-      setError((problem as Error).message);
+      const found = problems((problem as Error).message);
+      // The footer error is not in the page yet, so the page renders first, and then the focus moves.
+      flushSync(() => setError(found));
       setSaving(false);
+      // The Save button is off while it saves, so the focus fell to the page. It goes to the field to fix,
+      // or to the error in the footer when no field has one.
+      (found.title ? title.current : found.body ? body.current : other.current)?.focus();
     }
   }
 
@@ -65,9 +100,19 @@ export function NoteForm({ note, kinds, onCancel, onSave }: Props) {
       }}
     >
       <FieldGroup className="gap-3.5">
-        <Field>
+        <Field data-invalid={error.title ? true : undefined}>
           <FieldLabel className={label} htmlFor="edit-title">Title</FieldLabel>
-          <Input id="edit-title" autoComplete="off" value={edit.title} onChange={(e) => set("title")(e.target.value)} className="max-wide:text-base" />
+          <Input
+            ref={title}
+            id="edit-title"
+            autoComplete="off"
+            value={edit.title}
+            onChange={(e) => set("title")(e.target.value)}
+            aria-invalid={error.title ? true : undefined}
+            aria-describedby={error.title ? "edit-title-error" : undefined}
+            className="max-wide:text-base"
+          />
+          {error.title && <FieldError id="edit-title-error">{error.title}</FieldError>}
         </Field>
         <div className="grid grid-cols-2 gap-3.5">
           <Field>
@@ -105,7 +150,7 @@ export function NoteForm({ note, kinds, onCancel, onSave }: Props) {
             </Select>
           </Field>
         </div>
-        <Field data-invalid={error ? true : undefined}>
+        <Field data-invalid={error.body ? true : undefined}>
           <FieldLabel className={label} htmlFor="edit-body">Body</FieldLabel>
           <Textarea
             ref={body}
@@ -113,12 +158,18 @@ export function NoteForm({ note, kinds, onCancel, onSave }: Props) {
             spellCheck
             value={edit.body}
             onChange={(e) => set("body")(e.target.value)}
-            aria-invalid={error ? true : undefined}
+            aria-invalid={error.body ? true : undefined}
+            aria-describedby={error.body ? "edit-body-error" : undefined}
             className="min-h-[260px] font-mono text-[13.5px] leading-[1.6] max-wide:text-base"
           />
+          {error.body && <FieldError id="edit-body-error">{error.body}</FieldError>}
         </Field>
         <div className="flex items-center justify-end gap-2">
-          {error && <FieldError className="mr-auto">{error}</FieldError>}
+          {error.other && (
+            <FieldError ref={other} tabIndex={-1} className="mr-auto">
+              {error.other}
+            </FieldError>
+          )}
           <Button type="button" variant="outline" className="pr-1 text-muted-foreground hover:text-foreground" onClick={onCancel}>
             Cancel <Kbd>esc</Kbd>
           </Button>
