@@ -17,7 +17,7 @@ import { searchNotes } from "./search.ts";
 import { DEFAULT_PORT, isKbServer, runningPort, serve } from "./serve.ts";
 import { resultGroups } from "./wire.ts";
 import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, isLive, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
-import { clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
+import { CHANGED_MARK, changedAsk, changedSinceCheck, clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
@@ -63,7 +63,8 @@ const USAGE = `kb - a personal knowledge store for coding agents
   kb stale [--repo .]                    notes that may no longer be true, each with a reason: a changed
                                          or missing anchor, no use, an old check, a close note, or
                                          the verdicts wrong and not-needed of sessions on any machine
-  kb verify <id>... [--repo .]           record that these notes are still true, at HEAD
+  kb verify <id>... [--repo .]           record that these notes are still true, at HEAD. Run it for a
+                                         note marked "changed", after you read the code and the note holds
   kb budget [--repo .]                   what a session start gives of each note: a brief, an index
                                          line, nothing until its trigger, or nothing at all
   kb audit [--repo .] [--no-wait]        start an agent that audits this repo's notes, and print the
@@ -391,7 +392,15 @@ function cmdShow(store: Store, args: Args): Output {
   // A read changes nothing in the store. The log on this machine records it. A look into the
   // trash is marked, so it never counts as activity of the note.
   logEvent(store, { ev: "show", note: note.id, why: whyOf(args), ...(note.trashed ? { trashed: true as const } : {}) });
-  return { json: note, text: `# ${relative(store.home, note.path)}\n${readFileSync(note.path, "utf8").trimEnd()}` };
+  // The reader is about to act on the note, so this is the moment to say that its files changed.
+  // The check runs git, and only in the repo of the note: there the commit of the note means something.
+  let changed: string[] = [];
+  if (!note.trashed && note.scope !== "global" && note.verified_at_commit && note.anchors.length > 0) {
+    const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store, { record: false });
+    if (repo.root && repo.scope === note.scope) changed = changedSinceCheck(note, repo.root);
+  }
+  const mark = changed.length > 0 ? `\n${CHANGED_MARK} (${note.verified_at_commit}): ${changed.join(", ")}. ${changedAsk("this note", note.id)}\n` : "";
+  return { json: changed.length > 0 ? { ...note, changed_since_check: changed } : note, text: `# ${relative(store.home, note.path)}${mark}\n${readFileSync(note.path, "utf8").trimEnd()}` };
 }
 
 function cmdSearch(store: Store, args: Args): Output {

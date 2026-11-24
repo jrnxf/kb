@@ -161,6 +161,13 @@ A `brief` or a `body` loads in every session, and most sessions do not need it. 
 A verdict `wrong` sends the note to the next audit.
 Give no `wrong` to a note that this session corrected or rewrote: the correction is the record.
 
+A note that came with `changed since the last check` is on a file that changed after its last check. If this session read that code:
+
+- The note still holds: run `kb verify <id>...` from the project directory. It ends the mark.
+- The note is false now: update it as step 3 says (pass its `id`). If you cannot write the right text, give it `wrong`.
+
+If this session did not read the code, leave the note as it is.
+
 ## 6. Record the checkpoint
 
 Run this once, after the writes above succeed:
