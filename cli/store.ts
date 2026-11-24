@@ -145,8 +145,9 @@ export class Store {
       trashDays: days(raw.trashDays, DEFAULT_CONFIG.trashDays),
       decayDays: days(raw.decayDays, DEFAULT_CONFIG.decayDays),
       expireDays: days(raw.expireDays, DEFAULT_CONFIG.expireDays),
-      // The model goes on the claude command line, so a value that could read as a flag is a mistake.
-      auditModel: typeof raw.auditModel === "string" && /^[A-Za-z0-9][\w.:[\]-]*$/.test(raw.auditModel) ? raw.auditModel : DEFAULT_CONFIG.auditModel,
+      // The model goes on the claude command line, so audit-run checks it when an audit starts and
+      // refuses a wrong value. Here it stays as written, so a mistake stops no other command.
+      auditModel: raw.auditModel === undefined ? DEFAULT_CONFIG.auditModel : typeof raw.auditModel === "string" ? raw.auditModel : "",
     };
   }
 
