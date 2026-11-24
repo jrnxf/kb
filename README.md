@@ -447,8 +447,12 @@ note where no session loads it. The first note of a repo is written from inside 
 
 kb syncs every note to git, so it refuses new text that holds a secret: `kb add`, an edit on the page,
 and the text or rule of an audit Apply. It knows the shape of common tokens and keys (GitHub, AWS,
-Anthropic, Slack and more), a password in a URL, and a long random value given to a name such as
-`API_KEY`. The error names the kind and the place, never the secret. Write a placeholder instead.
+Anthropic, OpenAI, Slack, Stripe, Google, Twilio, Azure, Shopify, Mailgun, Telegram, DigitalOcean
+and more), an authorization header or a Bearer or Basic value, a password in a URL, a password of
+8 or more characters with a digit or a sign given to `password`, and a long random value given to a
+name such as `API_KEY`. The error names the kind and the place, never the secret. Write a
+placeholder instead. The scan knows common shapes only: a secret in another shape gets through, so
+do not count on it as the only guard.
 
 Skills: `/kb:clear`, `/kb:save`, `/kb:recover`, `/kb:audit`. Only you can start them. `/kb:note` writes a rule the
 user states to an instruction file, and the agent starts it on its own.
