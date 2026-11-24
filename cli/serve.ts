@@ -3,7 +3,7 @@
 // the store from /api/page.
 
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
 import { applyAudit, auditData } from "./audit.ts";
 import { startRun } from "./audit-run.ts";
@@ -154,10 +154,27 @@ async function body(request: Request): Promise<Record<string, unknown> | null> {
  * by its hash.
  */
 export function pagePolicy(html: string): string {
-  // The browser hashes the script text after its parser turns CRLF into LF. A script with a src is no inline script.
-  const inline = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)]
-    .filter(([, attributes]) => !/\bsrc\s*=/i.test(attributes!))
-    .map(([, , code]) => ` 'sha256-${createHash("sha256").update(code!.replace(/\r\n?/g, "\n")).digest("base64")}'`);
+  const hashes: string[] = [];
+  let code: string | undefined;
+  const flush = () => {
+    if (code !== undefined) hashes.push(` 'sha256-${createHash("sha256").update(code).digest("base64")}'`);
+    code = undefined;
+  };
+  // A script with a src is no inline script. The browser hashes the text after its parser turns CRLF into LF.
+  new HTMLRewriter()
+    .on("script", {
+      element(script) {
+        flush();
+        if (!script.hasAttribute("src")) code = "";
+        script.onEndTag(flush);
+      },
+      text(chunk) {
+        if (code !== undefined) code += chunk.text.replace(/\r\n?/g, "\n");
+      },
+    })
+    .transform(html);
+  flush();
+  const inline = hashes;
   return [
     "default-src 'none'",
     `script-src 'self'${inline.join("")}`,
@@ -184,28 +201,21 @@ function withSafety(response: Response): Response {
   return response;
 }
 
-/** The page and its policy, worked out again only when the file changes. */
-let cached: { mtime: number; html: string; policy: string } | undefined;
+/** The page and its policy, worked out again only when the file changes. The file is small, so each request reads it, and a copy that keeps the times is still seen. */
+let cached: { html: string; policy: string } | undefined;
 
-function indexPage(): { html: string; policy: string } | undefined {
-  const path = join(DIST, "index.html");
-  let mtime: number;
-  try {
-    mtime = statSync(path).mtimeMs;
-  } catch {
-    return undefined;
-  }
-  if (cached?.mtime !== mtime) {
-    const html = readFileSync(path, "utf8");
-    cached = { mtime, html, policy: pagePolicy(html) };
-  }
+async function indexPage(): Promise<{ html: string; policy: string } | undefined> {
+  const file = Bun.file(join(DIST, "index.html"));
+  if (!(await file.exists())) return undefined;
+  const html = await file.text();
+  if (cached?.html !== html) cached = { html, policy: pagePolicy(html) };
   return cached;
 }
 
 /** The page at /, and the files of the built page. The page keeps its view in the hash, so it has no other paths. */
 async function staticFile(pathname: string): Promise<Response> {
   if (pathname === "/") {
-    const page = indexPage();
+    const page = await indexPage();
     if (!page) return json({ error: "the page is not built. Run `bun run build` in web/." }, 500);
     return new Response(page.html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": page.policy } });
   }

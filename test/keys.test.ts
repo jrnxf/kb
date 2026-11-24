@@ -34,6 +34,29 @@ async function open(width: number): Promise<{ page: Page; store: Store; served: 
   return { page, store, served };
 }
 
+/** Close the page and stop the server, each step on its own, and then report a block or the first failure. */
+async function teardown(page: Page, served: Served): Promise<void> {
+  const errors: unknown[] = [];
+  let policy: string[] = [];
+  try {
+    policy = await blocked();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    served.stop();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await page.close();
+  } catch (error) {
+    errors.push(error);
+  }
+  expect(policy).toEqual([]);
+  if (errors.length) throw errors[0];
+}
+
 /** The id of the selected note, from the address. */
 async function selected(page: Page): Promise<string | null> {
   return new URLSearchParams((await page.evaluate(() => location.hash)).slice(1)).get("note");
@@ -54,14 +77,7 @@ describe("keys on a wide screen", () => {
     ({ page, store, served } = await open(1280));
   }, 20_000);
   afterEach(async () => {
-    let policy: string[] = [];
-    try {
-      policy = await blocked();
-    } finally {
-      served.stop();
-      await page.close();
-    }
-    expect(policy).toEqual([]);
+    await teardown(page, served);
   });
 
   test("a note an agent adds shows without a reload, and a trash from the page is not undone by the poll", async () => {
@@ -196,14 +212,7 @@ describe("keys on a phone", () => {
     await drawer().waitFor();
   }, 20_000);
   afterEach(async () => {
-    let policy: string[] = [];
-    try {
-      policy = await blocked();
-    } finally {
-      served.stop();
-      await page.close();
-    }
-    expect(policy).toEqual([]);
+    await teardown(page, served);
   });
 
   test("in the open drawer, e opens the form and Escape keeps the drawer", async () => {

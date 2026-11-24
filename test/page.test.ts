@@ -56,6 +56,9 @@ describe("the data behind the page", () => {
     expect(renderBody("![a <b> & c](https://tracker.example.com/p.png)")).toBe("<p>a &lt;b&gt; &amp; c</p>\n");
     expect(renderBody("![x](//tracker.example.com/p.png)")).toBe("<p>x</p>\n");
     expect(renderBody("![](https://tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
+    expect(renderBody("![](//tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
+    expect(renderBody("![ ](https://tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
+    expect(renderBody("![&#0;](https://tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
     expect(renderBody("![](javascript:alert(1))")).toBe("<p>[image: blocked]</p>\n");
     expect(renderBody("![x](javascript:alert(1))")).toBe("<p>x</p>\n");
     expect(renderBody("![x](data:image/svg+xml,%3Csvg%20onload=alert(1)%3E)")).toBe("<p>x</p>\n");

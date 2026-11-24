@@ -55,14 +55,15 @@ describe("kb serve", () => {
     expect(policy).toStartWith("default-src 'none'");
     expect(policy).toContain("style-src 'self';");
     expect(policy).not.toContain("unsafe");
-    // The inline theme script of the page runs by its hash, and no other inline script runs.
-    const [, theme] = (await page.text()).match(/<script>([\s\S]*?)<\/script>/)!;
-    expect(policy).toContain(`script-src 'self' 'sha256-${new Bun.CryptoHasher("sha256").update(theme!).digest("base64")}';`);
+    // The inline theme script runs by its hash (the browser test below shows it runs).
+    expect(policy).toMatch(/script-src 'self' 'sha256-[A-Za-z0-9+/]+=*';/);
     expect(pagePolicy("<p>no script</p>")).toContain("script-src 'self';");
-    // The browser hashes the text with CRLF read as LF, and reads a script with attributes the same way.
+    // The browser hashes the text with CRLF read as LF, reads attributes as a parser does, and skips a script with a src.
     const hash = (text: string) => `'sha256-${new Bun.CryptoHasher("sha256").update(text).digest("base64")}'`;
     expect(pagePolicy("<script>a\r\nb</script>")).toContain(hash("a\nb"));
     expect(pagePolicy('<script nonce="x">c</script><script type="module" src="/a.js"></script>')).toContain(`script-src 'self' ${hash("c")};`);
+    expect(pagePolicy('<script data-src="x">d</script>')).toContain(`script-src 'self' ${hash("d")};`);
+    expect(pagePolicy('<script data-note="a>b">e</script>')).toContain(`script-src 'self' ${hash("e")};`);
     // A wrong host gets the headers too.
     expect((await fetch(new URL("/api/state", served!.url), { headers: { host: "evil.example.com" } })).headers.get("x-frame-options")).toBe("DENY");
   });
@@ -81,6 +82,8 @@ describe("kb serve", () => {
       page.on("dialog", (dialog) => void (dialogs.push(dialog.message()), dialog.dismiss()));
       page.on("request", (request) => void (request.url().startsWith(served!.url) || elsewhere.push(request.url())));
       await page.goto(`${served!.url}#note=xss`);
+      // The inline theme script ran under the policy: it set the color scheme.
+      expect(await page.evaluate(() => document.documentElement.style.colorScheme)).toMatch(/^(?:light|dark)$/);
       const body = page.locator(".prose-kb");
       await body.getByText("entity").waitFor();
       for (const name of ["plain", "mixed", "entity"]) await body.getByText(name).click();

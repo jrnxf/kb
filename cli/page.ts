@@ -23,8 +23,8 @@ function decode(text: string): string {
   });
 }
 
-/** True when the part of a URL before its first /, ? or # holds no scheme. A leftover & that starts an entity could still hide one. */
-const relative = (url: string) => !/:|&(?:#|[a-z]+;)/i.test(url.split(/[/?#]/, 1)[0]!);
+/** True when the part of a URL before its first /, ? or # holds no scheme. The URL is already decoded, so a & there is only a character. */
+const relative = (url: string) => !url.split(/[/?#]/, 1)[0]!.includes(":");
 
 /** A URL as the browser reads it: entities decoded, and no space or control character to hide a scheme. */
 const bare = (value: string) => decode(value).replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
@@ -51,7 +51,7 @@ export function safeSrc(value: string): boolean {
 /** The host an image would have loaded from, or a plain word when the address has none. */
 function imageHost(src: string): string {
   try {
-    return new URL(bare(src)).host || "blocked";
+    return new URL(bare(src), "http://localhost").host || "blocked";
   } catch {
     return "blocked";
   }
@@ -80,7 +80,10 @@ export function renderBody(markdown: string): string {
       element(image) {
         const src = image.getAttribute("src") ?? "";
         // replace() escapes the text it is given.
-        if (!safeSrc(src)) image.replace(decode(image.getAttribute("alt") ?? "") || `[image: ${imageHost(src)}]`);
+        if (safeSrc(src)) return;
+        const alt = decode(image.getAttribute("alt") ?? "");
+        // An alt of only spaces, control characters or U+FFFD says nothing, so the marker shows.
+        image.replace(/[^\s\p{C}\ufffd]/u.test(alt) ? alt : `[image: ${imageHost(src)}]`);
       },
     })
     .transform(html);
