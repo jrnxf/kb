@@ -12,13 +12,68 @@ import { clearsAt } from "./write.ts";
 
 const esc = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** The body as HTML. Raw HTML in a note is shown as text, never run. */
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", colon: ":", tab: "\t", newline: "\n" };
+
+/** Text with its HTML entities decoded, as the browser reads an attribute. */
+function decode(text: string): string {
+  return text.replace(/&(?:#x([0-9a-f]+)|#(\d+)|([a-z]+));?/gi, (whole, hex: string, dec: string, name: string) => {
+    if (name) return ENTITIES[name.toLowerCase()] ?? whole;
+    const code = hex ? parseInt(hex, 16) : Number(dec);
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+  });
+}
+
+/** True when the part of a URL before its first /, ? or # holds no scheme. A leftover & could still hide one. */
+const relative = (url: string) => !/[:&]/.test(url.split(/[/?#]/, 1)[0]!);
+
+/** A URL as the browser reads it: entities decoded, and no space or control character to hide a scheme. */
+const bare = (value: string) => decode(value).replace(/[\u0000-\u0020\u007f-\u009f]/g, "");
+
+/**
+ * True when a link in a note is safe to follow: http, https and mailto, or a link on this page
+ * (a path, a query or a fragment). Every other scheme, such as javascript: or data:, could run
+ * script in the page, and the page can change every note.
+ */
+export function safeHref(value: string): boolean {
+  const url = bare(value);
+  return /^(?:https?|mailto):/i.test(url) || relative(url);
+}
+
+/**
+ * True when an image in a note may load: one from this server, or a picture held in the note itself.
+ * A remote image would tell its server when a note is read, and from where.
+ */
+export function safeSrc(value: string): boolean {
+  const url = bare(value);
+  return /^data:image\/(?:png|gif|jpeg|webp)[;,]/i.test(url) || (!url.startsWith("//") && relative(url));
+}
+
+/**
+ * The body as HTML. Raw HTML in a note is shown as text, never run. A link that could run script
+ * shows as its text, and an image that could call out shows as its alt text.
+ */
 export function renderBody(markdown: string): string {
+  let html: string;
   try {
-    return Bun.markdown.html(markdown, { noHtmlBlocks: true, noHtmlSpans: true });
+    html = Bun.markdown.html(markdown, { noHtmlBlocks: true, noHtmlSpans: true });
   } catch {
     return `<pre>${esc(markdown)}</pre>`;
   }
+  return new HTMLRewriter()
+    .on("a", {
+      element(link) {
+        if (safeHref(link.getAttribute("href") ?? "")) return;
+        link.tagName = "span";
+        link.removeAttribute("href");
+      },
+    })
+    .on("img", {
+      element(image) {
+        // replace() escapes the text it is given.
+        if (!safeSrc(image.getAttribute("src") ?? "")) image.replace(decode(image.getAttribute("alt") ?? ""));
+      },
+    })
+    .transform(html);
 }
 
 /** The live notes as the page lists them: scope by scope, each scope in rank order. */

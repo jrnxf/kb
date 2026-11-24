@@ -100,7 +100,10 @@ A session with normal permissions refuses a command that sets a shell variable, 
 - `scope`: `"repo"` for a fact about this repository. `"global"` for a fact that holds in every repo (a tool, a user preference, a platform behavior).
 - `kind`: `gotcha`, `decision`, `convention`, `how-to` or `open-work`.
 - `confidence`: `high` when you verified it in this session, `medium` when it is likely, `low` when it is a guess.
-- `anchors`: repo-relative paths, or `path#symbol`, of the code the fact depends on. They let a later check find stale notes. Leave the list empty for a global note.
+- `anchors`: repo-relative paths, or `path#symbol`, of the code the fact depends on. kb saves a hash of that code, and marks the note when the code changes. Leave the list empty for a global note.
+  - When the fact is about one function, class, constant or config key, write `path#symbol`. Then only a change to the lines of that symbol marks the note. An anchor on the whole file marks it at every change of the file.
+  - The symbol is the plain name as the file writes it (`src/pay.ts#chargeCard`), with no brackets and no arguments.
+  - Use the whole file only when the fact is about the file as a whole. Do not anchor a folder when a file fits.
 - `triggers`: when the note loads outside the session start. See "Say when the note loads" below.
 - To update, add `"id": "<id>"` and only the fields that change. A `body` replaces the whole body, so read the note with `kb show <id> --check` first and write the full new body, with the old detail that is still true. A new title, body or anchors also records the note as verified now.
 
@@ -109,6 +112,7 @@ A session with normal permissions refuses a command that sets a shell variable, 
 A note at the session start is one title among many, hours before the agent needs it.
 A trigger or an anchor loads the note at the moment it applies.
 Give every `gotcha` and every `how-to` a trigger or an anchor. When none fits, say why in one line of the report.
+Give every repo note but open work an anchor on the files the fact depends on, also when it has a trigger. Only an anchor lets kb mark the note when that code changes. When no file fits, say why in one line of the report.
 
 - A gotcha about a command gets `"triggers": ["cmd: pkill -f"]`. The note loads at a shell command that runs those words. The command still runs, and the agent gets the note with its result.
 - When one run of the command does damage, write `stop:` in place of `cmd:`. kb then refuses the command once, with the note as the reason. A run 3 seconds later passes.
@@ -122,7 +126,7 @@ kb refuses one word that is a common command (`git`, `ls`, `bun`): add a subcomm
 `-rf` and `-fr` are two words, so give one trigger for each form.
 
 Read the result. `created` and `updated` are done. `exists` means a note in this scope has the same title: read it with `kb show <id> --check`, then update it or skip.
-A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor, open work that a repo session saved as `"global"`, or a body over 700 characters. The note is saved. Fix it with an update, or give the reason in the report.
+A result can hold `warnings`: a gotcha or a how-to with no trigger and no anchor, a repo note with no anchor, open work that a repo session saved as `"global"`, or a body over 700 characters. The note is saved. Fix it with an update, or give the reason in the report.
 
 `neighbors` means that nothing was written: stored notes are close to the new note in their words. `shared` names the words both have.
 `kb add` exits with code 2 for this answer, so the call shows as failed. It is an answer to read, not a failure of the tool. The note is not saved until you run the command again.
@@ -160,6 +164,13 @@ Give `not-needed` only to a note that the list marks `fired`. kb refuses it for 
 A `brief` or a `body` loads in every session, and most sessions do not need it. It gets `helped`, `wrong` or no verdict.
 A verdict `wrong` sends the note to the next audit.
 Give no `wrong` to a note that this session corrected or rewrote: the correction is the record.
+
+A note that came with `changed since the last check` is on a file that changed after its last check. If this session read that code:
+
+- The note still holds: run `kb verify <id>...` from the project directory. It ends the mark.
+- The note is false now: update it as step 3 says (pass its `id`). If you cannot write the right text, give it `wrong`.
+
+If this session did not read the code, leave the note as it is.
 
 ## 6. Record the checkpoint
 
@@ -204,4 +215,5 @@ End with this, and nothing after it. Write it as Markdown, not in a code block, 
 - The first line is the verdict. Write `**Safe to clear**`, or `**Not safe to clear** - <what is unsaved>` when a `kb` command failed, or when open work exists that no note describes. Never add "yes" or "no".
 - Show the title of a note, not its id. Keep each reason to one short sentence.
 - Under a saved gotcha or how-to that has no trigger and no anchor, add one line: `No trigger: <why none fits>`.
+- Under a saved repo note, not open work, that has no anchor, add one line: `No anchor: <why no file fits>`.
 - Leave out a count that is 0, and a group that is empty.

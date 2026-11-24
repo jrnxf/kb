@@ -2,7 +2,7 @@
 // It listens on this machine only. The page is the React app built into web/dist, and it reads
 // the store from /api/page.
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
 import { applyAudit, auditData } from "./audit.ts";
@@ -147,12 +147,47 @@ async function body(request: Request): Promise<Record<string, unknown> | null> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
+/**
+ * The rules the browser keeps for the page: scripts, styles, images and requests come only from
+ * this server, and no other site may frame it. So a note that gets script past the renderer still
+ * cannot run it. The inline script of the page, which sets the theme before the first paint, runs
+ * by its hash.
+ */
+export function pagePolicy(html: string): string {
+  const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(([, code]) => ` 'sha256-${createHash("sha256").update(code!).digest("base64")}'`);
+  return [
+    "default-src 'none'",
+    `script-src 'self'${inline.join("")}`,
+    "style-src 'self'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+/** Every answer of the server carries these. An answer that is not the page needs no rights at all. */
+const SAFETY: Record<string, string> = {
+  "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
+  "referrer-policy": "no-referrer",
+};
+
+function withSafety(response: Response): Response {
+  for (const [name, value] of Object.entries(SAFETY)) if (!response.headers.has(name)) response.headers.set(name, value);
+  return response;
+}
+
 /** The page at /, and the files of the built page. The page keeps its view in the hash, so it has no other paths. */
 async function staticFile(pathname: string): Promise<Response> {
   if (pathname === "/") {
     const page = Bun.file(join(DIST, "index.html"));
     if (!(await page.exists())) return json({ error: "the page is not built. Run `bun run build` in web/." }, 500);
-    return new Response(page, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    const html = await page.text();
+    return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": pagePolicy(html) } });
   }
   const path = normalize(join(DIST, decodeURIComponent(pathname)));
   const file = Bun.file(path);
@@ -180,10 +215,10 @@ export function serve(store: Store, options: { port?: number } = {}): Served {
     port: options.port ?? DEFAULT_PORT,
     async fetch(request, self): Promise<Response> {
       try {
-        return await handle(store, token, self.port!, request);
+        return withSafety(await handle(store, token, self.port!, request));
       } catch (error) {
-        if (error instanceof KbError) return json({ error: error.message }, error.message.startsWith("no note") ? 404 : 400);
-        return json({ error: `kb failed: ${(error as Error)?.message ?? error}` }, 500);
+        if (error instanceof KbError) return withSafety(json({ error: error.message }, error.message.startsWith("no note") ? 404 : 400));
+        return withSafety(json({ error: `kb failed: ${(error as Error)?.message ?? error}` }, 500));
       }
     },
   });
