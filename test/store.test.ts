@@ -122,7 +122,7 @@ describe("the lock", () => {
     const store = tempStore();
     store.gitLockWaitMs = 50;
     const note = putNote(store, { id: "kept-path" });
-    store.track(note.path);
+    store.track(store.notePath(note));
     mkdirSync(store.statePath("git-lock"));
     writeFileSync(join(store.statePath("git-lock"), "owner"), `${process.pid} live`);
     expect(store.commit("kb: first try")).toBe(false);

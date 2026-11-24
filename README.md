@@ -611,8 +611,9 @@ To work on the plugin, load a checkout for one session:
 claude --plugin-dir /path/to/kb
 ```
 
-Only you can read the store: kb makes `~/.kb` and `.state/` with mode 0700 and each file with
-0600, and closes a store that an older kb left open on the next write.
+Only you can read the store: kb makes `~/.kb` and its folders with mode 0700 and the files that it
+writes with 0600. The first write after an update closes a store that an older kb left open: the
+notes, the trash and `.state/` too, once. Git's own files in `.git/` keep the modes that git gives them.
 
 A new store is a git repo with no remote. To back up and sync it, give it a private remote:
 

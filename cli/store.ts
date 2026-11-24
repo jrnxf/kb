@@ -630,7 +630,8 @@ export class Store {
       return false;
     }
     // A path leaves the set only after a commit that took it, so a lock timeout keeps it for the next one.
-    const touched = [...this.touched];
+    // .gitignore is written by kb alone, and a command that does not commit (a read that ran ensure()) may have changed it.
+    const touched = [...new Set([...this.touched, ".gitignore"])];
     try {
       return (
         this.withGitLock(() => {
