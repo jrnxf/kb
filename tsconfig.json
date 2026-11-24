@@ -10,7 +10,15 @@
     "skipLibCheck": true,
     "types": [
       "bun"
-    ]
+    ],
+    "typeRoots": [
+      "./web/node_modules/@types"
+    ],
+    "paths": {
+      "playwright": [
+        "./web/node_modules/playwright"
+      ]
+    }
   },
   "include": [
     "cli",

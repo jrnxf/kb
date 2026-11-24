@@ -617,7 +617,7 @@ git clone <your-private-repo-url> ~/.kb
 ## Develop
 
 ```bash
-bun install && bunx playwright install chromium-headless-shell
+bun install --cwd web && bun run --cwd web playwright install chromium-headless-shell
 bun test && bun run test:mod && bun run typecheck && claude plugin validate .
 ```
 
@@ -626,6 +626,11 @@ The `playwright install` step downloads that browser once.
 
 The `test` workflow in `.github/workflows/test.yml` runs these checks on each pull request and each push to `main`.
 It also rebuilds `web/` and fails when the committed `web/dist` differs.
+
+The dev tools (TypeScript, Playwright, the Bun types) install from `web/bun.lock`, so every install is the same.
+The root has no `bun.lock` on purpose. Claude Code installs a plugin's packages, dev tools too, when its root
+holds a `package.json` and a lockfile. kb needs no package at run time. The root `package.json` holds scripts only,
+and `test/package.test.ts` fails if a root lockfile or a root package appears.
 
 To try a change on a store that looks like months of use (about 165 invented notes, 9 repos):
 

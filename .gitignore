@@ -1,2 +1,7 @@
 node_modules/
 .claude-plugin/types/
+/bun.lock
+/bun.lockb
+/package-lock.json
+/npm-shrinkwrap.json
+.lavish/
