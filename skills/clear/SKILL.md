@@ -3,7 +3,7 @@ name: clear
 description: Saves this session's knowledge as /kb:save does, then clears the session - but only when the save fully succeeded. Run only when the user types /kb:clear.
 argument-hint: "[auto memory folder]"
 disable-model-invocation: true
-allowed-tools: Bash(kb *), Bash(rm */projects/*/memory/*.md), Bash(kb-transcript --memory), Read, Glob, Edit, Write
+allowed-tools: Bash(kb *), Bash(kb-transcript --remove-memory *), Bash(kb-transcript --memory), Read, Glob, Edit, Write
 ---
 
 # kb clear

@@ -8,7 +8,8 @@
 #
 # A run starts in the folder's project directory, so its repo facts get the repo's scope. When
 # that directory is gone, it starts in $HOME and keeps only the facts that hold in every repo.
-# All memory folders are saved to a tar file first. Each run's report is in a log file.
+# All memory folders are saved to a tar file first, readable by this user only. Each run's report
+# is in a log file.
 set -euo pipefail
 
 config="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -92,8 +93,10 @@ fi
 stamp="$(date +%Y%m%d-%H%M%S)"
 backup="$config/auto-memory-backup-$stamp.tar.gz"
 logs="$config/auto-memory-move-$stamp"
-mkdir -p "$logs"
-(cd "$config" && tar -czf "$backup" projects/*/memory)
+# The memory files are private, so the tar file and the logs are for this user only.
+mkdir -p -m 700 "$logs"
+(umask 077 && cd "$config" && tar -czf "$backup" projects/*/memory)
+chmod 600 "$backup"
 echo "backup: $backup"
 echo "logs:   $logs"
 

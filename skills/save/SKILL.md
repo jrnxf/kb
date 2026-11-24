@@ -3,7 +3,7 @@ name: save
 description: Save the durable knowledge of this session before /clear - rules to instruction files, facts to the kb store - and empty Claude Code's auto memory into them. Run only when the user types /kb:save, or when /kb:clear or /kb:checkpoint sends you here.
 argument-hint: "[auto memory folder]"
 disable-model-invocation: true
-allowed-tools: Bash(kb *), Bash(rm */projects/*/memory/*.md), Bash(kb-transcript --memory), Read, Glob, Edit, Write
+allowed-tools: Bash(kb *), Bash(kb-transcript --remove-memory *), Bash(kb-transcript --memory), Read, Glob, Edit, Write
 ---
 
 # kb save
@@ -61,7 +61,7 @@ For each fact in it, apply the skip rules of step 1 first: a dated status, a fin
 - It is about this session's project, and the folder belongs to it: treat it as a candidate with the scope `"repo"`.
 - It is about another project: leave it, and list it under **Skipped**.
 
-When kb or an instruction file holds the fact, after a write or because it was there already, remove the memory file with `rm <absolute path of the file>` (one file per command, never a glob or `-r`) and remove its line from that folder's `MEMORY.md`.
+When kb or an instruction file holds the fact, after a write or because it was there already, remove the memory file with `kb-transcript --remove-memory <absolute path of the file>` (one file per command, never a glob), and remove its line from that folder's `MEMORY.md`. It keeps a private copy first and prints its `backup` path. Never remove a memory file with `rm`.
 Remove nothing when the write failed, and leave the files you skipped. Never leave the same fact in two places.
 
 ### Write a rule
@@ -204,6 +204,8 @@ End with this, and nothing after it. Write it as Markdown, not in a code block, 
 **Moved from auto memory**
 - **<title>**
   <new note or rule, or the place that already held it>
+
+A copy of each removed memory file is in <the folder of the backup paths>.
 
 **Skipped:** <candidate> (<reason>), <candidate> (<reason>).
 ```

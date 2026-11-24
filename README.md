@@ -492,7 +492,10 @@ Then two settings in `~/.claude/settings.json`:
   and its system prompt tells the agent to save preferences there. While it is on, the first start
   of each session asks the agent to tell you, and every session start tells the agent to save
   nothing there. With it off, that rule is not sent. `/kb:save` empties it: rules go to
-  instruction files, and facts go to kb.
+  instruction files, and facts go to kb. Before it removes a memory file, it keeps a copy that only you can
+  read in `.state/memory-backup/<day>/` of the store, and the report says where. A copy goes after
+  `trashDays` (30). `scripts/move-auto-memory.sh` also saves every memory folder to a tar file
+  that only you can read.
 - The allow rules let the agent read and save notes with no question. The session start and the
   hooks tell it to run these commands. The skills allow their own commands. Without the rules, the
   default permission mode asks before each one.
