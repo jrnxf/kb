@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renameSync } from "node:fs";
+import { realpathSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { normalizeRemote, resolveRepo } from "../cli/scope.ts";
 import { plain, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
@@ -50,6 +50,20 @@ describe("resolveRepo", () => {
     const repo = tempRepo({ name: "My Project" });
     expect(resolveRepo(repo, store).scope).toBe("my-project");
     expect(store.local().aliases[repo]).toBe("my-project");
+  });
+
+  test("an alias that another process wrote after the read wins over the computed slug", () => {
+    const store = tempStore();
+    const repo = tempRepo({ name: "first-name" });
+    const main = realpathSync(repo);
+    // Another process writes an alias, as a second hook would. This process read the file before.
+    store.updateLocal((local) => {
+      local.aliases[main] = "pinned-name";
+    });
+    const real = store.local.bind(store);
+    let reads = 0;
+    store.local = () => (reads++ === 0 ? { machine: "", aliases: {} } : real());
+    expect(resolveRepo(repo, store).scope).toBe("pinned-name");
   });
 
   test("a recorded alias wins, so the id can be pinned after a rename", () => {

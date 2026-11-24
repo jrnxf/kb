@@ -1,13 +1,14 @@
 // `kb context`: the text a session gets at start. The briefs, the index and the budget live here.
 
+import { readFileSync } from "node:fs";
 import { inHoldback, oldStart } from "./holdback.ts"; // HOLDBACK
 import { lastActivity } from "./log.ts";
-import { KINDS, localDate, normalizeTitle } from "./note.ts";
-import { rememberRepo, repoRoot } from "./repos.ts";
+import { KINDS, dropsLetters, localDate, normalizeTitle } from "./note.ts";
+import { rememberRepo, repoRoot, scopesElsewhere } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
-import { anchorReader, missingAnchors } from "./stale.ts";
+import { anchorReader, changedAtLoad, missingAnchors } from "./stale.ts";
+import { HARD_CONTEXT_CAP, type Config, type Store, type StoredNote, writeAtomic } from "./store.ts";
 import { mergedNotices } from "./sync.ts";
-import { HARD_CONTEXT_CAP, type Config, type Store, type StoredNote } from "./store.ts";
 import { readTriggers } from "./trigger.ts";
 
 /**
@@ -40,6 +41,8 @@ export interface ContextResult {
   bodies: string[];
   /** Notes in the session whose anchor is gone from the checkout, with what is gone. */
   gone: { id: string; detail: string }[];
+  /** Notes with an index line that says "changed": an anchored file changed after the last check of the note. */
+  changed: string[];
   chars: number;
   /** `chars` by what it pays for: the briefs, the index section, the bodies of the hold-back arm, and `fixed` for all the rest. */
   charsBy: { fixed: number; briefs: number; index: number; bodies: number };
@@ -68,7 +71,7 @@ export function contextBudget(contextChars: number): number {
   return Math.min(Math.max(500, contextChars) + SAVE_RULE.length + 1, HARD_CONTEXT_CAP);
 }
 
-const EMPTY: ContextResult = { text: "", scope: null, briefs: [], index: [], triggerOnly: [], hidden: [], hiddenBy: { repo: 0, global: 0 }, globalAudit: false, holdback: false, bodies: [], gone: [], chars: 0, charsBy: { fixed: 0, briefs: 0, index: 0, bodies: 0 } };
+const EMPTY: ContextResult = { text: "", scope: null, briefs: [], index: [], triggerOnly: [], hidden: [], hiddenBy: { repo: 0, global: 0 }, globalAudit: false, holdback: false, bodies: [], gone: [], changed: [], chars: 0, charsBy: { fixed: 0, briefs: 0, index: 0, bodies: 0 } };
 
 /**
  * The order of the index. Repo notes before global notes, so the notes of the repo are never
@@ -98,11 +101,14 @@ export function rank(notes: StoredNote[], active: Map<string, string>): StoredNo
  * says the same thing twice and doubles the cost of the index. For most notes the line is the
  * only thing a session gets, so it must not lose the words that the cut removed: they follow
  * after "...". The full title is added only when the id does not come from it: a rewritten
- * title, or an id with a number suffix.
+ * title, an id with a number suffix, or a title with a word that has no ASCII form. `changed`
+ * adds the word to the kind: an anchored file of the note changed after its last check.
  */
-export function indexLine(note: StoredNote): string {
-  const head = `- ${note.id} [${note.kind}]`;
+export function indexLine(note: StoredNote, changed = false): string {
+  const head = `- ${note.id} [${note.kind}${changed ? ", changed" : ""}]`;
   const full = normalizeTitle(note.title);
+  // A word that the id cannot hold, such as 日本語, would be lost, so the title comes in full.
+  if (dropsLetters(note.title)) return `${head} ${note.title}`;
   if (full === note.id) return head;
   if (!full.startsWith(`${note.id}-`)) return `${head} ${note.title}`;
   // The shortest start of the title that gives the id. What follows is the part that was cut.
@@ -204,6 +210,9 @@ function pointer(triggerOnly: number): string {
   return `${at}\`kb show <id>\` prints one note. \`kb search <words>\` searches every note.`;
 }
 
+/** Under the heading of an index that has a line with "changed". A title in the index reads as a fact, so the line says what the word means. */
+export const CHANGED_LINE = 'A line with "changed" is a note on a file that changed after the last check of the note. Read the code before you act on it.';
+
 /** The last line of an index that is cut: how many notes have no line. */
 const overLine = (hidden: number) => `${hidden} more index ${hidden === 1 ? "line is" : "lines are"} over the index budget.`;
 
@@ -212,14 +221,17 @@ const overLine = (hidden: number) => `${hidden} more index ${hidden === 1 ? "lin
  * only. `session` is the id of the session that starts, when there is one: it picks the arm.
  */
 export function buildContext(store: Store, repoPath: string, session?: string): ContextResult {
-  return startAt(store, repoPath, session).context;
+  const start = startAt(store, repoPath, session);
+  if (start.movedFrom && start.context.scope) rememberHint(store, start.context.scope, start.movedFrom);
+  return start.context;
 }
 
 /**
  * The context of a scope: a repo id, or null for a session outside any repo. With the checkout at
- * `root`, each repo note in the session has its anchors checked, and a note whose file or symbol is
- * gone says so. The check reads files only, so a session start can afford it. `kb stale` runs the
- * git checks later.
+ * `root`, each repo note in the session has its anchors checked: a note whose file or symbol is
+ * gone says so, and a note whose file is not what its last check saw gets the word "changed". The
+ * check reads files only, so a session start can afford it. `kb stale` runs the git checks later,
+ * for the anchors that have no hash.
  */
 export function contextFor(store: Store, scope: string | null, root: string | null = null, session?: string): ContextResult {
   return startOf(store, scope, root, session).context;
@@ -230,11 +242,16 @@ interface Start {
   context: ContextResult;
   /** Every note of the session, in rank order. */
   ranked: StoredNote[];
+  /** The ids of the notes on a changed file. */
+  changed: Set<string>;
   config: Config;
+  /** The other scope that the moved hint named, so a session start can record that it showed the hint. */
+  movedFrom: string | null;
 }
 
 function startAt(store: Store, repoPath: string, session?: string): Start {
-  if (!store.exists()) return startOf(store, null);
+  // No store yet: no note loads, but the scope is still the repo here, as `kb scope` says.
+  if (!store.exists()) return startOf(store, resolveRepo(repoPath, store, { record: false }).scope);
   const { scope, root } = resolveRepo(repoPath, store);
   if (scope && root) rememberRepo(store, scope, root);
   return startOf(store, scope, root, session);
@@ -253,46 +270,104 @@ interface Session {
   ranked: StoredNote[];
   /** What is gone from a note, by id. */
   goneOf: Map<string, string>;
+  /** The notes on a file that is not what their last check saw. */
+  changed: Set<string>;
   syncError: string | null;
   /** A line for each note that a sync merged, while its other copy is in the trash. */
   merged: string[];
+  /** When the repo has no notes, a line that names the scopes of the same repo name that have some. */
+  moved: string | null;
   charBudget: number;
   briefChars: number;
 }
 
 function startOf(store: Store, scope: string | null, root: string | null = null, session?: string): Start {
   const config = store.config();
-  if (!store.exists()) return { context: EMPTY, ranked: [], config };
+  const none = new Set<string>();
+  if (!store.exists()) return { context: { ...EMPTY, scope }, ranked: [], changed: none, config, movedFrom: null };
   // HOLDBACK: a share of the sessions keeps the old policy. `kb budget` passes no session, so it shows the new one.
   const holdback = inHoldback(session, config.holdback);
 
   // A promoted note loads from the instruction file that holds it now, so it is not here too.
-  const visible = store.notes().filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === scope));
+  const all = store.notes();
+  const visible = all.filter((n) => !n.promoted_to && (n.scope === "global" || n.scope === scope));
   const syncError = store.syncError();
+  const hint = scope ? movedHint(all, scope, new Set([...scopesElsewhere(store, scope, root), ...shownHints(store, scope)])) : null;
+  const moved = hint?.text ?? null;
   const merged = mergedNotices(store);
-  if (visible.length === 0 && !syncError && merged.length === 0) return { context: { ...EMPTY, scope, holdback }, ranked: [], config };
+  const movedFrom = hint?.from ?? null;
+  if (visible.length === 0 && !syncError && !moved && merged.length === 0) return { context: { ...EMPTY, scope, holdback }, ranked: [], changed: none, config, movedFrom };
 
   const ranked = rank(visible, lastActivity(store));
   const goneOf = new Map<string, string>();
+  const changed = new Set<string>();
   if (scope && root) {
     const read = anchorReader();
+    const changedOf = changedAtLoad(store, scope, root, read);
     for (const note of ranked) {
       if (note.scope !== scope || note.anchors.length === 0) continue;
       const missing = missingAnchors(note, root, read).map((m) => m.detail).join("; ");
       if (missing) goneOf.set(note.id, missing.length > GONE_DETAIL_CHARS ? `${missing.slice(0, GONE_DETAIL_CHARS - 3)}...` : missing);
+      // A note under "Anchors gone" has its warning. The word is for the note that has none.
+      else if (changedOf(note).length > 0) changed.add(note.id);
     }
   }
-  const laid: Session = { scope, ranked, goneOf, syncError, merged, charBudget: contextBudget(config.budgets.contextChars), briefChars: config.budgets.briefChars };
-  if (holdback) return { context: heldStart(laid), ranked, config }; // HOLDBACK
+  const laid: Session = { scope, ranked, goneOf, changed, syncError, merged, moved, charBudget: contextBudget(config.budgets.contextChars), briefChars: config.budgets.briefChars };
+  if (holdback) return { context: heldStart(laid), ranked, changed, config, movedFrom }; // HOLDBACK
 
   const context = newStart(laid);
   // Only global notes are hidden here. Which audit makes room? Lay out the global notes alone, as
   // a session outside any repo gets them. If they do not fit there either, it is the global audit.
   if (scope && context.hiddenBy.repo === 0 && context.hiddenBy.global > 0) {
-    const alone = newStart({ ...laid, scope: null, ranked: ranked.filter((n) => n.scope === "global"), goneOf: new Map() });
+    const alone = newStart({ ...laid, scope: null, ranked: ranked.filter((n) => n.scope === "global"), goneOf: new Map(), changed: none });
     context.globalAudit = alone.hidden.length > 0;
   }
-  return { context, ranked, config };
+  return { context, ranked, changed, config, movedFrom };
+}
+
+const HINTS = "moved-hints.json";
+
+function readHints(store: Store): Record<string, string[]> {
+  try {
+    return JSON.parse(readFileSync(store.statePath(HINTS), "utf8")) as Record<string, string[]>;
+  } catch {
+    return {};
+  }
+}
+
+/** The scopes that a session start named already for this scope. The hint shows once for each pair, so it can be ignored. */
+const shownHints = (store: Store, scope: string): string[] => readHints(store)[scope] ?? [];
+
+/** Record that the hint named `from` for `scope`. It is per machine and never committed. */
+function rememberHint(store: Store, scope: string, from: string): void {
+  try {
+    const seen = readHints(store);
+    writeAtomic(store.statePath(HINTS), `${JSON.stringify({ ...seen, [scope]: [...(seen[scope] ?? []), from] }, null, 2)}\n`);
+  } catch {
+    // the hint shows again at the next start, which costs nothing
+  }
+}
+
+/**
+ * When no note that loads has the repo's scope, but another scope with the same repo name (the
+ * last part of the id) has some, one line that names it and the move. The repo may have got a
+ * remote, or its remote moved. It may also be another repo of that name, so kb moves nothing by
+ * itself. The move goes only to a scope with a remote (an id with a "/"), never to a bare scope
+ * that stands for no remote. `skip` holds the scopes that the line must not name: a scope that
+ * another checkout uses, and a scope that the line named already.
+ */
+export function movedHint(notes: StoredNote[], scope: string, skip: ReadonlySet<string> = new Set()): { from: string; text: string } | null {
+  const name = (id: string) => id.split("/").at(-1);
+  // A promoted note loads from an instruction file, so it does not count as a note of the scope.
+  const loads = notes.filter((n) => !n.promoted_to);
+  if (scope === "global" || !scope.includes("/") || loads.some((n) => n.scope === scope)) return null;
+  const counts = new Map<string, number>();
+  for (const n of loads) if (n.scope !== "global" && n.scope !== scope && !skip.has(n.scope) && name(n.scope) === name(scope)) counts.set(n.scope, (counts.get(n.scope) ?? 0) + 1);
+  const others = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  if (others.length === 0) return null;
+  const [top, n] = others[0]!;
+  const also = others.length > 1 ? ` (also ${others.slice(1, 3).map(([s]) => s).join(", ")}${others.length > 3 ? ", ..." : ""})` : "";
+  return { from: top, text: `No note has the scope ${scope}, but ${top} has ${n} ${n === 1 ? "note" : "notes"} and the same repo name${also}. If they belong to this repo, tell the user: \`kb scope move ${top} ${scope} --dry-run\` shows what moves, and with no --dry-run it moves them. This line shows once.` };
 }
 
 /**
@@ -302,7 +377,7 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
  */
 const MERGED_LINES = 3;
 
-function partsOf({ scope, goneOf, syncError, merged }: Session, line: (note: StoredNote) => string) {
+function partsOf({ scope, goneOf, changed, syncError, merged, moved }: Session, line: (note: StoredNote) => string) {
   const goneIn = (shown: StoredNote[]): ContextResult["gone"] => (goneOf.size === 0 ? [] : shown.filter((n) => goneOf.has(n.id)).map((n) => ({ id: n.id, detail: goneOf.get(n.id)! })));
   const head = (shown: StoredNote[]): string[] => {
     const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, FORMAT_LINE, SAVE_RULE];
@@ -310,6 +385,7 @@ function partsOf({ scope, goneOf, syncError, merged }: Session, line: (note: Sto
     if (syncError) lines.push(`kb sync did not finish: ${syncError}`);
     lines.push(...merged.slice(0, MERGED_LINES));
     if (merged.length > MERGED_LINES) lines.push(`kb sync merged ${merged.length - MERGED_LINES} more notes. \`kb list --trash\` shows each copy, with an id that ends in -conflict.`);
+    if (moved) lines.push(moved);
     // A note whose file or symbol is gone may be wrong now. The session checks it before it acts on it.
     const gone = goneIn(shown);
     if (gone.length > 0) {
@@ -321,6 +397,7 @@ function partsOf({ scope, goneOf, syncError, merged }: Session, line: (note: Sto
   const index = (listed: StoredNote[], hidden: number): string[] => {
     if (listed.length === 0) return [];
     const lines = ["", "## Index"];
+    if (listed.some((n) => changed.has(n.id))) lines.push(CHANGED_LINE);
     for (const section of [scope, "global"]) {
       const inSection = listed.filter((n) => n.scope === section);
       if (inSection.length === 0) continue;
@@ -360,7 +437,7 @@ function newStart(session: Session): ContextResult {
       return text;
     };
   };
-  const line = once(indexLine);
+  const line = once((note) => indexLine(note, session.changed.has(note.id)));
   const brief = once(briefBlock);
   const { goneIn, head, index } = partsOf(session, line);
 
@@ -434,6 +511,7 @@ function newStart(session: Session): ContextResult {
     holdback: false,
     bodies: [],
     gone: goneIn([...shown.briefs, ...shown.listed]),
+    changed: ids(shown.listed.filter((n) => session.changed.has(n.id))),
     chars: text.length,
     charsBy: { fixed: text.length - sizes.briefs - sizes.index, ...sizes, bodies: 0 },
   };
@@ -441,7 +519,7 @@ function newStart(session: Session): ContextResult {
 
 /** HOLDBACK: a start of the arm. The old policy picks the notes and builds the text, with the fixed text and the index lines of today. */
 function heldStart(session: Session): ContextResult {
-  const { goneIn, head, index } = partsOf(session, indexLine);
+  const { goneIn, head, index } = partsOf(session, (note) => indexLine(note, session.changed.has(note.id)));
   const old = oldStart(session.ranked, session.scope !== null, { head, index }, session.charBudget);
   return {
     text: old.text,
@@ -455,6 +533,7 @@ function heldStart(session: Session): ContextResult {
     holdback: true,
     bodies: ids(old.bodies),
     gone: goneIn([...old.bodies, ...old.listed]),
+    changed: ids(old.listed.filter((n) => session.changed.has(n.id))),
     chars: old.text.length,
     charsBy: { fixed: old.text.length - old.sizes.index - old.sizes.bodies, briefs: 0, ...old.sizes },
   };
@@ -511,7 +590,7 @@ export function budgetOf(store: Store, scope: string | null): BudgetResult {
   return budgetFor(startOf(store, scope, scope ? repoRoot(store, scope) : null));
 }
 
-function budgetFor({ context, ranked, config }: Start): BudgetResult {
+function budgetFor({ context, ranked, changed, config }: Start): BudgetResult {
   const form = new Map<string, BudgetResult["notes"][number]["shown"]>();
   for (const id of context.briefs) form.set(id, "brief");
   for (const id of context.index) form.set(id, "index");
@@ -519,7 +598,7 @@ function budgetFor({ context, ranked, config }: Start): BudgetResult {
   for (const id of context.hidden) form.set(id, "hidden");
   const notes = ranked.filter((n) => form.has(n.id)).map((n) => {
     const shown = form.get(n.id)!;
-    return { id: n.id, kind: n.kind, scope: n.scope, chars: shown === "brief" ? briefBlock(n).length + 1 : shown === "trigger" ? 0 : indexLine(n).length + 1, shown };
+    return { id: n.id, kind: n.kind, scope: n.scope, chars: shown === "brief" ? briefBlock(n).length + 1 : shown === "trigger" ? 0 : indexLine(n, changed.has(n.id)).length + 1, shown };
   });
   type Row = (typeof notes)[number];
   const budget = contextBudget(config.budgets.contextChars);

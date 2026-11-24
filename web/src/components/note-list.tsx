@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PageNote } from "../../../cli/wire.ts";
 import { Button } from "@/components/ui/button";
-import { Empty, EmptyContent, EmptyTitle } from "@/components/ui/empty";
+import { Empty, EmptyContent, EmptyDescription, EmptyTitle } from "@/components/ui/empty";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -14,9 +14,9 @@ interface Props {
   q: string;
   onQ: (q: string) => void;
   searchRef: React.RefObject<HTMLInputElement | null>;
-  onOpen: (note: PageNote) => void;
+  onOpen: (note: PageNote, byKey: boolean) => void;
   /** Why the list is empty, and the shortest way back to notes. */
-  empty: { text: string; action?: { label: string; run: () => void } };
+  empty: { text: string; hint?: React.ReactNode; action?: { label: string; run: () => void } };
   /** The list shows the trash: it says how long a note stays, and offers to empty it. */
   trash?: { days: number; onEmpty: () => void };
   /** The list shows one project: it offers to move the whole project to the trash, and to audit it. */
@@ -25,9 +25,14 @@ interface Props {
 
 export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, trash, project }: Props) {
   const rows = useRef(new Map<string, HTMLButtonElement>());
+  // The focus follows the current row while it is in the list, as the tab order has only that row.
   useEffect(() => {
-    if (current) rows.current.get(current.id)?.scrollIntoView({ block: "nearest" });
+    const row = current && rows.current.get(current.id);
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest" });
+    if (document.activeElement?.closest("button[data-id]")) row.focus({ preventScroll: true });
   }, [current?.id]);
+  const first = notes[0];
   // On a phone the filter sticks once the page scrolls past the point above it. Only then do the rows fade under it.
   const above = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
@@ -82,7 +87,7 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, tra
                 size="xs"
                 data-audit-start={project.audit.state}
                 disabled={project.audit.state === "running"}
-                title={project.audit.state === "start" ? "An agent checks the stale notes here and proposes cards" : undefined}
+                title={project.audit.state === "start" ? "A headless Claude session checks the stale notes here and proposes cards. It counts against your Claude usage." : undefined}
                 className="-my-px ml-auto text-muted-foreground hover:text-foreground"
                 onClick={project.audit.run}
               >
@@ -101,6 +106,7 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, tra
         {notes.length === 0 ? (
           <Empty className="items-start gap-2.5 rounded-none border-0 px-4 pt-0.5 pb-6 text-left md:p-0 md:px-4">
             <EmptyTitle className="text-[13.5px] font-normal text-muted-foreground">{empty.text}</EmptyTitle>
+            {empty.hint && <EmptyDescription className="text-[13.5px] leading-normal">{empty.hint}</EmptyDescription>}
             {empty.action && (
               <EmptyContent className="items-start">
                 <Button variant="outline" size="xs" onClick={empty.action.run}>
@@ -119,13 +125,19 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, tra
                   else rows.current.delete(note.id);
                 }}
                 type="button"
-                tabIndex={-1}
+                // One row is in the tab order: the open note, or the first row when none is open.
+                tabIndex={note === (current ?? first) ? 0 : -1}
                 data-id={note.id}
                 aria-current={note === current}
-                onClick={() => onOpen(note)}
+                onClick={(event) => onOpen(note, event.detail === 0)}
+                // A title cut at two lines shows whole on hover.
+                onPointerEnter={(event) => {
+                  const text = event.currentTarget.lastElementChild as HTMLElement;
+                  event.currentTarget.title = text.scrollHeight > text.clientHeight ? note.title : "";
+                }}
                 className={cn(
                   `k-${note.kind}`,
-                  "flex w-full scroll-my-(--scroll-fade) items-baseline gap-2.5 rounded-md px-2 py-[7px] text-left text-sm leading-[1.4] hover:bg-muted aria-[current=true]:bg-muted max-wide:scroll-mt-[104px] max-wide:scroll-mb-4",
+                  "flex w-full scroll-my-(--scroll-fade) items-baseline gap-2.5 rounded-md px-2 py-[7px] text-left max-wide:min-h-11 max-wide:py-3 text-sm leading-[1.4] hover:bg-muted aria-[current=true]:bg-muted max-wide:scroll-mt-[104px] max-wide:scroll-mb-4",
                   // The pane that has the keys marks its current item a little more.
                   "group-data-[pane=list]/page:aria-[current=true]:bg-secondary group-data-[pane=list]/page:aria-[current=true]:ring-1 group-data-[pane=list]/page:aria-[current=true]:ring-edge group-data-[pane=list]/page:aria-[current=true]:ring-inset",
                 )}

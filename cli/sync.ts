@@ -1,11 +1,11 @@
 // Sync between machines through the store's git remote. Never blocks a session.
 
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { rollUp } from "./log.ts";
 import { type Note, parseNote, serializeNote } from "./note.ts";
 import { clearStaleCache } from "./stale.ts";
-import { type Store, tilde, writeAtomic } from "./store.ts";
+import { type Store, userHome, withLock, writeAtomic } from "./store.ts";
 
 export interface SyncResult {
   status: "ok" | "no-remote" | "busy" | "conflict" | "error";
@@ -28,7 +28,8 @@ export interface MergedNote {
 /** A sync that did not finish is a failure for a script: `kb sync` exits with 1. */
 export const syncFailed = (result: SyncResult) => result.status === "conflict" || result.status === "error";
 
-const LOCK_STALE_MS = 120_000;
+/** A sync can run several git calls of 30 seconds each, so a live holder keeps its lock a long time. */
+const LOCK_STALE_MS = 600_000;
 
 function run(store: Store, ...args: string[]): { ok: boolean; out: string; err: string } {
   const env = {
@@ -80,14 +81,15 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
   // A fresh clone of an empty remote has no layout yet. Sync is a write, so create it.
   store.ensure();
 
-  const lock = store.statePath("sync-lock");
-  if (Date.now() - mtime(lock) > LOCK_STALE_MS) rmSync(lock, { recursive: true, force: true });
   try {
-    mkdirSync(lock);
-  } catch {
-    return { status: "busy", detail: "another sync is in progress" };
+    const result = withLock(store.statePath("sync-lock"), () => syncLocked(store, now), { waitMs: 0, staleMs: LOCK_STALE_MS });
+    return result ?? { status: "busy", detail: "another sync is in progress" };
+  } catch (error) {
+    return { status: "error", detail: `kb cannot lock the store: ${(error as Error).message}` };
   }
+}
 
+function syncLocked(store: Store, now: Date): SyncResult {
   try {
     rollUp(store, now);
     store.commit("kb: sync", { all: true });
@@ -108,7 +110,8 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
     if (hasRemoteBranch && hasLocal) {
       // A write that commits while the rebase runs would break it, so the two take turns.
       const rebase = store.withGitLock(() => rebaseOnto(store, `${remote}/${branch}`, now));
-      if (!rebase) return fail("error", "another kb process held the store's git for too long. Run `kb sync` again.");
+      // A write that holds the lock for a long time is not a conflict: nothing is wrong, and the next sync tries again.
+      if (!rebase) return { status: "busy", detail: "a write holds the store's git lock" };
       if ("files" in rebase) {
         const result = fail("conflict", conflictDetail(store, remote, branch, rebase.files));
         return { ...result, files: rebase.files };
@@ -133,13 +136,12 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
     return { status: "ok", detail: "the store matches the remote" };
   } finally {
     touch(store.statePath("sync-last"));
-    rmSync(lock, { recursive: true, force: true });
   }
 }
 
 /** The store's folder as the user types it, with ~ for the home folder. */
 function short(store: Store): string {
-  const home = tilde("~");
+  const home = userHome();
   return store.home.startsWith(`${home}/`) ? `~${store.home.slice(home.length)}` : store.home;
 }
 
@@ -231,11 +233,18 @@ function mergeNote(store: Store, file: string, now: Date): MergedNote | null {
   let copy = `${kept.id}-conflict`;
   for (let n = 2; existsSync(store.notePath({ scope: other.scope, id: copy }, true)) || existsSync(store.notePath({ scope: other.scope, id: copy })); n++) copy = `${kept.id}-conflict-${n}`;
   const copyPath = store.notePath({ scope: other.scope, id: copy }, true);
-  writeAtomic(join(store.home, file), serializeNote(kept));
+  const keptPath = join(store.home, file);
+  writeAtomic(keptPath, serializeNote(kept));
   writeAtomic(copyPath, serializeNote({ ...other, id: copy, trashed_at: now.toISOString().replace(/\.\d{3}Z$/, "Z") }));
+  // The rebase commits both files. Tracking them keeps a later commit from missing them.
+  store.track(keptPath);
+  store.track(copyPath);
   if (!run(store, "add", "--", file, copyPath).ok) return null;
   return { id: kept.id, copy, kept: localWins ? "this machine" : "the remote" };
 }
+
+/** Set to stop kickSync, so a writer that nobody watches (the audit agent) never pushes the store. */
+export const NO_SYNC_ENV = "KB_NO_SYNC";
 
 /**
  * Start a sync in a detached process and return at once.
@@ -243,6 +252,7 @@ function mergeNote(store: Store, file: string, now: Date): MergedNote | null {
  */
 export function kickSync(store: Store, throttleMs = 0): boolean {
   try {
+    if (process.env[NO_SYNC_ENV]) return false;
     if (!store.exists() || !store.config().sync || !store.hasRemote()) return false;
     const stamp = store.statePath("sync-last");
     if (throttleMs > 0 && Date.now() - mtime(stamp) < throttleMs) return false;

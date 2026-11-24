@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- The share card, 1200 x 630. render.ts fills the fonts and takes the picture to src/og.png. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+/*FONT_FACES*/
+/*BASE_CSS*/
+html, body { width: 1200px; height: 630px; overflow: hidden; }
+.card { width: 1200px; height: 630px; display: grid; grid-template-rows: auto 1fr auto; }
+.top { display: flex; align-items: center; gap: 18px; height: 96px; padding: 0 72px; border-bottom: 2px solid var(--line); font: 24px var(--f-mono); color: var(--mute); }
+.top .brand { display: flex; align-items: center; gap: 14px; color: var(--ink); font-weight: 600; }
+.top .live { width: 13px; height: 13px; border-radius: 50%; background: var(--body); }
+.top .path { color: var(--faint); }
+.top .sp { flex: 1; }
+.top i { width: 120px; height: 7px; border-radius: 4px; background: var(--line2); overflow: hidden; display: block; }
+.top i::before { content: ""; display: block; height: 100%; width: calc({{n.fill}} * 100%); background: var(--body); }
+.mid { padding: 0 72px; display: grid; align-content: center; gap: 30px; }
+h1 { font: 600 82px/1.04 var(--f-mono); margin: 0; letter-spacing: -.01em; }
+h1 span { color: var(--hush); }
+.mid p { margin: 0; font: 30px/1.4 var(--f-body); color: var(--mute); }
+.foot { display: flex; justify-content: space-between; padding: 0 72px 56px; font: 24px var(--f-mono); color: var(--faint); }
+.foot b { color: var(--soft); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="top"><span class="brand"><span class="live"></span>kb</span><span class="path">~/acme/shop</span><span class="sp"></span><span>context</span><i></i><span>{{n.chars}} / {{n.budget}}</span></div>
+  <div class="mid">
+    <h1>Your agent forgets at /clear. <span>kb does not.</span></h1>
+    <p>Memory for Claude Code. A note loads when it applies.</p>
+  </div>
+  <div class="foot"><b>kb.jrnxf.co</b><span>free and open source · MIT</span></div>
+</div>
+</body>
+</html>

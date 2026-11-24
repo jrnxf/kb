@@ -97,7 +97,10 @@ export function NoteView({ note, onEdit, onTrash, onRestore, onDelete }: Props) 
           ))}
         </p>
       )}
-      {/* The server renders the markdown with raw HTML escaped, so this is safe to insert. */}
+      {/*
+        The server renders the markdown with raw HTML escaped, and cuts a link or image that could run
+        script or call out (renderBody in cli/page.ts). The policy of kb serve blocks any script that still gets in.
+      */}
       <div className="prose-kb" dangerouslySetInnerHTML={{ __html: note.html }} />
     </article>
   );

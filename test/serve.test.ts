@@ -1,9 +1,22 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { type Served, serve } from "../cli/serve.ts";
-import type { Store } from "../cli/store.ts";
-import { MAIN, daysAgo, kb, plain, putNote, sh, tempDir, tempStore } from "./helpers.ts";
+import { chromium } from "playwright";
+import { type Served, linkToRunning, pagePolicy, serve } from "../cli/serve.ts";
+import { Store } from "../cli/store.ts";
+import { MAIN, daysAgo, kb, plain, putNote, sh, tempDir, tempStore, watchPolicy } from "./helpers.ts";
+
+/** The JSON that a `kb serve --json` child prints. A child that exits first fails the test with what it wrote to stderr. */
+async function firstJson(child: ReturnType<typeof Bun.spawn>): Promise<{ url: string; started: boolean }> {
+  let text = "";
+  const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
+  while (!text.includes("}")) {
+    const { value, done } = await reader.read();
+    if (done) throw new Error(`kb serve ended before it printed its address. Its stderr: ${await new Response(child.stderr as ReadableStream).text()}`);
+    text += new TextDecoder().decode(value);
+  }
+  return JSON.parse(text);
+}
 
 describe("kb serve", () => {
   let served: Served | undefined;
@@ -39,6 +52,68 @@ describe("kb serve", () => {
     putNote(store, { id: "b", title: "Added while the server runs" });
     expect((await call("GET", "/api/page")).json.notes.map((n: { title: string }) => n.title)).toContain("Added while the server runs");
   });
+
+  test("every answer forbids framing, sniffing and the referrer, and the page runs only its own script", async () => {
+    start(tempStore());
+    for (const path of ["/", "/api/page", "/api/state", "/assets/none.js", "/api/notes/none"]) {
+      const response = await fetch(new URL(path, served!.url));
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("x-frame-options")).toBe("DENY");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    }
+    const page = await fetch(served!.url);
+    const policy = page.headers.get("content-security-policy")!;
+    expect(policy).toStartWith("default-src 'none'");
+    expect(policy).toContain("style-src 'self';");
+    expect(policy).not.toContain("unsafe");
+    // The inline theme script runs by its hash (the browser test below shows it runs).
+    expect(policy).toMatch(/script-src 'self' 'sha256-[A-Za-z0-9+/]+=*';/);
+    expect(pagePolicy("<p>no script</p>")).toContain("script-src 'self';");
+    // The browser hashes the text with CRLF read as LF, reads attributes as a parser does, and skips a script with a src.
+    const hash = (text: string) => `'sha256-${new Bun.CryptoHasher("sha256").update(text).digest("base64")}'`;
+    expect(pagePolicy("<script>a\r\nb</script>")).toContain(hash("a\nb"));
+    expect(pagePolicy('<script nonce="x">c</script><script type="module" src="/a.js"></script>')).toContain(`script-src 'self' ${hash("c")};`);
+    expect(pagePolicy('<script data-src="x">d</script>')).toContain(`script-src 'self' ${hash("d")};`);
+    expect(pagePolicy('<script data-note="a>b">e</script>')).toContain(`script-src 'self' ${hash("e")};`);
+    // A wrong host gets the headers too.
+    expect((await fetch(new URL("/api/state", served!.url), { headers: { host: "evil.example.com" } })).headers.get("x-frame-options")).toBe("DENY");
+  });
+
+  test("a note's script link does nothing in a browser, and the page calls no other site", async () => {
+    const store = tempStore();
+    putNote(store, { id: "xss", title: "Links", body: "[plain](javascript:alert(1))\n\n[mixed](JaVaScRiPt:alert(1))\n\n[entity](&#106;avascript:alert(1))\n\n[web](https://example.com)\n\n![pixel](https://tracker.example.com/p.png)" });
+    start(store);
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      page.setDefaultTimeout(3000);
+      const blocked = await watchPolicy(page);
+      const policy = (await fetch(served!.url)).headers.get("content-security-policy")!;
+      const dialogs: string[] = [];
+      const elsewhere: string[] = [];
+      page.on("dialog", (dialog) => void (dialogs.push(dialog.message()), dialog.dismiss()));
+      page.on("request", (request) => void (request.url().startsWith(served!.url) || elsewhere.push(request.url())));
+      await page.goto(`${served!.url}#note=xss`);
+      // The header holds the hash of the inline script as the browser reads it, so the script runs by that hash.
+      const hashed = await page.evaluate(async () => {
+        const text = document.querySelector("script:not([src])")!.textContent!;
+        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+        return `'sha256-${btoa(String.fromCharCode(...digest))}'`;
+      });
+      expect(policy).toContain(`script-src 'self' ${hashed};`);
+      const body = page.locator(".prose-kb");
+      await body.getByText("entity").waitFor();
+      for (const name of ["plain", "mixed", "entity"]) await body.getByText(name).click();
+      expect(await body.locator("a").evaluateAll((links) => links.map((a) => a.getAttribute("href")))).toEqual(["https://example.com"]);
+      expect(await body.textContent()).toContain("pixel");
+      expect(dialogs).toEqual([]);
+      expect(elsewhere).toEqual([]);
+      expect(await blocked()).toEqual([]);
+    } finally {
+      await browser.close();
+    }
+  }, 20_000);
 
   test("serves no file from outside the built page, and no other path", async () => {
     start(tempStore());
@@ -194,10 +269,7 @@ describe("kb serve", () => {
     putNote(store, { id: "a", title: "Served by the command" });
     const first = Bun.spawn([process.execPath, MAIN, "serve", "--port", "0", "--json"], { cwd: plain(), env: { ...process.env, KB_HOME: store.home }, stdout: "pipe", stderr: "pipe" });
     try {
-      let text = "";
-      const reader = first.stdout.getReader();
-      while (!text.includes("}")) text += new TextDecoder().decode((await reader.read()).value);
-      const { url, started } = JSON.parse(text);
+      const { url, started } = await firstJson(first);
       expect(started).toBe(true);
       const page = (await (await fetch(new URL("/api/page", url))).json()) as { notes: { title: string }[] };
       expect(page.notes.map((n) => n.title)).toEqual(["Served by the command"]);
@@ -216,9 +288,136 @@ describe("kb serve", () => {
     expect(existsSync(join(store.home, "index.html"))).toBe(false);
   });
 
-  test("fails with a clear message when there is no store", () => {
-    const result = kb(join(tempDir(), "none"), ["serve", "--no-open"], { cwd: plain() });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("kb add");
+  test("no answer gives the key away: the link carries it, and /api/state says whether a page has it", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    const { call } = start(store);
+    expect(served!.link).toBe(`${served!.url}#token=${served!.token}`);
+    const page = await fetch(new URL("/api/page", served!.url));
+    expect(await page.text()).not.toContain(served!.token);
+    // A page with no key still reads, and learns that it cannot write.
+    expect((await call("GET", "/api/page", undefined, {})).status).toBe(200);
+    expect((await call("GET", "/api/state", undefined, {})).json.write).toBe(false);
+    expect((await call("GET", "/api/state")).json.write).toBe(true);
+    const refused = await call("POST", "/api/notes/a/trash", undefined, {});
+    expect(refused.json.error).toContain("Open the link that `kb serve` printed");
+  });
+
+  test("the key stays the same after a restart, so an open page keeps working, and only the user can read it", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    start(store);
+    const first = served!.token;
+    served!.stop();
+    const { call } = start(store);
+    expect(served!.token).toBe(first);
+    expect((await call("POST", "/api/notes/a/trash")).status).toBe(200);
+    expect(statSync(store.statePath("serve-token")).mode & 0o777).toBe(0o600);
+  });
+
+  test("a server that started before the store existed keeps its key once the first note is in", async () => {
+    const store = new Store(join(tempDir(), "late"));
+    start(store);
+    expect(existsSync(store.home)).toBe(false);
+    putNote(store, { id: "a" });
+    await fetch(new URL("/api/page", served!.url));
+    expect(readFileSync(store.statePath("serve-token"), "utf8").trim()).toBe(served!.token);
+  });
+
+  test("the key is written once: deleting the file does not bring it back while the server runs", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    start(store);
+    expect(existsSync(store.statePath("serve-token"))).toBe(true);
+    rmSync(store.statePath("serve-token"));
+    await fetch(new URL("/api/page", served!.url));
+    expect(existsSync(store.statePath("serve-token"))).toBe(false);
+    // A restart makes a new key.
+    const old = served!.token;
+    served!.stop();
+    start(store);
+    expect(served!.token).not.toBe(old);
+  });
+
+  test("two servers of one store that started before it existed share one key", async () => {
+    const store = new Store(join(tempDir(), "late"));
+    const one = serve(store, { port: 0 });
+    const two = serve(store, { port: 0 });
+    try {
+      expect(one.token).not.toBe(two.token);
+      putNote(store, { id: "a" });
+      await fetch(new URL("/api/page", one.url));
+      await fetch(new URL("/api/page", two.url));
+      const kept = readFileSync(store.statePath("serve-token"), "utf8").trim();
+      expect(kept).toBe(one.token);
+      // The second server took the key of the file, so a link with it works on both.
+      for (const server of [one, two]) {
+        const state = await (await fetch(new URL("/api/state", server.url), { headers: { "x-kb-token": kept } })).json();
+        expect(state.write).toBe(true);
+      }
+    } finally {
+      one.stop();
+      two.stop();
+    }
+  });
+
+  test("the link to a running server has the key only when the server uses the key in the file", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    start(store);
+    const found = await linkToRunning(store, served!.port, "#audit=global");
+    expect(found).toEqual({ link: `http://127.0.0.1:${served!.port}/#audit=global&token=${served!.token}`, keyed: true });
+    // A key file that the server does not know: the link has no key, and says so.
+    rmSync(store.statePath("serve-token"));
+    expect(await linkToRunning(store, served!.port)).toEqual({ link: `http://127.0.0.1:${served!.port}/`, keyed: false });
+  });
+
+  test("the audit link that the command prints carries the key", async () => {
+    const store = tempStore();
+    putNote(store, { id: "a" });
+    const child = Bun.spawn([process.execPath, MAIN, "serve", "--port", "0", "--json"], { cwd: plain(), env: { ...process.env, KB_HOME: store.home }, stdout: "pipe", stderr: "pipe" });
+    try {
+      const { url } = await firstJson(child);
+      const key = readFileSync(store.statePath("serve-token"), "utf8").trim();
+      const proposed = kb(store, ["audit", "propose", "--json"], { stdin: JSON.stringify({ items: [{ id: "a", action: "keep", why: "still true" }] }) });
+      expect(proposed.json.url).toBe(`${new URL(url).origin}/#audit=global&token=${key}`);
+    } finally {
+      child.kill();
+    }
+  });
+
+  test("a path that does not decode is a bad request, not a crash", async () => {
+    start(tempStore());
+    const response = await fetch(new URL("/%zz", served!.url));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "bad path" });
+  });
+
+  test("starts on a store that does not exist yet, shows no notes, and creates nothing", async () => {
+    const home = join(tempDir(), "none");
+    const result = Bun.spawn([process.execPath, MAIN, "serve", "--port", "0", "--json"], { cwd: plain(), env: { ...process.env, KB_HOME: home }, stdout: "pipe", stderr: "pipe" });
+    try {
+      const { url, started } = await firstJson(result);
+      expect(started).toBe(true);
+      const page = (await (await fetch(new URL("/api/page", url))).json()) as { notes: unknown[] };
+      expect(page.notes).toEqual([]);
+      // A folder in place of the store would stop a later `git clone` into it.
+      expect(existsSync(home)).toBe(false);
+    } finally {
+      result.kill();
+    }
+  });
+
+  test("a second kb serve on a port that serves another store says so", async () => {
+    const store = tempStore();
+    const first = Bun.spawn([process.execPath, MAIN, "serve", "--port", "0", "--json"], { cwd: plain(), env: { ...process.env, KB_HOME: store.home }, stdout: "pipe", stderr: "pipe" });
+    try {
+      const { url } = await firstJson(first);
+      const other = kb(tempStore(), ["serve", "--port", new URL(url).port, "--no-open"]);
+      expect(other.code).toBe(1);
+      expect(other.stderr).toContain("serves another kb store");
+    } finally {
+      first.kill();
+    }
   });
 });

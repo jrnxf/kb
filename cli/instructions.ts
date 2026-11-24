@@ -20,7 +20,7 @@ export interface InstructionsFile {
 }
 
 /** The path with the home folder written as ~, for the page and the CLI. */
-export const shortPath = (path: string) => (path.startsWith(`${userHome()}/`) ? `~${path.slice(userHome().length)}` : path);
+export const shortPath = (path: string) => (userHome() !== "/" && path.startsWith(`${userHome()}/`) ? `~${path.slice(userHome().length)}` : path);
 
 /**
  * The global instructions file. The configured path is often a link (a dotfiles manager links it
@@ -33,11 +33,6 @@ export function globalInstructions(store: Store): InstructionsFile {
     path = realpathSync(tilde(name));
   } catch {
     throw new KbError(`the global instructions file ${name} does not exist. Create it, or set globalInstructions in ${shortPath(join(store.home, "local.json"))}.`);
-  }
-  // Apply writes this file, so it must be the user's own: a file in the home folder, at the end of every link.
-  const home = (() => { try { return realpathSync(userHome()); } catch { return userHome(); } })();
-  if (!path.startsWith(`${home}/`)) {
-    throw new KbError(`the global instructions file ${name} is ${path}, outside your home folder. kb writes only inside it. Set globalInstructions in ${shortPath(join(store.home, "local.json"))} to a file in your home folder.`);
   }
   return { name, path, link: lstatSync(tilde(name)).isSymbolicLink() };
 }

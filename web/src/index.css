@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* Sonner would add this as a <style> element, which kb serve does not allow. vite.config.ts stops that. */
+@import "sonner/dist/styles.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -41,7 +43,8 @@
   --radius-2xl: calc(var(--radius) * 1.8);
 }
 
-/* Warm greys, as the page had before React. */
+/* Warm greys, as the page had before React. Text tokens pass WCAG AA (4.5:1) on the background, muted and
+   secondary. The ring passes 3:1 on the background and on cards. */
 :root {
   --background: #fbfbfa;
   --foreground: #1c1c1a;
@@ -54,14 +57,14 @@
   --secondary: #eaeae6;
   --secondary-foreground: #1c1c1a;
   --muted: #f3f3f0;
-  --muted-foreground: #6f6f6a;
+  --muted-foreground: #5e5e59;
   --accent: #f3f3f0;
   --accent-foreground: #1c1c1a;
   --destructive: #b91c1c;
   --border: #e7e7e2;
   --input: #e7e7e2;
-  --ring: #a3a39c;
-  --faint: #a3a39c;
+  --ring: #8a8a84;
+  --faint: #696963;
   --edge: #d3d3cd;
   --link: #2f5bd8;
   --radius: 0.5rem;
@@ -92,7 +95,7 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
-  --faint: oklch(0.556 0 0);
+  --faint: oklch(0.65 0 0);
   --edge: oklch(0.371 0 0);
   --link: #8aa6ff;
   --k-open-work: #fb923c;
@@ -104,7 +107,7 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring;
   }
   html {
     @apply font-sans;
@@ -144,12 +147,40 @@
   & blockquote { margin: 0 0 12px; padding-left: 12px; border-left: 2px solid var(--border); color: var(--muted-foreground); }
   & pre { overflow-x: auto; background: var(--muted); border-radius: 6px; padding: 10px 12px; }
   & pre code { padding: 0; background: none; }
+  /* A wide table scrolls inside the note, not the page. */
+  & .table-scroll { max-width: 100%; overflow-x: auto; margin: 0 0 12px; }
+  & table { width: max-content; border-collapse: collapse; font-size: 14px; line-height: 1.5; overflow-wrap: normal; }
+  & th, & td { border: 1px solid var(--border); padding: 6px 10px; vertical-align: top; }
+  & th { text-align: left; font-weight: 600; background: var(--muted); }
 }
 code {
   font: 12.5px var(--font-mono);
   background: var(--muted);
   border-radius: 4px;
   padding: 1px 5px;
+}
+
+/* On a phone every tap target is at least 44 px: a smaller button, chip or link gets a larger hit area around it. */
+@layer components {
+  @media (pointer: coarse) and (width < 56.3125rem) {
+    /* :where() keeps the rule weaker than a utility, such as the absolute position of a dialog's close button. */
+    :where([data-slot="button"], [data-rail], [data-audit]) { position: relative; }
+    :where([data-slot="button"], [data-rail], [data-audit])::after {
+      content: "";
+      position: absolute;
+      inset: min(0px, calc((100% - 44px) / 2));
+    }
+  }
+}
+
+/* Motion is for the eye only, so it stops when the system asks for less. */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* A screen without a keyboard does not show the keys. */
@@ -163,3 +194,10 @@ code {
 .a-merge { --a: var(--k-decision); }
 .a-keep { --a: var(--faint); }
 .a-promote { --a: var(--k-convention); }
+
+/*
+ * Base UI hides the native scrollbar of a scroll area and a select with this class. kb serve allows
+ * no inline style, so the page turns off the <style> element of Base UI and keeps its rule here.
+ */
+.base-ui-disable-scrollbar { scrollbar-width: none; }
+.base-ui-disable-scrollbar::-webkit-scrollbar { display: none; }

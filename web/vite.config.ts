@@ -16,9 +16,25 @@ const stamp = (): Plugin => ({
   },
 });
 
+/**
+ * Sonner adds its CSS as a <style> element when it loads. The page policy of kb serve allows no
+ * inline style, so the browser blocks it and reports an error. index.css imports the same CSS as a
+ * file, and this drops the <style> element. The dev server sends no policy, so it keeps both.
+ */
+const sonnerCss = (): Plugin => ({
+  name: "kb-sonner-css",
+  apply: "build",
+  transform(code, id) {
+    if (!/[\\/]sonner[\\/]dist[\\/]index\.m?js$/.test(id)) return;
+    const out = code.replace(/^__insertCSS\(.*\);?$/m, "");
+    if (out === code) this.error("sonner no longer adds its CSS with __insertCSS. Check how it does now.");
+    return out;
+  },
+});
+
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
-  plugins: [react(), tailwindcss(), stamp()],
+  plugins: [react(), tailwindcss(), stamp(), sonnerCss()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   build: { outDir: "dist", emptyOutDir: true },
   server: { proxy: { "/api": { target: "http://127.0.0.1:4810", changeOrigin: true } } },

@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { rmSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Store } from "../cli/store.ts";
+import { tidyTrash } from "../cli/write.ts";
+import { Store, withLock } from "../cli/store.ts";
 import { syncNow } from "../cli/sync.ts";
-import { kb, putNote, sh, tempDir } from "./helpers.ts";
+import { kb, putNote, sh, tempDir, tempStore } from "./helpers.ts";
 
 const note = (title: string, body = "x") => JSON.stringify({ title, kind: "gotcha", body, scope: "global", new: true });
 const mode = (path: string) => statSync(path).mode & 0o777;
@@ -60,6 +61,99 @@ describe("the permissions of the store", () => {
     kb(home, ["add", "--json"], { stdin: note("Open stores get closed") });
     expect(mode(home)).toBe(0o700);
     expect(mode(join(home, ".state"))).toBe(0o700);
+  });
+
+  test("the first write closes the notes, the trash and the files of an older store too", () => {
+    const home = join(tempDir(), "store");
+    kb(home, ["add", "--json"], { stdin: note("Old files get closed") });
+    const file = join(home, "notes", "global", "old-files-get-closed.md");
+    rmSync(join(home, ".state", "private"));
+    chmodSync(file, 0o644);
+    chmodSync(join(home, "notes", "global"), 0o755);
+    mkdirSync(join(home, "trash", "global"), { recursive: true, mode: 0o755 });
+    chmodSync(join(home, "trash", "global"), 0o755);
+    kb(home, ["add", "--json"], { stdin: note("A later write") });
+    expect(mode(file)).toBe(0o600);
+    expect(mode(join(home, "notes", "global"))).toBe(0o700);
+    expect(mode(join(home, "trash", "global"))).toBe(0o700);
+  });
+});
+
+describe("the lock", () => {
+  test("a lock of a process that is gone is taken over, and a lock of a live process is not", () => {
+    const lock = join(tempDir(), "lock");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner"), "999999 dead");
+    expect(withLock(lock, () => "ran", { waitMs: 0 })).toBe("ran");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner"), `${process.pid} live`);
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(lock, old, old);
+    utimesSync(join(lock, "owner"), old, old);
+    // The holder lives, and the lock is not past the stale time: a slow holder keeps it.
+    expect(withLock(lock, () => "ran", { waitMs: 50, staleMs: 600_000 })).toBeUndefined();
+    expect(readFileSync(join(lock, "owner"), "utf8")).toBe(`${process.pid} live`);
+  });
+
+  test("a holder that was taken over does not remove the new holder's lock", () => {
+    const lock = join(tempDir(), "lock");
+    withLock(lock, () => {
+      rmSync(lock, { recursive: true });
+      mkdirSync(lock);
+      writeFileSync(join(lock, "owner"), "999999 other");
+    });
+    expect(readFileSync(join(lock, "owner"), "utf8")).toBe("999999 other");
+  });
+
+  test("a commit that cannot make its lock folder warns and does not throw", () => {
+    const store = tempStore();
+    putNote(store, { id: "first" });
+    store.track(join(store.home, "notes", "global", "first.md"));
+    chmodSync(store.statePath("."), 0o500);
+    try {
+      expect(store.commit("kb: no lock")).toBe(false);
+    } finally {
+      chmodSync(store.statePath("."), 0o700);
+    }
+    expect(store.commit("kb: with lock")).toBe(true);
+  });
+
+  test("a commit that finds the lock taken keeps its paths for the next commit", () => {
+    const store = tempStore();
+    store.gitLockWaitMs = 50;
+    const note = putNote(store, { id: "kept-path" });
+    store.track(store.notePath(note));
+    mkdirSync(store.statePath("git-lock"));
+    writeFileSync(join(store.statePath("git-lock"), "owner"), `${process.pid} live`);
+    expect(store.commit("kb: first try")).toBe(false);
+    rmSync(store.statePath("git-lock"), { recursive: true });
+    expect(store.commit("kb: second try")).toBe(true);
+    expect(sh(store.home, "git", "show", "--name-only", "--format=", "HEAD")).toContain("kept-path.md");
+  });
+
+  test("a sync that finds the git lock taken says busy and writes no sync error", () => {
+    const store = tempStore();
+    const remote = join(tempDir(), "remote.git");
+    sh(tempDir(), "git", "init", "-q", "--bare", "-b", "main", remote);
+    sh(store.home, "git", "checkout", "-q", "-b", "main");
+    sh(store.home, "git", "remote", "add", "origin", remote);
+    putNote(store, { id: "first" });
+    expect(syncNow(store).status).toBe("ok");
+    store.gitLockWaitMs = 50;
+    mkdirSync(store.statePath("git-lock"));
+    writeFileSync(join(store.statePath("git-lock"), "owner"), `${process.pid} live`);
+    expect(syncNow(store).status).toBe("busy");
+    expect(store.syncError()).toBeNull();
+  });
+
+  test("the trash stamp of a note moved there by hand is committed", () => {
+    const store = tempStore();
+    const note = putNote(store, { id: "by-hand" }, true);
+    sh(store.home, "git", "add", "-A");
+    sh(store.home, "git", "commit", "-q", "-m", "hand move");
+    expect(tidyTrash(store)).toEqual([]);
+    expect(sh(store.home, "git", "status", "--porcelain")).toBe("");
+    expect(sh(store.home, "git", "show", "--name-only", "--format=%s", "HEAD")).toContain(`trash/global/${note.id}.md`);
   });
 });
 
