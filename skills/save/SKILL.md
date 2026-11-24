@@ -100,7 +100,10 @@ A session with normal permissions refuses a command that sets a shell variable, 
 - `scope`: `"repo"` for a fact about this repository. `"global"` for a fact that holds in every repo (a tool, a user preference, a platform behavior).
 - `kind`: `gotcha`, `decision`, `convention`, `how-to` or `open-work`.
 - `confidence`: `high` when you verified it in this session, `medium` when it is likely, `low` when it is a guess.
-- `anchors`: repo-relative paths, or `path#symbol`, of the code the fact depends on. They let a later check find stale notes. Leave the list empty for a global note.
+- `anchors`: repo-relative paths, or `path#symbol`, of the code the fact depends on. kb saves a hash of that code, and marks the note when the code changes. Leave the list empty for a global note.
+  - When the fact is about one function, class, constant or config key, write `path#symbol`. Then only a change to the lines of that symbol marks the note. An anchor on the whole file marks it at every change of the file.
+  - The symbol is the plain name as the file writes it (`src/pay.ts#chargeCard`), with no brackets and no arguments.
+  - Use the whole file only when the fact is about the file as a whole. Do not anchor a folder when a file fits.
 - `triggers`: when the note loads outside the session start. See "Say when the note loads" below.
 - To update, add `"id": "<id>"` and only the fields that change. A `body` replaces the whole body, so read the note with `kb show <id> --check` first and write the full new body, with the old detail that is still true. A new title, body or anchors also records the note as verified now.
 

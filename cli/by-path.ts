@@ -70,12 +70,12 @@ export const realFile = (file: string) => join(real(dirname(file)), basename(fil
  * The repo of a file and its path in that repo. null when the file is in no repo. It runs git, so
  * a hook calls it only for a file that a note may be on. It never writes.
  */
-export function fileInRepo(store: Store, file: string): { scope: string; path: string } | null {
+export function fileInRepo(store: Store, file: string): { scope: string; root: string; path: string } | null {
   if (!isAbsolute(file)) return null;
   const repo = resolveRepo(existingFolder(real(dirname(file))), store, { record: false });
   if (!repo.scope || !repo.root) return null;
   const path = pathInRepo(repo.root, file);
-  return path === null ? null : { scope: repo.scope, path };
+  return path === null ? null : { scope: repo.scope, root: repo.root, path };
 }
 
 const seenRoot = (store: Store) => store.statePath("by-path");
