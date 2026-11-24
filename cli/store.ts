@@ -30,12 +30,6 @@ export interface Local {
   aliases: Record<string, string>;
 }
 
-/** What kb recorded per note before it had an event log. Nothing writes it now. */
-export interface Usage {
-  uses: number;
-  last_used?: string;
-}
-
 export interface StoredNote extends Note {
   path: string;
   trashed: boolean;
@@ -129,8 +123,7 @@ export class Store {
     return {
       ...DEFAULT_CONFIG,
       ...raw,
-      // Only the budgets of this version are read. A config of an older kb can still name
-      // `indexLines` and `globalIndexLines`: both limits are gone, and the keys are ignored.
+      // Only these budgets are read. Any other key is ignored.
       budgets: {
         contextChars: within(raw.budgets?.contextChars, 0, Infinity, DEFAULT_CONFIG.budgets.contextChars),
         // 0 is a choice: no briefs, so open work is in the index only.
@@ -224,34 +217,6 @@ export class Store {
   /** Remove a note file for good. In a git store, the history still has it. Another session may have removed it first. */
   remove(note: StoredNote): void {
     rmSync(note.path, { force: true });
-  }
-
-  // ---- usage, from older versions ----
-
-  /**
-   * The counters that kb kept in usage/, one file per machine, before it had an event log. They
-   * are synced history, so the files stay. Two things still read them: the last activity of a note
-   * takes `last_used`, and `kb add` never gives a new note an id that has counters. What a machine
-   * shares of its log now is the roll-up in activity/, which log.ts reads and writes.
-   */
-  usage(): Map<string, Usage> {
-    const total = new Map<string, Usage>();
-    let files: string[] = [];
-    try {
-      files = readdirSync(join(this.home, "usage")).filter((f) => f.endsWith(".json"));
-    } catch {
-      return total;
-    }
-    for (const file of files) {
-      const data = readJson<Record<string, Usage>>(join(this.home, "usage", file)) ?? {};
-      for (const [id, entry] of Object.entries(data)) {
-        const current = total.get(id) ?? { uses: 0 };
-        current.uses += entry.uses ?? 0;
-        if (entry.last_used && (!current.last_used || entry.last_used > current.last_used)) current.last_used = entry.last_used;
-        total.set(id, current);
-      }
-    }
-    return total;
   }
 
   // ---- generated files and git ----

@@ -55,17 +55,26 @@ describe("kb sync", () => {
     expect(readFileSync(join(b.home, "INDEX.md"), "utf8")).toContain("from-a");
   });
 
-  test("the counters of an older kb still sync, and each machine reads the newest last use", () => {
+  test("the counters of an older kb go into the roll-ups once, and each machine reads the newest last use", () => {
     const { a, b } = twoMachines();
     putNote(a, { id: "shared" });
     syncNow(a);
     syncNow(b);
-    legacyUsage(a, "machine-a", { shared: { uses: 1, last_used: "2026-03-01T00:00:00Z" } });
-    legacyUsage(b, "machine-b", { shared: { uses: 2, last_used: "2026-04-02T00:00:00Z" } });
+    // Both counter files are in both stores, as an older kb synced them.
+    for (const store of [a, b]) {
+      legacyUsage(store, "machine-a", { shared: { uses: 1, last_used: "2026-03-01T00:00:00Z" } });
+      legacyUsage(store, "machine-b", { shared: { uses: 2, last_used: "2026-04-02T00:00:00Z" } });
+      sh(store.home, "git", "add", "-A");
+      sh(store.home, "git", "commit", "-q", "-m", "older kb");
+    }
     expect(syncNow(a).status).toBe("ok");
     expect(syncNow(b).status).toBe("ok");
     expect(syncNow(a).status).toBe("ok");
-    for (const store of [a, b]) expect(lastActivity(store).get("shared")).toBe("2026-04-02T00:00:00Z");
+    for (const store of [a, b]) {
+      expect(lastActivity(store).get("shared")).toBe("2026-04-02T00:00:00Z");
+      expect(existsSync(join(store.home, "usage"))).toBe(false);
+      expect(sh(store.home, "git", "status", "--porcelain")).toBe("");
+    }
   });
 
   test("the event log stays on its machine, and its roll-up reaches the other one with a sync", () => {

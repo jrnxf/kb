@@ -7,7 +7,7 @@ import { parseNote } from "../cli/note.ts";
 import { search } from "../cli/search.ts";
 import { recordUnsaved } from "../cli/session.ts";
 import { Store } from "../cli/store.ts";
-import { ROOT, daysAgo, kb, legacyUsage, logAt, logged, otherMachine, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { ROOT, daysAgo, kb, logAt, logged, otherMachine, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const add = (store: Store | string, note: object, cwd?: string) => kb(store, ["add", "--json"], { stdin: JSON.stringify(note), cwd });
 
@@ -599,7 +599,7 @@ describe("a read is not a write", () => {
     add(store, { title: "First", kind: "gotcha", body: "the body", scope: "global" });
     const head = sh(store.home, "git", "rev-parse", "HEAD");
     const note = readFileSync(store.find("first")!.path, "utf8");
-    for (const args of [["show", "first"], ["show", "first", "--check"], ["search", "body"], ["verdict", "helped", "first"], ["use", "first"], ["list"], ["log"], ["log", "--session", "s1"]]) {
+    for (const args of [["show", "first"], ["show", "first", "--check"], ["search", "body"], ["verdict", "helped", "first"], ["list"], ["log"], ["log", "--session", "s1"]]) {
       expect(kb(store, args, { env: { KB_SESSION: "s1" } }).code).toBe(0);
     }
     expect(sh(store.home, "git", "rev-parse", "HEAD")).toBe(head);
@@ -607,7 +607,7 @@ describe("a read is not a write", () => {
     expect(readFileSync(store.find("first")!.path, "utf8")).toBe(note);
     expect(existsSync(join(store.home, "usage"))).toBe(false);
     // The reads are in the log of this machine, which git ignores.
-    expect(logged(store).map((e) => e.ev)).toEqual(["write", "show", "show", "search", "verdict", "verdict"]);
+    expect(logged(store).map((e) => e.ev)).toEqual(["write", "show", "show", "search", "verdict"]);
   });
 
   test("a read writes no roll-up. The next write takes it into its own commit, at most once per day", () => {
@@ -641,10 +641,9 @@ describe("a read is not a write", () => {
     expect(sh(store.home, "git", "status", "--porcelain")).toBe("");
   });
 
-  test("show and list print no use count, also when an older kb left counters", () => {
+  test("show and list print no use count", () => {
     const store = tempStore();
     putNote(store, { id: "a" });
-    legacyUsage(store, "old", { a: { uses: 5, last_used: "2026-01-01T00:00:00Z" } });
     const shown = kb(store, ["show", "a", "--json"]).json;
     expect(shown).toMatchObject({ id: "a", title: "Title of a" });
     expect(Object.keys(shown)).not.toContain("uses");
@@ -655,7 +654,7 @@ describe("a read is not a write", () => {
 });
 
 describe("the event log from the CLI", () => {
-  test("show and search log why: a task by default, a check with --check or the older --no-use", () => {
+  test("show and search log why: a task by default, a check with --check", () => {
     const store = tempStore();
     const repo = tempRepo({ remote: "git@github.com:acme/billing.git" });
     putNote(store, { id: "ledger-rows", scope: "github.com/acme/billing", body: "Rows are append-only." });
@@ -663,7 +662,8 @@ describe("the event log from the CLI", () => {
     const env = { KB_SESSION: "s1" };
     kb(store, ["show", "ledger"], { cwd: repo, env });
     kb(store, ["show", "ledger-rows", "--check"], { cwd: repo, env });
-    kb(store, ["show", "ledger-rows", "--no-use"], { cwd: repo, env });
+    // The older --no-use is gone: an unknown flag, and nothing is logged.
+    expect(kb(store, ["show", "ledger-rows", "--no-use"], { cwd: repo, env }).code).toBe(2);
     // The --session flag wins over the environment, and a session outside any repo has the scope "global".
     kb(store, ["show", "old", "--session", "s2"], { env });
     kb(store, ["search", "append-only", "rows"], { cwd: repo, env });
@@ -672,7 +672,6 @@ describe("the event log from the CLI", () => {
     const scope = "github.com/acme/billing";
     expect(logged(store)).toEqual([
       { ev: "show", session: "s1", scope, note: "ledger-rows", why: "task" },
-      { ev: "show", session: "s1", scope, note: "ledger-rows", why: "check" },
       { ev: "show", session: "s1", scope, note: "ledger-rows", why: "check" },
       // A show of a note in the trash says so.
       { ev: "show", session: "s2", scope: "global", note: "old", why: "task", trashed: true },
@@ -742,20 +741,19 @@ describe("the event log from the CLI", () => {
     expect(kb(store, ["verdict", "not-needed", "b", "ghost", "b"], { env }).stdout).toBe("not-needed: b\nunknown ghost\n");
     // A session may judge a note it trashed a moment ago.
     expect(kb(store, ["verdict", "wrong", "trashed"], { env }).code).toBe(0);
-    expect(kb(store, ["use", "a", "b", "--json"], { env }).json).toEqual({ verdict: "helped", notes: ["a", "b"], unknown: [] });
+    // The older kb use is gone.
+    expect(kb(store, ["use", "a", "b"], { env })).toMatchObject({ code: 2, stderr: 'unknown command "use". Run `kb help`.\n' });
     expect(logged(store).slice(1)).toEqual([
       { ev: "verdict", session: "s1", scope: "global", note: "a", verdict: "helped" },
       { ev: "verdict", session: "s1", scope: "global", note: "b", verdict: "not-needed" },
       { ev: "verdict", session: "s1", scope: "global", note: "trashed", verdict: "wrong" },
-      { ev: "verdict", session: "s1", scope: "global", note: "a", verdict: "helped" },
-      { ev: "verdict", session: "s1", scope: "global", note: "b", verdict: "helped" },
     ]);
-    for (const args of [["verdict"], ["verdict", "helped"], ["verdict", "useful", "a"], ["verdict", "helped", "ghost"], ["use"], ["use", "ghost"]]) {
+    for (const args of [["verdict"], ["verdict", "helped"], ["verdict", "useful", "a"], ["verdict", "helped", "ghost"]]) {
       const bad = kb(store, args, { env });
       expect(bad.code).toBe(1);
       expect(bad.stderr).toMatch(/usage: kb verdict <helped\|not-needed\|wrong> <id>\.\.\.|no note with id: ghost/);
     }
-    expect(logged(store)).toHaveLength(6);
+    expect(logged(store)).toHaveLength(4);
     // The help names verdict, not use.
     const help = kb(store, ["help"]).stdout;
     expect(help).toContain("kb verdict <helped|not-needed|wrong> <id>...");
@@ -819,7 +817,7 @@ describe("the event log from the CLI", () => {
     kb(store, ["trash", "a-new-fact", "other"], { env });
     kb(store, ["restore", "other"], { env });
     kb(store, ["delete", "a-new-fact", "other"]);
-    kb(store, ["checkpointed", "s1"], { env: { KB_SESSION: "another" } });
+    kb(store, ["saved", "s1"], { env: { KB_SESSION: "another" } });
     const write = (op: string, note: string, session: string | undefined = "s1") => ({ ev: "write", ...(session ? { session } : {}), scope: "global", note, op });
     expect(logged(store)).toEqual([
       write("add", "a-new-fact"),
@@ -1029,7 +1027,7 @@ describe("the log of a recovery", () => {
     expect(add(JSON.stringify({ id: "an-older-note", body: "with the fact of the old session" })).json.status).toBe("updated");
     // A note with no flag is a note of the session that runs.
     kb(store, ["add", "--json"], { stdin: note("A zebra lamp needs quartz", "Polish the lens first."), cwd: dir, env });
-    expect(kb(store, ["checkpointed", "old", "--json"], { cwd: dir, env }).json).toEqual({ session: "old", recorded: true, recovered: true });
+    expect(kb(store, ["saved", "old", "--json"], { cwd: dir, env }).json).toEqual({ session: "old", recorded: true, recovered: true });
 
     const events = logged(store);
     expect(events.filter((e) => e.ev === "write")).toEqual([
@@ -1048,14 +1046,14 @@ describe("the log of a recovery", () => {
   });
 
   // A session that ended, was resumed and then ran /kb:save saved itself.
-  test("a session that saves itself after a resume is checkpointed, and a session with no mark too", () => {
+  test("a session that saves itself after a resume is saved, and a session with no mark too", () => {
     const store = tempStore();
     const dir = tempDir();
     const transcript = join(dir, "s.jsonl");
     writeFileSync(transcript, "");
     recordUnsaved(store, { session: "resumed", transcript, cwd: dir, ended });
-    expect(kb(store, ["checkpointed", "resumed", "--json"], { env: { KB_SESSION: "resumed" } }).json).toEqual({ session: "resumed", recorded: true });
-    expect(kb(store, ["checkpointed", "live", "--json"], { env: { KB_SESSION: "live" } }).json).toEqual({ session: "live", recorded: true });
+    expect(kb(store, ["saved", "resumed", "--json"], { env: { KB_SESSION: "resumed" } }).json).toEqual({ session: "resumed", recorded: true });
+    expect(kb(store, ["saved", "live", "--json"], { env: { KB_SESSION: "live" } }).json).toEqual({ session: "live", recorded: true });
     expect(logged(store).map((e) => e.ev)).toEqual(["checkpoint", "checkpoint"]);
     expect(kb(store, ["unsaved", "--all", "--json"]).json).toEqual([]);
   });
@@ -1128,9 +1126,6 @@ describe("kb trash, delete, list", () => {
     expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe("kb: delete wrong old");
     // The log of this machine has activity of "wrong", so a new note with that title must not inherit it.
     expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Wrong", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("wrong-2");
-    // Nor the counters that an older kb recorded for "old", on any machine.
-    legacyUsage(store, "othermachine", { old: { uses: 9 } });
-    expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Old", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("old-2");
     // Nor the activity or a verdict that another machine rolled up, also for a note that never was here.
     otherMachine(store, "machine-b", { elsewhere: { last: "2026-01-01T00:00:00Z" }, "judged-elsewhere": { wrong: "2026-01-01T00:00:00Z" } });
     expect(kb(store, ["add", "--json"], { stdin: JSON.stringify({ title: "Elsewhere", kind: "gotcha", body: "x", scope: "global" }) }).json.id).toBe("elsewhere-2");
@@ -1202,7 +1197,7 @@ describe("kb trash, delete, list", () => {
   test("every command gives JSON with --json, also on an error", () => {
     const store = tempStore();
     putNote(store, { id: "a" });
-    for (const args of [["context"], ["scope"], ["show", "a"], ["search", "body"], ["list"], ["verdict", "helped", "a"], ["use", "a"], ["log"], ["log", "--session", "s"], ["trash", "a"], ["restore", "a"], ["empty-trash"], ["html"], ["sync"], ["stale"], ["verify", "a"], ["budget"], ["checkpointed", "s"], ["unsaved"], ["unsaved", "--forget", "s"], ["show", "zzz"], ["bogus"]]) {
+    for (const args of [["context"], ["scope"], ["show", "a"], ["search", "body"], ["list"], ["verdict", "helped", "a"], ["log"], ["log", "--session", "s"], ["trash", "a"], ["restore", "a"], ["empty-trash"], ["html"], ["sync"], ["stale"], ["verify", "a"], ["budget"], ["saved", "s"], ["unsaved"], ["unsaved", "--forget", "s"], ["show", "zzz"], ["bogus"]]) {
       const result = kb(store, [...args, "--json"]);
       expect(result.json, args.join(" ")).toBeDefined();
     }

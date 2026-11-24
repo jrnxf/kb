@@ -615,6 +615,50 @@ function rollUpText(notes: Map<string, NoteRollUp>): string {
 }
 
 /**
+ * An older kb kept counters in usage/<machine>.json, one file per machine, before it had a log. Once,
+ * the newest `last_used` of each note goes into the roll-up of this machine, and the folder goes:
+ * the roll-ups are then the one record of activity on other machines. The use counts go, as no
+ * ranking reads them. A machine id that is no safe file name leaves the folder, and nothing reads
+ * it. Returns true when the store changed.
+ */
+function foldOldCounters(store: Store): boolean {
+  const dir = join(store.home, "usage");
+  let files: string[];
+  try {
+    files = readdirSync(dir).filter((name) => name.endsWith(".json"));
+  } catch {
+    return false;
+  }
+  const machine = store.machine();
+  if (!SAFE_MACHINE.test(machine)) return false;
+  const path = join(rollUpDir(store), `${machine}.json`);
+  const notes = readRollUp(path);
+  for (const file of files) {
+    let data: unknown;
+    try {
+      data = JSON.parse(readFileSync(join(dir, file), "utf8"));
+    } catch {
+      continue;
+    }
+    if (data === null || typeof data !== "object" || Array.isArray(data)) continue;
+    for (const [id, value] of Object.entries(data as Record<string, unknown>)) {
+      const last = (value as { last_used?: unknown } | null)?.last_used;
+      if (!id || !text(last)) continue;
+      const entry = notes.get(id) ?? {};
+      entry.last = newest(entry.last, last as string);
+      notes.set(id, entry);
+    }
+  }
+  // The roll-up is written first: a folder that stays is folded again, and the newest time wins.
+  if (notes.size > 0) {
+    mkdirSync(rollUpDir(store), { recursive: true });
+    writeAtomic(path, rollUpText(notes));
+  }
+  rmSync(dir, { recursive: true, force: true });
+  return true;
+}
+
+/**
  * The daily care of the log, at most once per day: write the roll-up of this machine to
  * activity/<machine>.json, when it changed, and remove the monthly files older than LOG_MONTHS.
  * Each machine writes only its own file, so two machines never change the same one. Nothing is
@@ -623,12 +667,14 @@ function rollUpText(notes: Map<string, NoteRollUp>): string {
  */
 export function rollUp(store: Store, now: Date = new Date()): boolean {
   try {
+    if (!store.exists()) return false;
+    const folded = foldOldCounters(store);
     // No log: nothing to roll up and nothing to remove. A store with no log gets no file.
-    if (!store.exists() || logFiles(store).length === 0) return false;
+    if (logFiles(store).length === 0) return folded;
     const day = stamp(now).slice(0, 10);
     const mark = join(logDir(store), "rolled-up");
     try {
-      if (readFileSync(mark, "utf8").trim() === day) return false;
+      if (readFileSync(mark, "utf8").trim() === day) return folded;
     } catch {
       // no mark yet
     }
@@ -663,7 +709,7 @@ export function rollUp(store: Store, now: Date = new Date()): boolean {
     } catch {
       // the next day removes it
     }
-    return changed;
+    return changed || folded;
   } catch {
     return false;
   }
@@ -673,16 +719,14 @@ export function rollUp(store: Store, now: Date = new Date()): boolean {
 
 /**
  * The last activity of each note on any machine: the newest of a `kb show` for a task, a fire and
- * a verdict "helped" in the log of this machine, the roll-up of each machine, and the `last_used`
- * that kb recorded in usage/ before it had a log. A note with no activity is not in the map. The
- * ranking and `kb stale` both read it here.
+ * a verdict "helped" in the log of this machine, and the roll-up of each machine. A note with no
+ * activity is not in the map. The ranking and `kb stale` both read it here.
  */
 export function lastActivity(store: Store): Map<string, string> {
   const last = new Map<string, string>();
   const take = (id: string, t: string) => {
     if (t > (last.get(id) ?? "")) last.set(id, t);
   };
-  for (const [id, legacy] of store.usage()) if (legacy.last_used) take(id, legacy.last_used);
   for (const { notes } of rollUps(store)) for (const [id, entry] of notes) if (entry.last) take(id, entry.last);
   try {
     for (const [id, t] of logActivity(store)) take(id, t);
@@ -694,13 +738,13 @@ export function lastActivity(store: Store): Map<string, string> {
 
 /**
  * The ids that have a history on any machine: an event of any kind in the log of this machine,
- * activity or a verdict in a roll-up, or counters of an older kb. A verdict "wrong", a check and a
+ * or activity or a verdict in a roll-up. A verdict "wrong", a check and a
  * session start are a history too, and none of them is in the roll-up of this machine before the
  * next day. `kb add` gives none of these ids to a new note, so a new note never takes the history
  * of a deleted one.
  */
 export function idsWithHistory(store: Store): Set<string> {
-  const ids = new Set<string>([...store.usage().keys(), ...lastActivity(store).keys()]);
+  const ids = new Set<string>(lastActivity(store).keys());
   for (const { notes } of rollUps(store)) for (const id of notes.keys()) ids.add(id);
   try {
     for (const event of scanLog(store, "") as Raw[]) {

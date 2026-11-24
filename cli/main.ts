@@ -79,7 +79,7 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          sent back for a rewrite
   kb instructions [--repo .]             the instruction files for a rule the user states: the global
                                          one, and the repo's CLAUDE.md and AGENTS.md
-  kb checkpointed <session-id>           record that this session saved its knowledge. A recovery adds
+  kb saved <session-id>                  record that this session saved its knowledge. A recovery adds
                                          --ended <time>, the end it read: a session that ran again
                                          since then is not marked
   kb log [--session id] [--since days]   what the log of this machine says of each note: how often a
@@ -376,11 +376,8 @@ function scopeFilter(store: Store, args: Args): string | undefined {
   return value;
 }
 
-/**
- * Why the command reads: for a task, or as a check (an audit, a look before an update). --no-use is
- * the older name of --check, which a cached skill on another machine may still pass.
- */
-const whyOf = (args: Args): Why => (args.flags.has("check") || args.flags.has("no-use") ? "check" : "task");
+/** Why the command reads: for a task, or as a check (an audit, a look before an update). */
+const whyOf = (args: Args): Why => (args.flags.has("check") ? "check" : "task");
 
 function cmdShow(store: Store, args: Args): Output {
   const given = args.positional[0];
@@ -453,10 +450,7 @@ function cmdList(store: Store, args: Args): Output {
   return { json: rows, text };
 }
 
-/**
- * `kb verdict`: what a note did for the session that got it. `kb use <id>...` is the older form of
- * `kb verdict helped`, which a cached skill on another machine may still run.
- */
+/** `kb verdict`: what a note did for the session that got it. */
 function cmdVerdict(store: Store, verdict: string | undefined, ids: string[], session?: string): Output {
   if (!VERDICTS.includes(verdict as Verdict) || ids.length === 0) throw new KbError(`usage: kb verdict <${VERDICTS.join("|")}> <id>...`);
   // A session may judge a note that it trashed a moment ago, for example a note that was wrong.
@@ -590,11 +584,11 @@ function cmdBudget(store: Store, args: Args): Output {
   return { json: b, text: lines.join("\n") };
 }
 
-function cmdCheckpointed(store: Store, args: Args): Output {
+function cmdSaved(store: Store, args: Args): Output {
   const session = args.positional[0];
-  if (!session) throw new KbError("usage: kb checkpointed <session-id> [--ended <time>]");
+  if (!session) throw new KbError("usage: kb saved <session-id> [--ended <time>]");
   // A session that ended with no checkpoint, and that another session now saves, is recovered. A
-  // session that was resumed and saves itself is checkpointed, as any session is.
+  // session that was resumed and saves itself is saved, as any session is.
   const mark = store.exists() ? unsavedSession(store, session) : null;
   const by = sessionOf(args.flags.get("session"));
   // A recovery names the end of the session that it read: the `ended` of `kb-transcript`.
@@ -931,7 +925,6 @@ async function main(): Promise<number> {
       case "search": out = cmdSearch(store, args); break;
       case "list": out = cmdList(store, args); break;
       case "verdict": out = cmdVerdict(store, args.positional[0], args.positional.slice(1), sessionOf(args.flags.get("session"))); break;
-      case "use": out = cmdVerdict(store, "helped", args.positional); break;
       case "log": out = cmdLog(store, args); break;
       case "trash": out = cmdMove(store, args, true); break;
       case "restore": out = cmdMove(store, args, false); break;
@@ -941,7 +934,7 @@ async function main(): Promise<number> {
       case "verify": out = cmdVerify(store, args); break;
       case "budget": out = cmdBudget(store, args); break;
       case "instructions": out = cmdInstructions(store, args); break;
-      case "checkpointed": out = cmdCheckpointed(store, args); break;
+      case "saved": out = cmdSaved(store, args); break;
       case "unsaved": out = cmdUnsaved(store, args); break;
       case "serve": out = await cmdServe(store, args, json); break;
       case "audit": out = await cmdAudit(store, args, () => inputText(args, "audit propose")); break;

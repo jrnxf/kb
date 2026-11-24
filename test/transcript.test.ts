@@ -607,7 +607,7 @@ describe("kb-transcript", () => {
     const r = run(store, "s1");
     expect(r.code).toBe(0);
     const out = JSON.parse(r.out);
-    // `ended` is the end that the file is of, for `kb checkpointed --ended`.
+    // `ended` is the end that the file is of, for `kb saved --ended`.
     expect(out).toEqual({ file: recoverFile(store, "s1"), prompts: 1, chars: expect.any(Number), failed: 0, ended: "2020-01-01T00:00:00.000Z" });
     expect(readFileSync(out.file, "utf8")).toBe(`# Session that ended 2020-01-01T00:00:00.000Z in ${repo}\n\nCommits in that directory since it ended:\n${first} init\n\nNotes that an earlier /kb:recover of this session saved:\nnone\n\n## user\n\nFix the login bug\n\n## agent\n\nThe cookie had no SameSite.\n`);
     expect(statSync(out.file).mode & 0o777).toBe(0o600);
@@ -762,7 +762,7 @@ describe("kb-transcript", () => {
     const marked = file("marked");
     const forgotten = file("forgotten");
     expect(existsSync(marked) && existsSync(forgotten)).toBe(true);
-    kb(store, ["checkpointed", "marked"]);
+    kb(store, ["saved", "marked"]);
     expect(existsSync(marked)).toBe(false);
     expect(existsSync(forgotten)).toBe(true);
     kb(store, ["unsaved", "--forget", "forgotten"]);

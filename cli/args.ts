@@ -25,15 +25,15 @@ const GLOBAL: Record<string, Kind> = { json: "switch", help: "switch", quiet: "s
 /** The flags of each command, on top of GLOBAL. A command that is not here takes GLOBAL only. */
 export const COMMAND_FLAGS: Record<string, Record<string, Kind>> = {
   add: { file: "value", "as-of": "value", "recovered-from": "value" },
-  show: { check: "switch", "no-use": "switch" },
-  search: { scope: "value", trash: "switch", check: "switch", "no-use": "switch" },
+  show: { check: "switch" },
+  search: { scope: "value", trash: "switch", check: "switch" },
   list: { scope: "value", trash: "switch" },
   trash: { scope: "value" },
   restore: { scope: "value" },
   delete: { scope: "value" },
   "empty-trash": { scope: "value" },
   audit: { file: "value", "no-wait": "switch" },
-  checkpointed: { ended: "value" },
+  saved: { ended: "value" },
   log: { since: "value" },
   unsaved: { all: "switch", forget: "value" },
   serve: { port: "value", "no-open": "switch" },
@@ -42,7 +42,7 @@ export const COMMAND_FLAGS: Record<string, Record<string, Kind>> = {
 /** Every command, with the words that print the help or the version. */
 export const COMMANDS = new Set([
   ...Object.keys(COMMAND_FLAGS),
-  "context", "scope", "verdict", "use", "stale", "verify", "budget", "instructions", "sync",
+  "context", "scope", "verdict", "stale", "verify", "budget", "instructions", "sync",
   "help", "--help", "-h", "version", "--version",
 ]);
 

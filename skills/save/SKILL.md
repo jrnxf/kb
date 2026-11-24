@@ -1,6 +1,6 @@
 ---
 name: save
-description: Save the durable knowledge of this session before /clear - rules to instruction files, facts to the kb store - and empty Claude Code's auto memory into them. Run only when the user types /kb:save, or when /kb:clear or /kb:checkpoint sends you here.
+description: Save the durable knowledge of this session before /clear - rules to instruction files, facts to the kb store - and empty Claude Code's auto memory into them. Run only when the user types /kb:save, or when /kb:clear sends you here.
 argument-hint: "[auto memory folder]"
 disable-model-invocation: true
 allowed-tools: Bash(kb *), Bash(rm */projects/*/memory/*.md), Bash(kb-transcript --memory), Read, Glob, Edit, Write
@@ -161,12 +161,12 @@ A `brief` or a `body` loads in every session, and most sessions do not need it. 
 A verdict `wrong` sends the note to the next audit.
 Give no `wrong` to a note that this session corrected or rewrote: the correction is the record.
 
-## 6. Record the checkpoint
+## 6. Record the save
 
 Run this once, after the writes above succeed:
 
 ```bash
-kb checkpointed ${CLAUDE_SESSION_ID}
+kb saved ${CLAUDE_SESSION_ID}
 ```
 
 It tells the session hooks that this session saved its knowledge. Skip it when a `kb` command failed.

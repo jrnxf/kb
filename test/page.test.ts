@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import * as log from "../cli/log.ts";
 import { pageData, storeVersion } from "../cli/page.ts";
 import { DIST } from "../cli/serve.ts";
 import type { PageNote } from "../cli/wire.ts";
@@ -65,14 +66,12 @@ describe("the data behind the page", () => {
     putNote(store, { id: "a", scope: "github.com/acme/api" });
     putNote(store, { id: "g" });
     logAt(store, "2026-03-01T00:00:00Z", { ev: "show", note: "a", why: "task" });
-    // Each read of the last activity reads the counters of an older kb once.
-    let reads = 0;
-    const usage = store.usage.bind(store);
-    store.usage = () => (reads++, usage());
+    const reads = spyOn(log, "lastActivity");
     const data = pageData(store, "t");
-    expect(reads).toBe(1);
+    expect(reads).toHaveBeenCalledTimes(1);
     expect(data.version).toBe(storeVersion(store));
-    expect(reads).toBe(2);
+    expect(reads).toHaveBeenCalledTimes(2);
+    reads.mockRestore();
     // The version is of the order it gets: another order is another version.
     expect(data.notes.map((n) => n.id)).toEqual(["g", "a"]);
     expect(storeVersion(store, store.notes().sort((x, y) => x.id.localeCompare(y.id)))).not.toBe(data.version);

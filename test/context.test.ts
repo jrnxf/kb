@@ -6,7 +6,7 @@ import { OLD_GLOBAL_NOTES, OLD_INDEX_LINES, inHoldback } from "../cli/holdback.t
 import { rememberRepo } from "../cli/repos.ts";
 import { slugify } from "../cli/note.ts";
 import { HARD_CONTEXT_CAP, type StoredNote } from "../cli/store.ts";
-import { ROOT, kb, legacyUsage, logAt, plain, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { ROOT, kb, logAt, otherMachine, plain, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
 
 const REMOTE = "git@github.com:acme/billing.git";
 const SCOPE = "github.com/acme/billing";
@@ -39,14 +39,14 @@ describe("kb context ranking", () => {
     expect(result).toMatchObject({ hidden: [], triggerOnly: [], bodies: [], holdback: false });
   });
 
-  test("among repo notes of one kind the newest activity goes first: a show for a task, a fire, a verdict helped, or an older last_used", () => {
+  test("among repo notes of one kind the newest activity goes first: a show for a task, a fire, a verdict helped, or the roll-up of another machine", () => {
     const store = tempStore();
     const repo = tempRepo({ remote: REMOTE });
     for (const id of ["a-quiet", "b-checked", "c-shown", "d-fired", "e-helped", "f-legacy", "g-not-needed"]) putNote(store, { id, scope: SCOPE });
     logAt(store, "2026-05-01T00:00:00Z", { ev: "show", note: "c-shown", why: "task" });
     logAt(store, "2026-05-02T00:00:00Z", { ev: "fire", kind: "path", form: "title", note: "d-fired", tool: "Read", match: "src/a.ts" });
     logAt(store, "2026-05-03T00:00:00Z", { ev: "verdict", note: "e-helped", verdict: "helped" });
-    legacyUsage(store, "old", { "f-legacy": { uses: 1, last_used: "2026-05-04T00:00:00Z" } });
+    otherMachine(store, "old", { "f-legacy": { last: "2026-05-04T00:00:00Z" } });
     // A check and a verdict that the note had no bearing are no activity.
     logAt(store, "2026-06-01T00:00:00Z", { ev: "show", note: "b-checked", why: "check" });
     logAt(store, "2026-06-01T00:00:00Z", { ev: "verdict", note: "g-not-needed", verdict: "not-needed" });
@@ -66,7 +66,7 @@ describe("kb context ranking", () => {
     // A how-to that sessions open keeps its place before the gotchas that no session opened.
     for (const day of ["01", "02", "03"]) logAt(store, `2026-05-${day}T00:00:00Z`, { ev: "show", note: "g-howto", why: "task" });
     // The newest activity counts, not the number of reads: one use on a later day goes first.
-    legacyUsage(store, "old", { "g-howto": { uses: 50, last_used: "2026-05-01T00:00:00Z" }, "g-rule-old": { uses: 1, last_used: "2026-05-04T00:00:00Z" } });
+    otherMachine(store, "old", { "g-howto": { last: "2026-05-01T00:00:00Z" }, "g-rule-old": { last: "2026-05-04T00:00:00Z" } });
     const result = buildContext(store, repo);
     // The notes with no activity come after those with some: by kind, then the newest check.
     expect(result.index).toEqual(["repo-note", "g-open", "g-rule-old", "g-howto", "g-trap-new", "g-trap", "g-rule-new"]);
@@ -74,12 +74,12 @@ describe("kb context ranking", () => {
     expect(result.text).not.toContain("left out");
   });
 
-  test("a config of an older kb still loads: its indexLines and globalIndexLines are ignored, and a wrong value falls back", () => {
+  test("a budget that kb does not know is ignored, and a wrong value falls back", () => {
     const store = tempStore();
     const repo = tempRepo({ remote: REMOTE });
     setConfig(store.home, { budgets: { indexLines: 2, globalIndexLines: 1, contextChars: 8000 } });
     expect(store.config()).toMatchObject({ budgets: { contextChars: 8000, briefChars: 1500 }, holdback: 0.1 });
-    // Neither old limit holds: more notes than both get a line.
+    // No count of lines holds: every note gets a line.
     for (let i = 0; i < 4; i++) putNote(store, { id: `r-${i}`, scope: SCOPE });
     for (let i = 0; i < 4; i++) putNote(store, { id: `g-${i}` });
     expect(buildContext(store, repo)).toMatchObject({ index: ["r-0", "r-1", "r-2", "r-3", "g-0", "g-1", "g-2", "g-3"], hidden: [] });
