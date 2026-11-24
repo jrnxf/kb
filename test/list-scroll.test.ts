@@ -32,9 +32,10 @@ async function until<T>(value: () => Promise<T>, check: (v: T) => boolean, what:
 }
 
 let browser: Browser;
+// A cold browser start can take longer than the 5 s that a hook gets by default.
 beforeAll(async () => {
   browser = await chromium.launch();
-});
+}, 30_000);
 afterAll(async () => {
   await browser?.close();
 });

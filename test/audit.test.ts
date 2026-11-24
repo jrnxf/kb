@@ -11,7 +11,7 @@ import { type Served, runningPort, serve } from "../cli/serve.ts";
 import type { Store } from "../cli/store.ts";
 import type { AuditCard, AuditData, AuditNote } from "../cli/wire.ts";
 import { type Pick, changes, choiceForKey, choiceLabel, choices, leaving, steps, stillHidden, summary, toPicks } from "../web/src/lib/audit.ts";
-import { MAIN, putNote, sh, tempDir, tempRepo, tempStore } from "./helpers.ts";
+import { MAIN, putNote, sh, tempDir, tempRepo, tempStore, watchPolicy } from "./helpers.ts";
 
 const SCOPE = "example.com/team/app";
 const repo = (head = "abc1234"): RepoInfo => ({ scope: SCOPE, root: null, head });
@@ -665,9 +665,10 @@ describe("the deck", () => {
 describe("the audit page in a browser", () => {
   let browser: Browser;
   let served: Served | undefined;
+  // A cold browser start can take longer than the 5 s that a hook gets by default.
   beforeAll(async () => {
     browser = await chromium.launch();
-  });
+  }, 30_000);
   afterEach(() => served?.stop());
   afterAll(async () => {
     await browser?.close();
@@ -679,6 +680,7 @@ describe("the audit page in a browser", () => {
     served = serve(store, { port: 0 });
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     page.setDefaultTimeout(3000);
+    const blocked = await watchPolicy(page);
     await page.goto(`${served.url}#audit=${encodeURIComponent(SCOPE)}`);
     await page.locator('[data-card="v"]').waitFor();
     await page.keyboard.press("t"); // v: trash
@@ -706,6 +708,8 @@ describe("the audit page in a browser", () => {
     expect(readAudit(store, SCOPE)!.result).toMatchObject({ rewritten: ["r"], checked: ["v", "t"], kept: ["keepme"] });
     // keepme went with its group: nobody looked, so it records no check.
     expect(store.find("keepme")!.verified_at_commit).toBeUndefined();
+    // The audit page works under the page policy of kb serve.
+    expect(await blocked()).toEqual([]);
     await page.close();
   });
 
