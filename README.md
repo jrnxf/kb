@@ -471,6 +471,35 @@ Every command accepts `--json`. The CLI knows nothing about Claude Code: only `h
 There is one exception. A command names its session in the log with `--session <id>`, or else
 `KB_SESSION`, or else `CLAUDE_CODE_SESSION_ID`, which Claude Code sets for each command an agent runs.
 
+## Trust model
+
+kb runs as you, on your machine, with your files. It has no server of its own. It uses the network
+only to sync the store with its git remote. This is what it touches:
+
+- **It reads** the store (`~/.kb`, or `KB_HOME`), the files of the repo that a note anchors,
+  the instruction files (`CLAUDE.md`, `AGENTS.md` and the global file), and Claude Code's
+  transcripts and auto memory under `~/.claude/projects/`. The hooks run at session start and
+  end, before compaction, and around tool calls. They read the hook input and the store.
+- **It writes** notes, the trash and `.state/` in the store. The audit page's Apply writes rules
+  into instruction files: the repo's `CLAUDE.md` or `AGENTS.md` (it creates `CLAUDE.md` when
+  the repo has none), or the global file. `/kb:save` edits instruction files too, and removes auto
+  memory files after a private copy (see Install). `kb-transcript` writes what an unsaved session
+  said to a private file in `.state/recover/`. kb commits nothing to your repo.
+- **It syncs** the store only, and only when the store has a git remote and `sync` is on: notes,
+  the trash, `kb.config.json` and the roll-ups in `activity/`. `.state/` (the event log, the
+  recover files, the memory copies, audit proposals) never leaves the machine.
+- **It runs headless** in two places. `kb audit` and the page's Audit button start `claude -p`
+  with a short list of kb commands and reads in the repo only. `scripts/move-auto-memory.sh`
+  starts `claude -p` for each memory folder, when you run it. Each is a Claude Code session, and
+  it talks to Anthropic as any session does.
+- **It serves** a page on `127.0.0.1` only, with a token per start. A request with another
+  Host header is refused, unless the name is in `KB_SERVE_HOSTS` (a comma list, where a name that
+  starts with a dot takes that domain and all names under it). Set it only for a reverse proxy you trust.
+- **Its limits:** a write that looks like a secret is refused, and a transcript read is masked,
+  but the scan knows common shapes only. A note is plain text in a git repo. Keep secrets out.
+
+Report a security problem as `SECURITY.md` says.
+
 ## Install
 
 Requirements: Claude Code 2.1.275 or later, a recent [Bun](https://bun.sh) (tested with 1.4) and git.
@@ -508,7 +537,10 @@ Then two settings in `~/.claude/settings.json`:
   and its system prompt tells the agent to save preferences there. While it is on, the first start
   of each session asks the agent to tell you, and every session start tells the agent to save
   nothing there. With it off, that rule is not sent. `/kb:save` empties it: rules go to
-  instruction files, and facts go to kb.
+  instruction files, and facts go to kb. Before it removes a memory file, it keeps a copy that only you can
+  read in `.state/memory-backup/<day>/` of the store, and the report says where. A copy goes with the trash:
+  the next kb command clears the copies that are older than `trashDays` (30). `scripts/move-auto-memory.sh` also saves every memory folder to a tar file
+  that only you can read.
 - The allow rules let the agent read and save notes with no question. The session start and the
   hooks tell it to run these commands. The skills allow their own commands. Without the rules, the
   default permission mode asks before each one.
