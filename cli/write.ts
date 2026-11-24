@@ -1,10 +1,12 @@
 // Changes to stored notes, shared by the CLI commands and `kb serve`.
 
 import { existsSync } from "node:fs";
+import { type AnchorHashes, hashAnchors, hashAnchorsAt } from "./anchors.ts";
 import { type WriteOp, logEvent, rollUp } from "./log.ts";
 import { BODY_CHARS, KbError, type Note, serializeNote, validateNote } from "./note.ts";
 import { type RepoInfo, commitAt } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
+import { pruneMemoryBackups } from "./session.ts";
 import { clearStaleCache } from "./stale.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import { kickSync } from "./sync.ts";
@@ -34,11 +36,31 @@ export function logWrites(store: Store, op: WriteOp, ids: string[], neighbors: s
   logEvent(store, ids.map((note) => ({ ev: "write" as const, note, op, ...(from ? { from } : {}), ...(neighbors.length > 0 ? { neighbors } : {}) })));
 }
 
-/** Ids that contain the given text. For a caller who remembers a part of an id. */
-export function closeIds(store: Store, part: string): string[] {
+/** Every note of the store, or only the active (false) or trashed (true) ones. */
+const poolOf = (store: Store, trashed?: boolean): StoredNote[] => (trashed === undefined ? [...store.notes(), ...store.notes({ trashed: true })] : store.notes({ trashed }));
+
+/** Ids that contain the given text, in `trashed` notes only or in all. For a caller who remembers a part of an id. */
+export function closeIds(store: Store, part: string, trashed?: boolean): string[] {
   const text = part.toLowerCase();
   if (!text) return [];
-  return [...store.notes(), ...store.notes({ trashed: true })].filter((n) => n.id.includes(text)).map((n) => n.id).sort();
+  return poolOf(store, trashed).filter((n) => n.id.includes(text)).map((n) => n.id).sort();
+}
+
+/**
+ * The note of a whole id, or of a part of one that exactly one note has. `trashed` limits the part
+ * to the notes in the trash (true) or the active notes (false), so `kb trash` never picks a note
+ * that is in the trash already. Two notes with the part are an error that names both: a command
+ * never guesses which note it changes.
+ */
+export function requireIdOrPart(store: Store, given: string, trashed?: boolean): StoredNote {
+  const exact = store.find(given);
+  if (exact) return exact;
+  const ids = closeIds(store, given, trashed);
+  if (ids.length === 1) return poolOf(store, trashed).find((n) => n.id === ids[0])!;
+  if (ids.length > 1) {
+    throw new KbError(`${ids.length} notes have "${given}" in their id: ${ids.slice(0, 8).join(", ")}${ids.length > 8 ? `, and ${ids.length - 8} more` : ""}. Pass the whole id.`);
+  }
+  return requireNote(store, given);
 }
 
 export function requireNote(store: Store, id: string): StoredNote {
@@ -63,6 +85,17 @@ export function asOfTime(value: string, now = Date.now()): string {
 }
 
 /**
+ * The hashes of the anchors of a note that is checked in its repo, in the checkout at `root`: of
+ * the files as they are now, or with `commit` of the files at that commit, for a check that is
+ * recorded at an earlier time. undefined when no anchor has a text to hash.
+ */
+export function checkedHashes(anchors: unknown, root: string, commit?: string | null): AnchorHashes | undefined {
+  if (!Array.isArray(anchors) || !anchors.every((anchor) => typeof anchor === "string")) return undefined;
+  const hashes = commit === undefined ? hashAnchors(anchors, root) : commit ? hashAnchorsAt(anchors, root, commit) : {};
+  return Object.keys(hashes).length > 0 ? hashes : undefined;
+}
+
+/**
  * Merge the given fields over an active note. `repo` is where the change was made:
  * a change of content inside the note's own repo also records that repo's HEAD.
  * With `asOf`, the content comes from an earlier time (a session recovered later): the note is
@@ -76,7 +109,8 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
   rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors, triggers: input.triggers }, `the new text of ${existing.id}`);
   const { path: _path, trashed: _trashed, ...stored } = existing;
   // A write that names no triggers keeps them: `stored` has them.
-  const merged: Record<string, unknown> = { ...stored, ...input, scope: existing.scope, created: existing.created };
+  // Only kb writes the hashes: the ones of the note stay until a check in its repo gives new ones.
+  const merged: Record<string, unknown> = { ...stored, ...input, scope: existing.scope, created: existing.created, anchor_hashes: existing.anchor_hashes };
   if ("triggers" in input) merged.triggers = requireTriggers(input.triggers);
   // Only a change of content says that somebody looked at the fact again. A trigger says when the
   // note loads, not what is true, so new triggers alone verify nothing.
@@ -84,6 +118,9 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
     merged.last_verified = asOf ?? nowIso();
     const commit = asOf === undefined ? repo.head : commitAt(repo.root ?? null, asOf);
     if (repo.scope === existing.scope && commit) merged.verified_at_commit = commit;
+    // In the repo of the note, the check saw the files: their hashes go with it. A change from
+    // another place (the page, another folder) saw no file, so each anchor keeps the hash it has.
+    if (repo.scope === existing.scope && repo.root) merged.anchor_hashes = checkedHashes(merged.anchors, repo.root, asOf === undefined ? undefined : commit);
   }
   const note = validateNote(merged);
   const path = store.writeNote(note);
@@ -95,21 +132,26 @@ export function updateNote(store: Store, input: Record<string, unknown> & { id: 
 /**
  * What a writer should look at again in a note that was saved. Never a refusal: the note is
  * stored. A gotcha or a how-to with no trigger and no anchor is one index line at the session
- * start, a title among many, and nothing loads its body. Open work with the scope global is one
- * index line in every repo session: a session shows the next step only for the open work of its
- * own repo. `inRepo` says that the write came from inside a repo. Outside any repo, global is the
- * one scope there is, so open work is right there.
+ * start, a title among many, and nothing loads its body. A repo note with no anchor, open work
+ * aside, is never compared with the code, so no change of the code marks it. Open work with the
+ * scope global is one index line in every repo session: a session shows the next step only for
+ * the open work of its own repo. `inRepo` says that the write came from inside a repo. Outside
+ * any repo, global is the one scope there is, so open work is right there.
  */
 export function noteWarnings(note: Pick<Note, "kind" | "scope" | "body" | "anchors" | "triggers">, inRepo: boolean): string[] {
   const warnings: string[] = [];
   if ((note.kind === "gotcha" || note.kind === "how-to") && note.anchors.length === 0 && !note.triggers?.length) {
     warnings.push(`a ${note.kind} with no trigger and no anchor is only an index line at the session start, and nothing loads its body. Give it "triggers" (cmd:, stop: or err:) or "anchors", or say in your report why it has none.`);
   }
+  // Only an anchor ties a note to code. With none, no change of the code can mark the note, and only time sends it to the audit.
+  if (note.kind !== "open-work" && note.scope !== "global" && note.anchors.length === 0) {
+    warnings.push(`a repo note with no anchor is never compared with the code: when the code changes, nothing marks the note. Give it "anchors" on the files the fact depends on, or say in your report why no file fits.`);
+  }
   if (note.kind === "open-work" && note.scope === "global" && inRepo) {
     warnings.push(`open work belongs to a repo. With the scope global it is one index line in every repo session, and none shows its next step. Trash this note and save it in the repo of the work, with "scope": "repo".`);
   }
   const chars = note.body.trim().length;
-  if (chars > BODY_CHARS) warnings.push(`the body has ${chars} characters. A trigger loads at most ${BODY_CHARS}, and cuts the rest. Keep the fact, why it matters, and how to apply it.`);
+  if (chars > BODY_CHARS) warnings.push(`the body has ${chars} characters, not counting the spaces and newlines at its ends, which kb removes. A trigger loads at most ${BODY_CHARS}, and cuts the rest. Keep the fact, why it matters, and how to apply it.`);
   return warnings;
 }
 
@@ -118,12 +160,17 @@ export function noteWarnings(note: Pick<Note, "kind" | "scope" | "body" | "ancho
  * come back until the trash clears it, `trashDays` after it went there.
  */
 export function moveNotes(store: Store, ids: string[], toTrash: boolean): string[] {
-  const moved: string[] = [];
-  for (const id of ids) {
+  // Two words can name one note. Every note is checked before the first one moves.
+  const unique = [...new Set(ids)];
+  const notes = unique.map((id) => {
     const note = requireNote(store, id);
     if (note.trashed === toTrash) throw new KbError(`${id} is already ${toTrash ? "in the trash" : "active"}`);
+    return note;
+  });
+  const moved: string[] = [];
+  for (const note of notes) {
     store.move(note, toTrash, nowIso());
-    moved.push(id);
+    moved.push(note.id);
   }
   afterWrite(store, `kb: ${toTrash ? "trash" : "restore"} ${moved.join(" ")}`);
   logWrites(store, toTrash ? "trash" : "restore", moved);
@@ -231,7 +278,13 @@ export function tidyTrash(store: Store, now = nowIso()): string[] {
       stamped++;
     } else if (clearsAt(note.trashed_at, days) <= now) expired.push(note);
   }
-  if (expired.length > 0) return removeNotes(store, expired, `kb: clear ${expired.length} from the trash after ${days} days: ${expired.map((n) => n.id).join(" ")}`);
-  if (stamped > 0) afterWrite(store, "kb: record when trashed notes went to the trash");
-  return [];
+  let cleared: string[] = [];
+  if (expired.length > 0) cleared = removeNotes(store, expired, `kb: clear ${expired.length} from the trash after ${days} days: ${expired.map((n) => n.id).join(" ")}`);
+  else if (stamped > 0) afterWrite(store, "kb: record when trashed notes went to the trash");
+  try {
+    pruneMemoryBackups(store, days, Date.parse(now)); // the copies of removed memory files age out with the trash
+  } catch {
+    // A copy that cannot go now goes on the next command. It must not stop the trash from clearing.
+  }
+  return cleared;
 }

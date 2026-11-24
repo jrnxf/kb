@@ -153,9 +153,9 @@ notes, and a note loads when it applies.
   trash in one commit, and `kb restore --scope` brings back that move and no older trash.
   `kb delete --scope` removes the project's notes for good, and `kb empty-trash --scope` only its
   trash. Each takes the exact repo id, and none touches `global`.
-- **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: an
-  anchored file changed since the note was verified, an anchor is gone, the verified commit left
-  the history, the note had no activity and nobody checked it for `expireDays` (90), nobody
+- **Notes go stale, and the store says so.** `kb stale` gives candidates with a reason: the
+  code of an anchor changed since the note was verified, an anchor is gone, the verified commit
+  left the history while an anchor has no hash, the note had no activity and nobody checked it for `expireDays` (90), nobody
   verified it for `decayDays` (180), or another note says much the same in its words. Activity is a `kb show` for a task,
   a trigger that loaded the note, or a verdict `helped`, on any machine. An expired note goes to the audit
   as trash, and you decide: kb never deletes a note on its own. Two reasons come from the verdicts
@@ -165,6 +165,26 @@ notes, and a note loads when it applies.
   body or the anchors. A session start also checks the
   anchors of the repo's notes on disk, and tells the agent which notes name a file or a symbol that
   is gone.
+- **A note on a changed file says so when it loads.** A check of a repo note (`kb add`,
+  `kb verify`, an audit) saves a hash of the code of each anchor in the note: the whole file, or
+  for `path#symbol` the lines of the symbol. At every later load kb hashes the file as it is now
+  and compares. A note whose code changed has the word `changed` in its index line, and the line
+  `changed since the last check` with the anchors when a command, an error or a file loads it.
+  `kb show` says it too, in the repo of the note. The mark comes with what to do: read the code,
+  then `kb verify <id>` when the note still holds, an update with `kb add` when it does not, or
+  `kb verdict wrong <id>`. So the session that uses a note checks it, and the audit is the
+  backstop. A check takes the new hashes, which ends the mark.
+  - The compare reads the file and runs no git. So it is right at the first session after a pull,
+    after a branch switch, on a clone that never had the commit of the check, and for a change that
+    is not committed.
+  - The lines of a symbol are each line that names it, with the block under that line. kb parses
+    no language: the indent shows the block. A change in another part of the file leaves the note
+    with no mark, so an anchor on a symbol gives fewer false marks than an anchor on a file.
+  - Each line is trimmed and an empty line is left out, so a new indent changes no hash.
+  - An anchor with no hash is compared by the commit of the last check, as `kb stale` last found
+    it: a folder, a file over 2 MB, and each anchor of a note that an older kb wrote, until its next check. That
+    compare is by content, so the commit need not be in the history of HEAD.
+  - A note with no anchor gets no mark, so `kb add` warns when a repo note has none.
   `kb stale` and `/kb:audit` cover one scope: the repo's notes in a repo, the global notes outside
   any repo. `/kb:audit` reads the code for each candidate, checks the budget, and proposes keep, rewrite,
   merge, shorten or trash with `kb audit propose`. Each audit also moves rules to the
@@ -307,14 +327,16 @@ Pass `--project <name>`. A wipe with no project takes ten minutes to rebuild.
 - `id` is the title in short form. `scope` is `global` or a repo id.
 - `kind` is `open-work`, `gotcha`, `convention`, `decision` or `how-to`. `confidence` is `high`, `medium` or `low`.
 - `last_verified` and `verified_at_commit` say when somebody last checked the fact. A new title, body or anchor is a check. A new trigger is not.
-- `anchors` are repo-relative paths, or `path#symbol`. They let `kb stale` find a note that the code left behind, and they load the note by path.
+- `anchors` are repo-relative paths, or `path#symbol`. They let kb find a note that the code left behind, and they load the note by path.
+- `anchor_hashes` has a hash of the code of each anchor, as the last check saw it. kb writes it, and ignores one that a caller gives.
 - `triggers` are optional: `cmd:`, `stop:` and `err:`, as "Notes load at their trigger" says. A path is an anchor, not a trigger.
   kb writes each in quotes. A trigger that a hand wrote with no quotes (`- cmd: zorp --wipe`) reads as the same trigger. An item that is no trigger is left out, and the note still loads. `kb add` refuses a trigger that is not valid.
 
 kb also writes `promoted_to` (the instruction file a rule moved to), `supersedes` (the notes a merge
 took in) and `trashed_at`. `kb add` answers with `warnings`, and still saves the note, when a gotcha
-or a how-to has no trigger and no anchor, when a session in a repo saves open work with the scope
-`global`, and when a body is over 700 characters.
+or a how-to has no trigger and no anchor, when a repo note that is not open work has no anchor,
+when a session in a repo saves open work with the scope `global`, and when a body is over 700
+characters.
 
 ## Hooks
 
@@ -347,7 +369,15 @@ kb instructions [--repo .]   kb sync      kb checkpointed <session-id> [--ended 
 kb log [--session id] [--since days]      (what the log says of each note, or of one session)
 kb unsaved [--forget <session-id>]   sessions here that ended with no checkpoint, never the one that asks
 kb unsaved --all             those of every directory, with the count per project
+kb version                   the commit kb runs from, as kb <12-digit sha> (pre-release). Also kb --version
 ```
+
+A flag that the command does not take is an error with exit code 1, and nothing runs (2 is the answer `neighbors` of `kb add`). A typo such as
+`--scop` gets `Did you mean --scope?`. After `--`, every word is plain text: `kb search -- --force`.
+`kb show`, `kb trash`, `kb restore` and `kb verify` take a part of an id when only one note has it. `kb delete`
+removes notes for good, so it takes whole ids only.
+Outside any git repo, `kb add` refuses a note with anchors and no scope, as an anchor names a file of a repo.
+It saves any other note as global, with a warning. Pass `"scope": "global"` for a note of every repo.
 
 `kb serve`, or `kb` alone in a terminal, opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
 list, and the open note. The arrow keys move through the sidebar and the list. `e` edits the open
@@ -362,7 +392,7 @@ Only a page opened with the link that `kb serve` prints can change notes. The li
 `#token=...`, the key, as a Jupyter link does. The fragment never reaches a server or a proxy log.
 The page keeps the key in the browser and takes it out of the address. The key stays the same
 when `kb serve` restarts, so an open page keeps working. A page with no key reads, and its banner
-says how to get the key. Delete `.state/serve-token` in the store to make a new key.
+says how to get the key. The server writes the key once, when the store exists, and never reads the file again. To revoke a key, delete `.state/serve-token` in the store and restart `kb serve`. `kb audit` prints its link with the key too.
 
 The page is a React app in `web/` (Vite, Tailwind and shadcn/ui on Base UI). Its build in `web/dist` is
 committed. After a change to `web/` or `cli/wire.ts`, run `bun install` and `bun run build` in `web/`, and
@@ -432,8 +462,12 @@ note where no session loads it. The first note of a repo is written from inside 
 
 kb syncs every note to git, so it refuses new text that holds a secret: `kb add`, an edit on the page,
 and the text or rule of an audit Apply. It knows the shape of common tokens and keys (GitHub, AWS,
-Anthropic, Slack and more), a password in a URL, and a long random value given to a name such as
-`API_KEY`. The error names the kind and the place, never the secret. Write a placeholder instead.
+Anthropic, OpenAI, Slack, Stripe, Google, Twilio, Azure, Shopify, Mailgun, Telegram, DigitalOcean
+and more), an authorization header or a Bearer or Basic value, a password in a URL, a password of
+8 or more characters with a digit or a sign given to `password`, and a long random value given to a
+name such as `API_KEY`. The error names the kind and the place, never the secret. Write a
+placeholder instead. The scan knows common shapes only: a secret in another shape gets through, so
+do not count on it as the only guard.
 
 Skills: `/kb:clear`, `/kb:save`, `/kb:recover`, `/kb:audit`. Only you can start them. `/kb:note` writes a rule the
 user states to an instruction file, and the agent starts it on its own.
@@ -452,9 +486,39 @@ Every command accepts `--json`. The CLI knows nothing about Claude Code: only `h
 There is one exception. A command names its session in the log with `--session <id>`, or else
 `KB_SESSION`, or else `CLAUDE_CODE_SESSION_ID`, which Claude Code sets for each command an agent runs.
 
+## Trust model
+
+kb runs as you, on your machine, with your files. It has no server of its own. It uses the network
+only to sync the store with its git remote. This is what it touches:
+
+- **It reads** the store (`~/.kb`, or `KB_HOME`), the files of the repo that a note anchors,
+  the instruction files (`CLAUDE.md`, `AGENTS.md` and the global file), and Claude Code's
+  transcripts and auto memory under `~/.claude/projects/`. The hooks run at session start and
+  end, before compaction, and around tool calls. They read the hook input and the store.
+- **It writes** notes, the trash and `.state/` in the store. The audit page's Apply writes rules
+  into instruction files: the repo's `CLAUDE.md` or `AGENTS.md` (it creates `CLAUDE.md` when
+  the repo has none), or the global file. `/kb:save` edits instruction files too, and removes auto
+  memory files after a private copy (see Install). `kb-transcript` writes what an unsaved session
+  said to a private file in `.state/recover/`. kb commits nothing to your repo.
+- **It syncs** the store only, and only when the store has a git remote and `sync` is on: notes,
+  the trash, `kb.config.json` and the roll-ups in `activity/`. `.state/` (the event log, the
+  recover files, the memory copies, audit proposals) never leaves the machine.
+- **It runs headless** in two places. `kb audit` and the page's Audit button start `claude -p`
+  with a short list of kb commands and reads in the repo only. `scripts/move-auto-memory.sh`
+  starts `claude -p` for each memory folder, when you run it. Each is a Claude Code session, and
+  it talks to Anthropic as any session does.
+- **It serves** a page on `127.0.0.1` only, with a token per start. A request with another
+  Host header is refused, unless the name is in `KB_SERVE_HOSTS` (a comma list, where a name that
+  starts with a dot takes that domain and all names under it). Set it only for a reverse proxy you trust.
+- **Its limits:** a write that looks like a secret is refused, and a transcript read is masked,
+  but the scan knows common shapes only. A note is plain text in a git repo. Keep secrets out.
+
+Report a security problem as `SECURITY.md` says.
+
 ## Install
 
 Requirements: Claude Code 2.1.275 or later, a recent [Bun](https://bun.sh) (tested with 1.4) and git.
+The hooks look for Bun in `KB_BUN`, on the PATH, then in `~/.bun/bin`, `~/.local/bin`, the mise and asdf shims and the Homebrew folders. Without Bun, kb is off, and a session start says so in one line.
 There is no build step and no dependency to install: the page of `kb serve` comes built in `web/dist`.
 
 kb installs from the `jrnxf` marketplace ([jrnxf/plugins](https://github.com/jrnxf/plugins)). In Claude Code:
@@ -489,7 +553,10 @@ Then two settings in `~/.claude/settings.json`:
   and its system prompt tells the agent to save preferences there. While it is on, the first start
   of each session asks the agent to tell you, and every session start tells the agent to save
   nothing there. With it off, that rule is not sent. `/kb:save` empties it: rules go to
-  instruction files, and facts go to kb.
+  instruction files, and facts go to kb. Before it removes a memory file, it keeps a copy that only you can
+  read in `.state/memory-backup/<day>/` of the store, and the report says where. A copy goes with the trash:
+  the next kb command clears the copies that are older than `trashDays` (30). `scripts/move-auto-memory.sh` also saves every memory folder to a tar file
+  that only you can read.
 - The allow rules let the agent read and save notes with no question. The session start and the
   hooks tell it to run these commands. The skills allow their own commands. Without the rules, the
   default permission mode asks before each one.
@@ -498,13 +565,19 @@ With auto-update on for the marketplace, each machine follows the default branch
 sets no `version`, so every commit is a release.
 
 The plugin puts `kb` on the PATH of Claude Code's shell only. For `kb serve` and the other commands
-in your own terminal, add this function to `~/.bashrc` or `~/.zshrc`. It runs the installed version:
+in your own terminal, add this function to `~/.bashrc` or `~/.zshrc`. It finds the installed plugin
+and hands your arguments to `bin/kb-run.ts`. That file picks the install like Claude Code does: a
+local install, then a project install that holds the current directory, then your user install.
+The function only finds the file, so a plugin update can change the lookup and you keep the same function.
 
 ```bash
 kb() {
-  local dir
-  dir=$(grep -o '"installPath": *"[^"]*/kb/[^"]*"' ~/.claude/plugins/installed_plugins.json | head -1 | cut -d'"' -f4)
-  bun "$dir/cli/main.ts" "$@"
+  local p
+  while IFS= read -r p; do
+    [ -f "$p/bin/kb-run.ts" ] && { bun "$p/bin/kb-run.ts" "$@"; return; }
+  done < <(grep -o '"installPath": *"[^"]*"' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json" 2>/dev/null | cut -d'"' -f4)
+  echo "kb: no installed kb plugin has bin/kb-run.ts. Run: claude plugin install kb@jrnxf" >&2
+  return 1
 }
 ```
 
@@ -529,6 +602,9 @@ bun test && bun run test:mod && bun run typecheck && claude plugin validate .
 
 `test/keys.test.ts` presses the page's keys in a headless Chromium, at desktop and phone width.
 The `playwright install` step downloads that browser once.
+
+The `test` workflow in `.github/workflows/test.yml` runs these checks on each pull request and each push to `main`.
+It also rebuilds `web/` and fails when the committed `web/dist` differs.
 
 To try a change on a store that looks like months of use (about 165 invented notes, 9 repos):
 

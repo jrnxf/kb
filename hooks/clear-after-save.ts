@@ -23,6 +23,8 @@ export const register: Register = on => {
   let armed = false
   let saved = false
 
+  // The command and Bash hooks only watch. The runtime skips a hook that fails: the hooks beneath
+  // decide, or, after next, its last result stands. So no .catch is needed.
   on('command.run', { command: 'kb:clear' }, async ($, e, next) => {
     armed = true
     saved = false

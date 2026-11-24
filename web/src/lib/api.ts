@@ -66,9 +66,16 @@ async function call<T>(method: string, path: string, body?: unknown, again = tru
 export const loadPage = () => call<PageData>("GET", "/api/page");
 
 /** The version of the store, and whether this page's key lets it change notes. */
-export function storeState(): Promise<{ version: string; write: boolean }> {
-  if (kept() && kept() !== token) token = kept();
-  return call<{ version: string; write: boolean }>("GET", "/api/state");
+export async function storeState(): Promise<{ version: string; write: boolean }> {
+  // This tab's key stays while it works. The key of the browser, from another tab's newer link,
+  // replaces it only when the tab has none, or the server refused it.
+  if (!token && kept()) token = kept();
+  const state = await call<{ version: string; write: boolean }>("GET", "/api/state");
+  if (!state.write && kept() && kept() !== token) {
+    token = kept();
+    return call<{ version: string; write: boolean }>("GET", "/api/state");
+  }
+  return state;
 }
 
 export const saveNote = (id: string, edit: NoteEdit) => call("PUT", `/api/notes/${id}`, edit);

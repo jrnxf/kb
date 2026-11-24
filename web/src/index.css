@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* Sonner would add this as a <style> element, which kb serve does not allow. vite.config.ts stops that. */
+@import "sonner/dist/styles.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -188,3 +190,10 @@ code {
 .a-merge { --a: var(--k-decision); }
 .a-keep { --a: var(--faint); }
 .a-promote { --a: var(--k-convention); }
+
+/*
+ * Base UI hides the native scrollbar of a scroll area and a select with this class. kb serve allows
+ * no inline style, so the page turns off the <style> element of Base UI and keeps its rule here.
+ */
+.base-ui-disable-scrollbar { scrollbar-width: none; }
+.base-ui-disable-scrollbar::-webkit-scrollbar { display: none; }
