@@ -79,12 +79,26 @@ export function App() {
     }
   }, [data, scopes, kinds, view.scope, view.kinds, view.trash, shown.trashCount]);
 
-  // The address keeps the view, so a reload comes back to the same place.
+  // The address keeps the view, so a reload comes back to the same place. On a wide screen a note
+  // the user picks gets its own history entry, so Back goes to the note before. A phone has the
+  // drawer's entry instead.
+  const picked = useRef(false);
+  const shownNote = useRef<string | null>(null);
   useEffect(() => {
     // A link to an audit changes the address before the page swaps to it: leave that address alone.
     if (!data || auditScope()) return;
-    history.replaceState(history.state, "", toHash({ ...view, note: current?.id ?? null, read: reading }));
-  }, [data, view, current?.id, reading]);
+    const id = current?.id ?? null;
+    const hash = toHash({ ...view, note: id, read: reading });
+    if (picked.current && !phone && shownNote.current && id && id !== shownNote.current) history.pushState(null, "", hash);
+    else history.replaceState(history.state, "", hash);
+    picked.current = false;
+    shownNote.current = id;
+  }, [data, view, current?.id, reading, phone]);
+
+  // The tab shows the open note.
+  useEffect(() => {
+    document.title = current ? `${current.title} - kb` : "kb";
+  }, [current?.title]);
 
   // A new note starts at its top, and an edit does not carry over to another note.
   useEffect(() => {
@@ -130,7 +144,10 @@ export function App() {
       if (was.type !== "scope") held.current = view.scope;
       setView((v) => ({ ...v, scope: scopeOf(to) }));
     } else if (was.type === "scope") setView((v) => ({ ...v, scope: held.current }));
-    document.querySelector(`[data-rail="${CSS.escape(to.key)}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const el = document.querySelector<HTMLElement>(`[data-rail="${CSS.escape(to.key)}"]`);
+    el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // The focus follows the cursor while it is in the sidebar, as the tab order has only that item.
+    if (document.activeElement?.closest("[data-rail]")) el?.focus({ preventScroll: true });
   }
 
   // On a phone the scopes are one row that scrolls sideways. Start with the picked scope in view.
@@ -166,9 +183,15 @@ export function App() {
     if (history.state?.reading) history.back();
     else closeNote();
   }
+  // Back on a wide screen goes to the view of the entry before.
+  const popView = useEffectEvent(() => {
+    if (!phone) setView(fromHash(location.hash));
+  });
   useEffect(() => {
     const pop = () => {
-      if (!history.state?.reading && !auditScope()) closeNote();
+      if (history.state?.reading || auditScope()) return;
+      closeNote();
+      popView();
     };
     addEventListener("popstate", pop);
     return () => removeEventListener("popstate", pop);
@@ -360,6 +383,7 @@ export function App() {
 
   function pickRow(note: PageNote) {
     blur();
+    picked.current = true;
     setView((v) => ({ ...v, note: note.id, pane: "list" }));
     if (phone) {
       // openNote reads the current note, which is this one after the render. Set it here directly.
@@ -444,6 +468,7 @@ export function App() {
       const list = shown.notes;
       if (list.length) {
         const i = current ? list.indexOf(current) : 0;
+        picked.current = true;
         setView((v) => ({ ...v, note: list[Math.max(0, Math.min(list.length - 1, i + by))]!.id }));
       }
     } else if (by) moveCursor(by);
@@ -558,6 +583,18 @@ export function App() {
         className={cn("group/page wide:grid wide:h-screen wide:grid-cols-[248px_380px_minmax(0,1fr)]", banner && "wide:grid-rows-[auto_minmax(0,1fr)]")}
         onClickCapture={(event) => {
           if ((event.target as HTMLElement).closest("[data-rail], [data-id], [data-slot=button]")) blur();
+        }}
+        // Tab into the sidebar or the list gives that pane the keys.
+        onFocus={(event) => {
+          const target = event.target as HTMLElement;
+          const rail = target.closest<HTMLElement>("[data-rail]");
+          if (rail) {
+            setCursor(rail.dataset.rail!);
+            if (view.pane !== "rail") {
+              held.current = view.scope;
+              setView((v) => ({ ...v, pane: "rail" }));
+            }
+          } else if (target.closest("[data-id]") && view.pane !== "list") setView((v) => ({ ...v, pane: "list" }));
         }}
       >
         {/* Behind an open drawer the list shrinks back from the edges and is black around it, as in Vaul. */}

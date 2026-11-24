@@ -25,9 +25,14 @@ interface Props {
 
 export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, trash, project }: Props) {
   const rows = useRef(new Map<string, HTMLButtonElement>());
+  // The focus follows the current row while it is in the list, as the tab order has only that row.
   useEffect(() => {
-    if (current) rows.current.get(current.id)?.scrollIntoView({ block: "nearest" });
+    const row = current && rows.current.get(current.id);
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest" });
+    if (document.activeElement?.closest("[data-id]")) row.focus({ preventScroll: true });
   }, [current?.id]);
+  const first = notes[0];
   // On a phone the filter sticks once the page scrolls past the point above it. Only then do the rows fade under it.
   const above = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
@@ -120,13 +125,19 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, tra
                   else rows.current.delete(note.id);
                 }}
                 type="button"
-                tabIndex={-1}
+                // One row is in the tab order: the open note, or the first row when none is open.
+                tabIndex={note === (current ?? first) ? 0 : -1}
                 data-id={note.id}
                 aria-current={note === current}
                 onClick={() => onOpen(note)}
+                // A title cut at two lines shows whole on hover.
+                onPointerEnter={(event) => {
+                  const text = event.currentTarget.lastElementChild as HTMLElement;
+                  event.currentTarget.title = text.scrollHeight > text.clientHeight ? note.title : "";
+                }}
                 className={cn(
                   `k-${note.kind}`,
-                  "flex w-full scroll-my-(--scroll-fade) items-baseline gap-2.5 rounded-md px-2 py-[7px] text-left text-sm leading-[1.4] hover:bg-muted aria-[current=true]:bg-muted max-wide:scroll-mt-[104px] max-wide:scroll-mb-4",
+                  "flex w-full scroll-my-(--scroll-fade) items-baseline gap-2.5 rounded-md px-2 py-[7px] text-left max-wide:min-h-11 max-wide:py-3 text-sm leading-[1.4] hover:bg-muted aria-[current=true]:bg-muted max-wide:scroll-mt-[104px] max-wide:scroll-mb-4",
                   // The pane that has the keys marks its current item a little more.
                   "group-data-[pane=list]/page:aria-[current=true]:bg-secondary group-data-[pane=list]/page:aria-[current=true]:ring-1 group-data-[pane=list]/page:aria-[current=true]:ring-edge group-data-[pane=list]/page:aria-[current=true]:ring-inset",
                 )}
