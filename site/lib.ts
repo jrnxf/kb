@@ -1,4 +1,5 @@
 // What build.ts and render.ts share: the font files, and the numbers of the example store.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -37,4 +38,17 @@ export const numbers: Record<string, string> = {
   fill: (START.chars / START.budget).toFixed(3),
   briefs: `${START.briefs.length} ${START.briefs.length === 1 ? "brief" : "briefs"}`,
   lines: String(START.listed.length),
+  notes: D.fmt(RAW.chars),
 };
+
+// A hash of everything `bun run render` reads: og.html, base.css, favicon.svg, render.ts, the numbers and the font files.
+// render.ts writes it to src/render-hash, and build.ts compares it, so a change to an input cannot ship with a stale og.png or icon.
+export function renderHash(): string {
+  const hash = createHash("sha256");
+  const text = (s: string) => hash.update(s.replace(/\r\n/g, "\n") + "\0");
+  for (const f of ["og.html", "render.ts"]) text(readFileSync(join(here, f), "utf8"));
+  for (const f of ["base.css", "favicon.svg"]) text(src(f));
+  text(JSON.stringify(numbers));
+  for (const f of fonts()) hash.update(f.bytes);
+  return hash.digest("hex");
+}

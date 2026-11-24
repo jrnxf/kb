@@ -132,6 +132,7 @@ footer a { text-decoration: none; } @media (hover: hover) and (pointer: fine) { 
   .term { font-size: 11.5px; }
 }
 </style>
+<script>if (!matchMedia("(prefers-reduced-motion: reduce)").matches) document.documentElement.classList.add("term-anim");</script>
 </head>
 <body>
 <header class="bar pad"><div class="col">
@@ -247,7 +248,7 @@ An earlier session here ended with no /kb:save.
         <div class="mfold"><div><div class="mbody"><span class="dim">verified 2026-11-12 at 4f2c9e1 | confidence high | anchors: scripts/seed.ts</span><br><span class="txt">The seed script inserts into tables that only the latest migration creates. On a fresh database, run `bun db:migrate` first. The error is "relation users does not exist". It looks like a connection problem, but it is not.</span></div></div></div></div>
         <div class="mfoot" hidden><div class="msize"><span class="w-tag t-body tag">full body</span><div class="track"><div class="fill" style="background:var(--body)"></div></div><b>0 ch</b></div><button class="w-btn" type="button">Shrink to index line</button></div></div></div>
       <p>I rank them: the repo's notes first, then the global notes. The character budget is the only limit. These are the sizes of a real store.</p>
-      <div class="tool" id="budget"><div class="h"><b>kb budget</b><span class="args">8,000 characters for the notes</span><span class="ok">✓ {{n.briefs}} · {{n.lines}} lines</span></div><div class="b w" data-w="packer"><!--PACKER--></div></div>
+      <div class="tool" id="budget"><div class="h"><b>kb budget</b><span class="args"><span class="bud-notes">{{n.notes}}</span> characters for the notes</span><span class="ok">✓ <span class="bud-count">{{n.briefs}} · {{n.lines}} lines</span></span></div><div class="b w" data-w="packer"><!--PACKER--></div></div>
     </div></li>
 
     <li class="turn you"><span class="g" aria-hidden="true">&gt;</span><div class="msg">and when there are hundreds?</div></li>
@@ -324,7 +325,7 @@ A note with "changed since the last check" is on a file that changed after the n
       <p>You need Claude Code 2.1.275 or later, Bun 1.x and git, on macOS or Linux. There is no build step and no dependency.</p>
       <div class="tool"><div class="h"><b>install</b><span class="args">two steps</span></div><div class="b steps">
         <div class="step"><div class="sh"><span># 1. in Claude Code</span><button class="w-btn cp" type="button" aria-label="Copy the install command" hidden>Copy</button></div><pre class="wrap">/plugin install kb --marketplace jrnxf/plugins</pre></div>
-        <div class="step"><div class="sh"><span># 2. ~/.claude/settings.json</span><button class="w-btn cp" type="button" aria-label="Copy the settings" hidden>Copy</button></div><pre class="wrap">{
+        <div class="step"><div class="sh"><span># 2. merge into ~/.claude/settings.json</span><button class="w-btn cp" type="button" aria-label="Copy the settings to merge into your file" hidden>Copy</button></div><pre class="wrap">{
   "autoMemoryEnabled": false,
   "permissions": {
     "allow": [
@@ -336,7 +337,7 @@ A note with "changed since the last check" is on a file that changed after the n
   }
 }</pre></div>
       </div></div>
-      <p>The settings turn off auto memory, since kb replaces it, and let me read and save notes with no question.</p>
+      <p>Add these keys to the file you have. Do not replace it. The settings turn off auto memory, since kb replaces it, and let me read and save notes with no question.</p>
     </div></li>
 
     <li class="turn you prompt"><span class="g" aria-hidden="true">&gt;</span><div class="msg">/clear</div></li>
@@ -359,7 +360,7 @@ A note with "changed since the last check" is on a file that changed after the n
 if (navigator.clipboard) for (const b of document.querySelectorAll(".cp")) {
   const pre = b.closest(".step").querySelector("pre"), label = b.textContent; let t;
   b.hidden = false;
-  b.addEventListener("click", () => navigator.clipboard.writeText(pre.textContent).then(() => { b.textContent = "Copied"; clearTimeout(t); t = setTimeout(() => (b.textContent = label), 1600); }, () => {}));
+  b.addEventListener("click", () => navigator.clipboard.writeText(pre.textContent).then(() => "Copied", () => "Copy failed").then((text) => { b.textContent = text; clearTimeout(t); t = setTimeout(() => (b.textContent = label), 1600); }));
 }
 
 // ---------- the session reveal ----------

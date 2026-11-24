@@ -1,10 +1,11 @@
 // Renders the pictures that the build only copies: src/og.png (the share card), src/apple-touch-icon.png and src/favicon.ico.
-// Run it by hand with `bun run render` after a change to og.html, favicon.svg or the look of the page, and commit the output.
+// Run it by hand with `bun run render` after a change to og.html, base.css, favicon.svg, render.ts or the numbers in lib.ts, and commit the output.
+// It also writes src/render-hash, which build.ts checks, so the build fails when an input changed and this did not run.
 // It needs the Playwright browser of the repo root (`bunx playwright install chromium-headless-shell` once).
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { fonts, numbers, src } from "./lib.ts";
+import { fonts, numbers, renderHash, src } from "./lib.ts";
 
 const here = import.meta.dir;
 const faces = fonts().map((f) => f.block.replace(/url\(\.\/files\/[^)]+\)/, `url(data:font/woff2;base64,${Buffer.from(f.bytes).toString("base64")})`)).join("\n");
@@ -43,4 +44,5 @@ ico.writeUInt32LE(png.length, 14); ico.writeUInt32LE(22, 18); // size and offset
 writeFileSync(join(here, "src", "favicon.ico"), Buffer.concat([ico, png]));
 
 await browser.close();
-console.log("render: src/og.png, src/apple-touch-icon.png, src/favicon.ico");
+writeFileSync(join(here, "src", "render-hash"), `${renderHash()}\n`);
+console.log("render: src/og.png, src/apple-touch-icon.png, src/favicon.ico, src/render-hash");

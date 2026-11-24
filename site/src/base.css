@@ -22,7 +22,7 @@ a { color: inherit; }
 .bar .path { color: var(--faint); }
 .bar .sp { flex: 1; }
 /* The meter: what kb loads at session start, out of the hard budget. --fill is that share. The budget slider moves it. */
-.meter { --fill: 0.981; display: flex; align-items: center; gap: 8px; }
+.meter { --fill: 0; display: flex; align-items: center; gap: 8px; }
 .meter .ml { color: var(--faint); }
 .meter i { width: 64px; height: 4px; border-radius: 2px; background: var(--line2); overflow: hidden; display: block; }
 .meter i::before { content: ""; display: block; height: 100%; width: 100%; background: var(--body); transform-origin: left; transform: scaleX(var(--fill)); transition: transform 200ms var(--ease-out, ease); }

@@ -10,7 +10,6 @@ const onView = (el, fn, opts) => new IntersectionObserver(([e]) => fn(e.isInters
 function mountTerm(root) {
   const rows = [...root.querySelectorAll(".term-body div")];
   if (reduce) return;
-  root.classList.add("anim");
   let timer, i = 0;
   const tick = () => { if (i < rows.length) { rows[i++].classList.add("on"); timer = setTimeout(tick, i < 3 ? 380 : 90); } else timer = setTimeout(() => { rows.forEach((r) => r.classList.remove("on")); i = 0; timer = setTimeout(tick, 600); }, 6000); };
   onView(root, (v) => { clearTimeout(timer); if (v) tick(); });
@@ -64,7 +63,11 @@ function mountMorph(root) {
 
 // ---------- the header meter: what kb loads at session start, out of the hard budget. It follows the budget slider. ----------
 const meterEl = document.querySelector(".meter");
-function meter(S) {
+function meter(S, notesBudget) {
+  // The budget card header says the same numbers.
+  const bn = document.querySelector(".bud-notes"), bc = document.querySelector(".bud-count");
+  if (bn) bn.textContent = fmt(notesBudget);
+  if (bc) bc.textContent = `${S.briefs.length} ${S.briefs.length === 1 ? "brief" : "briefs"} · ${S.listed.length} lines`;
   if (!meterEl) return;
   meterEl.querySelector(".mv").textContent = `${fmt(S.chars)} / ${fmt(S.budget)}`;
   meterEl.style.setProperty("--fill", S.chars / S.budget);
@@ -121,7 +124,7 @@ function mountPacker(root) {
     $(".p-read").textContent = `rank ${rankOf[i] + 1}, ${n.kind}, ${n.scope === "global" ? "global" : "repo"}, note ${fmt(n.blk)} ch${phase >= FROM[t] ? GETS[t](n) : ""}`; });
   field.addEventListener("pointerleave", () => cells.forEach((x) => x.classList.remove("hot")));
   if (tune) { const bc = $(".bc");
-    const t = () => { B.chars = +bc.value; $(".oc").textContent = fmt(B.chars) + (B.chars === RAW.chars ? " (default)" : ""); S = runOn(NOTES, B.chars); tier = tiersOf(S); meter(S); };
+    const t = () => { B.chars = +bc.value; $(".oc").textContent = fmt(B.chars) + (B.chars === RAW.chars ? " (default)" : ""); S = runOn(NOTES, B.chars); tier = tiersOf(S); meter(S, B.chars); };
     bc.addEventListener("input", () => { stop(); t(); render(5, true); }); t(); }
   layout(); render(0, true); new ResizeObserver(layout).observe(field);
   let played = false; onView(field, (v) => { if (v && !played) { played = true; setTimeout(play, 400); } }, { threshold: 0.4 });

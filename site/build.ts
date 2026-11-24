@@ -1,12 +1,12 @@
 // Builds the kb site into dist/.
 // - index.html and 404.html: each page with its CSS and JS inlined, so the only other requests are the fonts and the pictures.
 // - assets/: the self-hosted woff2 files and the pictures, each name with a content hash, so they can be cached forever.
-// - _headers: immutable caching for assets/, and Link headers on the HTML so Cloudflare can send 103 Early Hints.
+// - _headers: immutable caching for assets/, and a Link header on the page (/) so Cloudflare can send 103 Early Hints.
 // - the files at fixed paths: favicons, robots.txt, sitemap.xml and llms.txt.
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
-import { D, NOTES, RAW, START, fonts, numbers, src } from "./lib.ts";
+import { D, NOTES, RAW, START, fonts, numbers, renderHash, src } from "./lib.ts";
 
 const here = import.meta.dir;
 const ORIGIN = "https://kb.jrnxf.co";
@@ -28,9 +28,9 @@ for (const f of fonts()) {
 const IMAGES = ["serve.webp", "serve-phone.webp", "og.png"];
 const pictures = new Map<string, string>();
 for (const file of IMAGES) {
-  const bytes = readFileSync(join(here, "src", file));
-  writeFileSync(join(dist, "assets", hashed(file, bytes)), bytes);
-  pictures.set(file, `/assets/${hashed(file, bytes)}`);
+  const bytes = readFileSync(join(here, "src", file)), name = hashed(file, bytes);
+  writeFileSync(join(dist, "assets", name), bytes);
+  pictures.set(file, `/assets/${name}`);
 }
 
 // What a reader without JavaScript sees in the two widgets that draw: the last state, from the same code as the page.
@@ -75,13 +75,15 @@ writeFileSync(join(dist, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 
 // The Link header must name the same files as the preload tags, with crossorigin on both, or the browser fetches a font twice.
 const link = preloads.map((h) => `<${h}>; rel=preload; as=font; type=font/woff2; crossorigin`).join(", ");
+// The font Link goes only on the page: the icons, robots.txt, sitemap.xml and llms.txt do not use the fonts.
 writeFileSync(join(dist, "_headers"), `/*
-  Link: ${link}
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 
+/
+  Link: ${link}
+
 /assets/*
-  ! Link
   Cache-Control: public, max-age=31536000, immutable
 
 /llms.txt
@@ -90,6 +92,8 @@ writeFileSync(join(dist, "_headers"), `/*
 
 // Fail the build, and so the deploy, when the output breaks one of the rules above.
 const fail = (why: string) => { console.error(`build: ${why}`); process.exit(1); };
+// og.png, apple-touch-icon.png and favicon.ico are rendered by hand. Fail when an input of that render changed after it.
+if ((existsSync(join(here, "src", "render-hash")) ? readFileSync(join(here, "src", "render-hash"), "utf8").trim() : "") !== renderHash()) fail("src/og.png and the icons are out of date: run `bun run render` and commit the output");
 if (preloads.length !== 2) fail(`expected 2 latin font preloads, found ${preloads.length}`);
 if (faces.length !== 4) fail(`expected 4 @font-face rules (2 fonts x latin, latin-ext), found ${faces.length}`);
 for (const [name, out] of [["index.html", html], ["404.html", notFound]]) {
