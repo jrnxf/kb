@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { SAVE_RULE } from "../cli/context.ts";
 import { CHECKPOINT_RULE } from "../hooks/checkpoint-rule.ts";
 import { RUN_ENV } from "../cli/audit-run.ts";
 import { rememberRepo } from "../cli/repos.ts";
-import { forgetUnsaved, isLive, isSaved, markSaved, recordRecovered, recordWorth, recordUnsaved, unsavedSession } from "../cli/session.ts";
+import { forgetUnsaved, isLive, privateDir, pruneMemoryBackups, isSaved, markSaved, recordRecovered, recordWorth, recordUnsaved, unsavedSession } from "../cli/session.ts";
 import { MEMORY_ON_NOTICE, MEMORY_RULE } from "../hooks/auto-memory.ts";
 import { OUTPUT_CLOSE, OUTPUT_OPEN, TAIL_BYTES } from "../hooks/transcript.ts";
 import { BUDGET_MS, ELSEWHERE_FLOOR, MIN_FAILED, PARSE_LIMIT, unsavedNotice } from "../hooks/unsaved-notice.ts";
@@ -479,6 +479,193 @@ describe("kb-transcript --memory", () => {
     mkdirSync(folder, { recursive: true });
     writeFileSync(join(folder, "fact.md"), "x");
     expect(run(project, config)).toEqual({ folder, files: [join(folder, "fact.md")] });
+  });
+});
+
+// /kb:save removes a memory file that kb holds now. A save can get a fact wrong, so a copy stays.
+describe("kb-transcript --remove-memory", () => {
+  const BIN = join(ROOT, "bin", "kb-transcript");
+  // The config folder of a file is four folders up: <config>/projects/<name>/memory/<file>.
+  const run = (home: string, file: string, config = dirname(dirname(dirname(dirname(file))))) => {
+    const r = Bun.spawnSync([BIN, "--remove-memory", file], { cwd: plain(), env: { ...process.env, KB_HOME: home, CLAUDE_CONFIG_DIR: config }, stdout: "pipe", stderr: "pipe" });
+    return { code: r.exitCode, out: JSON.parse(r.stdout.toString()) as { removed?: string; backup?: string; error?: string } };
+  };
+  const folder = () => {
+    const dir = join(tempDir("kb-claude-"), "projects", "-home-user-app", "memory");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "MEMORY.md"), "- [fact](fact.md)\n");
+    writeFileSync(join(dir, "fact.md"), "the build needs a warm cache\n");
+    return dir;
+  };
+  const mode = (path: string) => statSync(path).mode & 0o777;
+
+  test("keeps a copy that only the user can read, removes the file, and says where the copy is", () => {
+    const store = tempStore();
+    const dir = folder();
+    const r = run(store.home, join(dir, "fact.md"));
+    expect(r.code).toBe(0);
+    expect(existsSync(join(dir, "fact.md"))).toBe(false);
+    expect(r.out.backup).toStartWith(join(store.home, ".state", "memory-backup"));
+    expect(r.out.backup).toEndWith(join("-home-user-app", "fact.md"));
+    expect(readFileSync(r.out.backup!, "utf8")).toBe("the build needs a warm cache\n");
+    expect(mode(r.out.backup!)).toBe(0o600);
+    expect(mode(dirname(r.out.backup!))).toBe(0o700);
+    // A second file of that name on the same day gets its own copy.
+    writeFileSync(join(dir, "fact.md"), "a second fact\n");
+    const again = run(store.home, join(dir, "fact.md"));
+    expect(again.out.backup).toEndWith("fact.2.md");
+    expect(readFileSync(r.out.backup!, "utf8")).toBe("the build needs a warm cache\n");
+  });
+
+  test("removes only a memory file, never MEMORY.md, a link or a file elsewhere", () => {
+    const store = tempStore();
+    const dir = folder();
+    const other = join(tempDir(), "notes.md");
+    writeFileSync(other, "x");
+    symlinkSync(other, join(dir, "link.md"));
+    for (const file of [join(dir, "MEMORY.md"), other, join(dir, "link.md"), join(dir, "gone.md"), join(dir, "..", "fact.md")]) {
+      const r = run(store.home, file);
+      expect(r.code, file).toBe(1);
+      expect(r.out.error, file).toBeString();
+    }
+    expect(existsSync(join(dir, "MEMORY.md"))).toBe(true);
+    expect(existsSync(other)).toBe(true);
+    expect(existsSync(join(dir, "link.md"))).toBe(true);
+  });
+
+  test("removes nothing outside Claude's own config folder, even at the same depth", () => {
+    const store = tempStore();
+    const site = join(tempDir(), "dev", "site", "projects", "blog", "memory");
+    mkdirSync(site, { recursive: true });
+    writeFileSync(join(site, "plan.md"), "the plan");
+    const other = tempDir("kb-claude-");
+    mkdirSync(join(other, "projects"));
+    const r = run(store.home, join(site, "plan.md"), other);
+    expect(r.code).toBe(1);
+    expect(r.out.error).toContain("not an auto memory file");
+    expect(existsSync(join(site, "plan.md"))).toBe(true);
+    // A link in the config folder that leads out of it does not count either.
+    const config = tempDir("kb-claude-");
+    mkdirSync(join(config, "projects"), { recursive: true });
+    symlinkSync(join(site, "..", ".."), join(config, "projects", "elsewhere"));
+    const viaLink = run(store.home, join(config, "projects", "elsewhere", "blog", "memory", "plan.md"), config);
+    expect(viaLink.code).toBe(1);
+    expect(existsSync(join(site, "plan.md"))).toBe(true);
+  });
+
+  test("a command of kb clears the copies of days older than trashDays", () => {
+    const store = tempStore();
+    const root = join(store.home, ".state", "memory-backup");
+    mkdirSync(join(root, "2020-01-01", "-home-user-app"), { recursive: true });
+    writeFileSync(join(root, "2020-01-01", "-home-user-app", "x.md"), "x");
+    mkdirSync(join(root, "2999-01-01"), { recursive: true });
+    expect(kb(store, ["list"]).code).toBe(0);
+    expect(existsSync(join(root, "2020-01-01"))).toBe(false);
+    expect(existsSync(join(root, "2999-01-01"))).toBe(true);
+  });
+
+  test("a huge trashDays or a copy that cannot go never stops a command", () => {
+    const store = tempStore();
+    const root = join(store.home, ".state", "memory-backup");
+    mkdirSync(join(root, "2020-01-01"), { recursive: true });
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ trashDays: 1e15 }));
+    expect(kb(store, ["list"]).code).toBe(0);
+    expect(existsSync(join(root, "2020-01-01"))).toBe(true);
+    expect(() => pruneMemoryBackups(store, 1e15)).not.toThrow();
+    // A folder that cannot be removed does not stop the trash from clearing.
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ trashDays: 7 }));
+    chmodSync(root, 0o500);
+    try {
+      expect(kb(store, ["list"]).code).toBe(0);
+    } finally {
+      chmodSync(root, 0o700);
+    }
+  });
+
+  test("privateDir refuses a top that is not above the folder, so it never changes a folder it does not own", () => {
+    const base = tempDir();
+    const other = join(base, "other");
+    chmodSync(base, 0o755);
+    mkdirSync(other, { mode: 0o755 });
+    expect(() => privateDir(join(base, "a", "b"), other)).toThrow("not inside");
+    expect(statSync(base).mode & 0o777).not.toBe(0o700);
+    privateDir(join(base, "a", "b"), join(base, "a"));
+    expect(statSync(join(base, "a", "b")).mode & 0o777).toBe(0o700);
+    expect(statSync(base).mode & 0o777).not.toBe(0o700);
+  });
+
+  test("names the day folder by the local day", () => {
+    const store = tempStore();
+    const dir = folder();
+    // At 23:30 in Lisbon in summer it is 22:30 UTC, and 12:30 on the next day in Kiritimati (UTC+14): the folder is the day of this machine.
+    const day = (zone: string, at = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(at);
+    const before = day("Pacific/Kiritimati");
+    const r = Bun.spawnSync([BIN, "--remove-memory", join(dir, "fact.md")], { cwd: plain(), env: { ...process.env, KB_HOME: store.home, CLAUDE_CONFIG_DIR: dirname(dirname(dirname(dir))), TZ: "Pacific/Kiritimati" }, stdout: "pipe", stderr: "pipe" });
+    const after = day("Pacific/Kiritimati");
+    const backup = (JSON.parse(r.stdout.toString()) as { backup: string }).backup;
+    // The run can cross midnight, so either day around it is right.
+    expect([before, after]).toContain(basename(dirname(dirname(backup))));
+  });
+
+  test("refuses more than one path, and says why a path is no good", () => {
+    const store = tempStore();
+    const dir = folder();
+    const two = Bun.spawnSync([BIN, "--remove-memory", join(dir, "fact.md"), join(dir, "MEMORY.md")], { cwd: plain(), env: { ...process.env, KB_HOME: store.home, CLAUDE_CONFIG_DIR: dirname(dirname(dirname(dir))) }, stdout: "pipe", stderr: "pipe" });
+    expect(two.exitCode).toBe(1);
+    expect(JSON.parse(two.stdout.toString()).error).toContain("one file per command");
+    expect(existsSync(join(dir, "fact.md"))).toBe(true);
+    // A config folder with no projects folder, and a folder that is gone, each name their own cause.
+    const noProjects = run(store.home, join(dir, "fact.md"), tempDir("kb-claude-"));
+    expect(noProjects.out.error).toContain("projects folder");
+    expect(run(store.home, join(dir, "gone", "fact.md")).out.error).toContain("no folder");
+  });
+
+  test("prints one JSON error and keeps the file when the copy cannot be written", () => {
+    const store = tempStore();
+    const dir = folder();
+    // A file where the backup folder should be makes the copy fail.
+    mkdirSync(join(store.home, ".state"), { recursive: true });
+    writeFileSync(join(store.home, ".state", "memory-backup"), "not a folder");
+    const r = run(store.home, join(dir, "fact.md"));
+    expect(r.code).toBe(1);
+    expect(r.out.error).toContain("could not remove");
+    expect(existsSync(join(dir, "fact.md"))).toBe(true);
+  });
+
+  test("the save skills remove memory with it, and allow no rm", () => {
+    for (const name of ["save", "clear", "checkpoint"]) {
+      const skill = readFileSync(join(ROOT, "skills", name, "SKILL.md"), "utf8");
+      const allowed = /^allowed-tools: (.*)$/m.exec(skill)![1]!;
+      expect(allowed, name).toContain("Bash(kb-transcript --remove-memory *)");
+      expect(allowed, name).not.toContain("Bash(rm");
+    }
+    expect(readFileSync(join(ROOT, "skills", "save", "SKILL.md"), "utf8")).toContain("`kb-transcript --remove-memory <absolute path of the file>`");
+  });
+});
+
+// The move script saves every memory folder first. The files are private, so the tar file is too.
+describe("scripts/move-auto-memory.sh", () => {
+  test("writes a backup that only the user can read", () => {
+    const config = tempDir("kb-claude-");
+    const memory = join(config, "projects", "-home-user-app", "memory");
+    mkdirSync(memory, { recursive: true });
+    writeFileSync(join(memory, "fact.md"), "x");
+    // A stand-in for claude that does nothing, so no real session runs.
+    const bin = tempDir("kb-bin-");
+    writeFileSync(join(bin, "claude"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(bin, "claude"), 0o755);
+    const r = Bun.spawnSync([join(ROOT, "scripts", "move-auto-memory.sh"), "--", "--plugin-dir", ROOT], {
+      cwd: plain(),
+      env: { ...process.env, CLAUDE_CONFIG_DIR: config, HOME: tempDir("kb-home-"), PATH: `${bin}:${process.env.PATH}` },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode, r.stderr.toString()).toBe(0);
+    const backup = readdirSync(config).find((f) => f.startsWith("auto-memory-backup-"))!;
+    expect(backup).toEndWith(".tar.gz");
+    expect(statSync(join(config, backup)).mode & 0o777).toBe(0o600);
+    const logs = readdirSync(config).find((f) => f.startsWith("auto-memory-move-"))!;
+    expect(statSync(join(config, logs)).mode & 0o777).toBe(0o700);
   });
 });
 

@@ -6,6 +6,7 @@ import { type WriteOp, logEvent, rollUp } from "./log.ts";
 import { BODY_CHARS, KbError, type Note, serializeNote, validateNote } from "./note.ts";
 import { type RepoInfo, commitAt } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
+import { pruneMemoryBackups } from "./session.ts";
 import { clearStaleCache } from "./stale.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import { kickSync } from "./sync.ts";
@@ -277,7 +278,13 @@ export function tidyTrash(store: Store, now = nowIso()): string[] {
       stamped++;
     } else if (clearsAt(note.trashed_at, days) <= now) expired.push(note);
   }
-  if (expired.length > 0) return removeNotes(store, expired, `kb: clear ${expired.length} from the trash after ${days} days: ${expired.map((n) => n.id).join(" ")}`);
-  if (stamped > 0) afterWrite(store, "kb: record when trashed notes went to the trash");
-  return [];
+  let cleared: string[] = [];
+  if (expired.length > 0) cleared = removeNotes(store, expired, `kb: clear ${expired.length} from the trash after ${days} days: ${expired.map((n) => n.id).join(" ")}`);
+  else if (stamped > 0) afterWrite(store, "kb: record when trashed notes went to the trash");
+  try {
+    pruneMemoryBackups(store, days, Date.parse(now)); // the copies of removed memory files age out with the trash
+  } catch {
+    // A copy that cannot go now goes on the next command. It must not stop the trash from clearing.
+  }
+  return cleared;
 }
