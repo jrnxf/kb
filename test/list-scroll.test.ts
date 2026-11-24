@@ -38,7 +38,7 @@ beforeAll(async () => {
 }, 30_000);
 afterAll(async () => {
   await browser?.close();
-});
+}, 30_000);
 
 test("the keys keep the selected row clear of the list's edge fade, and the filter stays put", async () => {
   const store = tempStore();
@@ -48,7 +48,7 @@ test("the keys keep the selected row clear of the list's edge fade, and the filt
   const page = await browser.newPage({ viewport: { width: 1280, height: 600 } });
   page.setDefaultTimeout(3000);
   try {
-    await page.goto(served.url);
+    await page.goto(served.link);
     await page.getByRole("heading", { level: 1, name: "kb" }).waitFor();
     const viewport = page.locator("[data-slot=scroll-area-viewport]:has([data-id])");
     const filter = page.locator("#q");
@@ -80,7 +80,7 @@ test("the bottom fade follows a filter that shortens the list, and comes back wh
   const page = await browser.newPage({ viewport: { width: 1280, height: 600 } });
   page.setDefaultTimeout(3000);
   try {
-    await page.goto(served.url);
+    await page.goto(served.link);
     await page.getByRole("heading", { level: 1, name: "kb" }).waitFor();
     const viewport = page.locator("[data-slot=scroll-area-viewport]:has([data-id])");
     // Base UI keeps how far the area can still scroll down in this variable, and the fade reads it.
@@ -105,7 +105,7 @@ test("on a phone the rows fade under the filter only while it is stuck to the to
   const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
   page.setDefaultTimeout(3000);
   try {
-    await page.goto(served.url);
+    await page.goto(served.link);
     await page.getByRole("heading", { level: 1, name: "kb" }).waitFor();
     const header = page.locator("div:has(> [data-slot=input-group]:has(#q))");
     const fade = () => header.evaluate((el) => getComputedStyle(el, "::after").opacity);
@@ -132,7 +132,7 @@ test("in a short window the keys keep the rail's cursor clear of the rail's edge
   const page = await browser.newPage({ viewport: { width: 1280, height: 400 } });
   page.setDefaultTimeout(3000);
   try {
-    await page.goto(served.url);
+    await page.goto(served.link);
     await page.getByRole("heading", { level: 1, name: "kb" }).waitFor();
     const viewport = page.locator("[data-slot=scroll-area-viewport]:has([data-rail])");
     await page.keyboard.press("h");

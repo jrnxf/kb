@@ -12,11 +12,11 @@ import { buildBudget, buildContext, rank } from "./context.ts";
 import { REPO_FILES, globalInstructions } from "./instructions.ts";
 import { MAX_NEIGHBORS, NOT_WRITTEN, type Neighbor, findNeighbors } from "./neighbors.ts";
 import { FORGET_WHYS, type ForgetWhy, type Logged, type NoteLog, VERDICTS, type Verdict, type Why, emptyNoteLog, idsWithHistory, lastActivity, logEvent, readLog, saysWorth, sessionOf, setActor, summarize } from "./log.ts";
-import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, normalizeTitle, slugify, validateNote } from "./note.ts";
+import { BODY_CHARS, CONFIDENCES, KINDS, KbError, byTrashedAt, type Note, isValidScope, titleId, titleKey, validateNote } from "./note.ts";
 import { commitAt, resolveRepo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { searchNotes } from "./search.ts";
-import { DEFAULT_PORT, isKbServer, runningPort, serve } from "./serve.ts";
+import { DEFAULT_PORT, isKbServer, kbServerAt, linkToRunning, runningPort, serve, storeId } from "./serve.ts";
 import { resultGroups } from "./wire.ts";
 import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, isLive, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
 import { CHANGED_MARK, changedAsk, changedSinceCheck, clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
@@ -302,8 +302,8 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   }
   if (typeof input.title !== "string" || !input.title.trim()) throw new KbError("invalid note: title: required");
   rejectSecrets({ title: input.title, body: input.body, anchors: input.anchors, triggers: input.triggers }, "the note");
-  const slug = slugify(input.title);
-  if (!slug) throw new KbError("invalid note: title: needs letters or digits");
+  if (!/[\p{L}\p{N}]/u.test(input.title)) throw new KbError("invalid note: title: needs letters or digits");
+  const slug = titleId(input.title);
 
   // No repo here, so a note with no scope is global, and loads in every repo. An anchor names a
   // file of one repo, so such a note was meant for a repo: it is refused. The refusal comes before the twin check, whose hint would lead to repo anchors on a global note. Any other note is saved.
@@ -314,8 +314,8 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   }
 
   // Same normalised title in the same scope: let the caller decide to update.
-  const title = normalizeTitle(input.title);
-  const twin = active.find((n) => n.scope === scope && (normalizeTitle(n.title) === title || n.id === title));
+  const title = titleKey(input.title);
+  const twin = active.find((n) => n.scope === scope && (titleKey(n.title) === title || n.id === title));
   if (twin) {
     const hint = `A note with this title is in ${scope}. To update it, pass "id": "${twin.id}" and no "scope".`;
     return { json: { status: "exists", id: twin.id, path: twin.path, hint }, text: `exists ${twin.id}\n${hint}` };
@@ -849,27 +849,37 @@ function openInBrowser(url: string): void {
   }
 }
 
-/** Start the page server and stay up until the process is stopped. */
+/**
+ * Start the page server and stay up until the process is stopped. A store that does not exist yet
+ * shows as an empty page, and the first note creates it.
+ */
 async function cmdServe(store: Store, args: Args, json: boolean): Promise<never> {
-  if (!store.exists()) throw new KbError("the store does not exist yet. `kb add` creates it.");
   const flag = args.flags.get("port");
   const port = flag === undefined ? DEFAULT_PORT : Number(flag);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new KbError("--port needs a number from 0 to 65535");
   const open = !args.flags.has("no-open") && !json;
+  // The link carries the key that lets the page change notes. It is in the fragment, so no server or proxy log sees it.
   let url: string;
+  let note = "";
   try {
-    url = serve(store, { port }).url;
+    url = serve(store, { port }).link;
   } catch (error) {
     if ((error as { code?: string })?.code !== "EADDRINUSE") throw error;
-    if (!(await isKbServer(port))) throw new KbError(`port ${port} is in use by another program. Pass --port.`);
-    // One server per port is enough: show the one that is already up.
-    url = `http://127.0.0.1:${port}/`;
+    const running = await kbServerAt(port);
+    if (!running) throw new KbError(`port ${port} is in use by another program. Pass --port.`);
+    // A kb older than this one does not name its store.
+    if (running.store !== undefined && running.store !== storeId(store)) throw new KbError(`port ${port} serves another kb store. Stop that kb serve, or pass --port.`);
+    // One server per port is enough: show the one that is already up, with the key it uses.
+    const found = await linkToRunning(store, port);
+    url = found.link;
+    if (!found.keyed) note = `The link has no key, so the page is read only. To change notes, stop that kb serve${running.store === undefined ? " (it is from an older kb)" : ""} and run kb serve again.`;
     if (open) openInBrowser(url);
-    console.log(json ? JSON.stringify({ url, started: false }, null, 2) : `kb serve is already running at ${url}`);
+    console.log(json ? JSON.stringify({ url, started: false, ...(note ? { note } : {}) }, null, 2) : `kb serve is already running at ${url}${note ? `\n${note}` : ""}`);
     process.exit(0);
   }
   console.log(json ? JSON.stringify({ url, started: true }, null, 2) : `kb serve: ${url}
-Press Ctrl+C to stop.`);
+Open this link to read and change notes. Without its key the page is read only.
+Press Ctrl+C to stop. \`kb help\` lists the commands.`);
   if (open) openInBrowser(url);
   return new Promise<never>(() => {});
 }
@@ -888,7 +898,8 @@ async function cmdAudit(store: Store, args: Args, input: () => Promise<string>):
   if (sub !== undefined && sub !== "propose" && sub !== "status") throw new KbError("usage: kb audit [propose | status] [--repo .] [--no-wait]");
   // The link goes to the server that is running: the port kb serve recorded, or the default.
   const port = (await runningPort(store)) ?? DEFAULT_PORT;
-  const url = `http://127.0.0.1:${port}/#audit=${encodeURIComponent(scope)}`;
+  // The link carries the key, as the serve link does, so the page can apply the picks.
+  const { link: url } = await linkToRunning(store, port, `#audit=${encodeURIComponent(scope)}`);
   const served = () => isKbServer(port);
   const open = async (cards: number, lead: string): Promise<Output> => ({
     json: { scope, status: "open", cards, url, served: await served() },
@@ -1001,7 +1012,7 @@ async function main(): Promise<number> {
       setActor(() => (who ??= { session: sessionOf(args.flags.get("session")), scope: resolveRepo(String(args.flags.get("repo") ?? "."), store, { record: false }).scope ?? "global" }));
     }
     // A person who types only `kb` in a terminal wants to see the notes. A script gets the help.
-    if (!command && process.stdout.isTTY && store.exists()) await cmdServe(store, args, json);
+    if (!command && process.stdout.isTTY) await cmdServe(store, args, json);
     if (!command || command === "help" || command === "--help" || command === "-h" || args.flags.has("help")) {
       console.log(USAGE);
       return 0;
