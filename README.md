@@ -165,18 +165,26 @@ notes, and a note loads when it applies.
   body or the anchors. A session start also checks the
   anchors of the repo's notes on disk, and tells the agent which notes name a file or a symbol that
   is gone.
-- **A note on a changed file says so when it loads.** `kb stale` records which notes name a file
-  that changed after their last check. From then on such a note has the word `changed` in its
-  index line, and the line `changed since the last check` with the paths when a command, an error
-  or a file loads it. `kb show` runs the check itself, in the repo of the note. The mark comes with
-  what to do: read the code, then `kb verify <id>` when the note still holds, an update with
-  `kb add` when it does not, or `kb verdict wrong <id>`. So the session that uses a note checks it,
-  and the audit is the backstop. A check gives the note the commit of HEAD, which ends the mark.
-  The record is as new as the last `kb stale`: a session start runs it in the background when HEAD
-  moved, so the index of the first session after a pull can lack the mark, and the loads in that
-  session have it. The compare is by content, so a note checked on a branch that was squash-merged or
-  rebased is compared too, while the clone still has that commit. A note with no anchor gets no
-  mark, so `kb add` warns when a repo note has none.
+- **A note on a changed file says so when it loads.** A check of a repo note (`kb add`,
+  `kb verify`, an audit) saves a hash of the code of each anchor in the note: the whole file, or
+  for `path#symbol` the lines of the symbol. At every later load kb hashes the file as it is now
+  and compares. A note whose code changed has the word `changed` in its index line, and the line
+  `changed since the last check` with the anchors when a command, an error or a file loads it.
+  `kb show` says it too, in the repo of the note. The mark comes with what to do: read the code,
+  then `kb verify <id>` when the note still holds, an update with `kb add` when it does not, or
+  `kb verdict wrong <id>`. So the session that uses a note checks it, and the audit is the
+  backstop. A check takes the new hashes, which ends the mark.
+  - The compare reads the file and runs no git. So it is right at the first session after a pull,
+    after a branch switch, on a clone that never had the commit of the check, and for a change that
+    is not committed.
+  - The lines of a symbol are each line that names it, with the block under that line. kb parses
+    no language: the indent shows the block. A change in another part of the file leaves the note
+    with no mark, so an anchor on a symbol gives fewer false marks than an anchor on a file.
+  - Each line is trimmed and an empty line is left out, so a new indent changes no hash.
+  - An anchor with no hash is compared by the commit of the last check, as `kb stale` last found
+    it: a folder, and each anchor of a note that an older kb wrote, until its next check. That
+    compare is by content, so the commit need not be in the history of HEAD.
+  - A note with no anchor gets no mark, so `kb add` warns when a repo note has none.
   `kb stale` and `/kb:audit` cover one scope: the repo's notes in a repo, the global notes outside
   any repo. `/kb:audit` reads the code for each candidate, checks the budget, and proposes keep, rewrite,
   merge, shorten or trash with `kb audit propose`. Each audit also moves rules to the
@@ -319,7 +327,8 @@ Pass `--project <name>`. A wipe with no project takes ten minutes to rebuild.
 - `id` is the title in short form. `scope` is `global` or a repo id.
 - `kind` is `open-work`, `gotcha`, `convention`, `decision` or `how-to`. `confidence` is `high`, `medium` or `low`.
 - `last_verified` and `verified_at_commit` say when somebody last checked the fact. A new title, body or anchor is a check. A new trigger is not.
-- `anchors` are repo-relative paths, or `path#symbol`. They let `kb stale` find a note that the code left behind, and they load the note by path.
+- `anchors` are repo-relative paths, or `path#symbol`. They let kb find a note that the code left behind, and they load the note by path.
+- `anchor_hashes` has a hash of the code of each anchor, as the last check saw it. kb writes it, and ignores one that a caller gives.
 - `triggers` are optional: `cmd:`, `stop:` and `err:`, as "Notes load at their trigger" says. A path is an anchor, not a trigger.
   kb writes each in quotes. A trigger that a hand wrote with no quotes (`- cmd: zorp --wipe`) reads as the same trigger. An item that is no trigger is left out, and the note still loads. `kb add` refuses a trigger that is not valid.
 

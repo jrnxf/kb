@@ -14,7 +14,7 @@ import type { RepoInfo } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import type { AuditAction, AuditCard, AuditData, AuditNote, AuditPick, AuditPromote, AuditResult } from "./wire.ts";
-import { afterWrite, logWrites, nowIso } from "./write.ts";
+import { afterWrite, checkedHashes, logWrites, nowIso } from "./write.ts";
 
 /** The card shows `why` as one short line, so it stays brief. */
 export const WHY_MAX = 140;
@@ -264,7 +264,9 @@ export function applyAudit(store: Store, scope: string, input: unknown): AuditRe
   const result: AuditResult = { at: nowIso(), rewritten: [], merged: [], trashed: [], kept: [], checked: [], requests: [], promoted: [] };
   const done = new Set<string>();
   const now = nowIso();
-  const verifiedAt = (note: StoredNote) => (note.scope !== "global" && note.scope === audit.scope && audit.head ? { verified_at_commit: audit.head } : {});
+  // The agent read the code at the head of the audit, so the hashes are of the files at that commit, not of the files now.
+  const verifiedAt = (note: StoredNote) =>
+    note.scope !== "global" && note.scope === audit.scope && audit.head ? { verified_at_commit: audit.head, anchor_hashes: audit.root ? checkedHashes(note.anchors, audit.root, audit.head) : undefined } : {};
   /** The note as the pick leaves it, checked now, so a bad pick stops the apply before the first change. */
   const next = (note: StoredNote, fields: Partial<Note>, i: number): Note => {
     const { path: _path, trashed: _trashed, ...stored } = note;

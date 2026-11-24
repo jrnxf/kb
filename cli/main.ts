@@ -21,7 +21,7 @@ import { CHANGED_MARK, changedAsk, changedSinceCheck, clearStaleCache, findStale
 import { Store } from "./store.ts";
 import { syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
-import { afterWrite, asOfTime, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
+import { afterWrite, asOfTime, checkedHashes, clearsAt, closeIds, deleteNotes, deleteProject, emptyTrash, isoTime, logWrites, moveNotes, noteWarnings, nowIso, requireNote, restoreProject, tidyTrash, trashProject, updateNote } from "./write.ts";
 
 /** `kb add` exits with this code when it wrote nothing because of close notes: an answer to read, not an error (1). */
 const NEIGHBORS_EXIT = 2;
@@ -111,7 +111,9 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
   kind: ${KINDS.join(" | ")}
   confidence: ${CONFIDENCES.join(" | ")} (default medium)
   anchors: repo-relative paths, or path#symbol. A repo note loads when the agent reads or changes
-    a file that an anchor names, or runs a command that names it.
+    a file that an anchor names, or runs a command that names it. kb saves a hash of the code of
+    each anchor, and marks the note when that code changes. With path#symbol only the lines of
+    the symbol count, so name the symbol when the fact is about one function or key.
   triggers: when the note loads outside the session start, each "<kind>: <text>":
     "cmd: pkill -f"  at a shell command that runs it. The command still runs, and the agent
       gets the note with its result. One simple command of the line must hold the words in
@@ -305,6 +307,8 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   };
   const commit = asOf === undefined ? repo.head : commitAt(repo.root, asOf);
   if (scope !== "global" && repo.scope === scope && commit) raw.verified_at_commit = commit;
+  // Only kb writes the hashes: of the files as the writer saw them, or as they were at the time of --as-of.
+  raw.anchor_hashes = scope !== "global" && repo.scope === scope && repo.root ? checkedHashes(raw.anchors, repo.root, asOf === undefined ? undefined : commit) : undefined;
   if (input.triggers !== undefined) raw.triggers = requireTriggers(input.triggers);
   const note: Note = validateNote(raw);
 
@@ -394,13 +398,13 @@ function cmdShow(store: Store, args: Args): Output {
   // trash is marked, so it never counts as activity of the note.
   logEvent(store, { ev: "show", note: note.id, why: whyOf(args), ...(note.trashed ? { trashed: true as const } : {}) });
   // The reader is about to act on the note, so this is the moment to say that its files changed.
-  // The check runs git, and only in the repo of the note: there the commit of the note means something.
+  // The check is for the repo of the note only: there its hashes and its commit mean something.
   let changed: string[] = [];
-  if (!note.trashed && note.scope !== "global" && note.verified_at_commit && note.anchors.length > 0) {
+  if (!note.trashed && note.scope !== "global" && note.anchors.length > 0) {
     const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store, { record: false });
     if (repo.root && repo.scope === note.scope) changed = changedSinceCheck(note, repo.root);
   }
-  const mark = changed.length > 0 ? `\n${CHANGED_MARK} (${note.verified_at_commit}): ${changed.join(", ")}. ${changedAsk("this note", note.id)}\n` : "";
+  const mark = changed.length > 0 ? `\n${CHANGED_MARK}${note.verified_at_commit ? ` (${note.verified_at_commit})` : ""}: ${changed.join(", ")}. ${changedAsk("this note", note.id)}\n` : "";
   return { json: changed.length > 0 ? { ...note, changed_since_check: changed } : note, text: `# ${relative(store.home, note.path)}${mark}\n${readFileSync(note.path, "utf8").trimEnd()}` };
 }
 
@@ -551,6 +555,8 @@ function cmdVerify(store: Store, args: Args): Output {
   for (const { path: _path, trashed: _trashed, ...note } of notes) {
     note.last_verified = now;
     if (note.scope !== "global" && repo.head) note.verified_at_commit = repo.head;
+    // The check saw the files as they are now, so the note takes their hashes. This ends the mark of a changed file.
+    if (note.scope !== "global" && repo.root) note.anchor_hashes = checkedHashes(note.anchors, repo.root);
     store.writeNote(note);
   }
   const ids = notes.map((n) => n.id);

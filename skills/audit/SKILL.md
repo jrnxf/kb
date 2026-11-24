@@ -21,7 +21,8 @@ kb budget --json
 ```
 
 - `kb stale` lists candidates for this scope: the repo's notes in a repo, the global notes outside any repo. Each has a `reason`:
-  - `anchor-changed` - an anchored file changed since the note was verified.
+  - `anchor-changed` - the code of an anchor changed since the note was verified.
+    - An anchor on a whole file gives this reason at every change of that file. When the fact is about one function, class, constant or config key, name `path#symbol` as the new anchor in `why`, as for `not-needed` below. Then only a change to the lines of that symbol counts.
   - `anchor-missing` - an anchored path is gone, or the symbol is no longer in the file.
   - `commit-unknown` - the clone does not have the verified commit (a shallow clone, or a branch that was never fetched or is deleted).
   - `judged-wrong` - a session gave the note the verdict `wrong` after its last check. Read the note and the code. Then propose a rewrite, or trash when the fact is gone. When a session corrected the note already and it is true now, propose keep with `checked`.
