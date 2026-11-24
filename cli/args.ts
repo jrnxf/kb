@@ -39,13 +39,6 @@ export const COMMAND_FLAGS: Record<string, Record<string, Kind>> = {
   serve: { port: "value", "no-open": "switch" },
 };
 
-/** Every command, with the words that print the help or the version. */
-export const COMMANDS = new Set([
-  ...Object.keys(COMMAND_FLAGS),
-  "context", "scope", "verdict", "use", "stale", "verify", "budget", "instructions", "sync",
-  "help", "--help", "-h", "version", "--version",
-]);
-
 /** The flags that `command` takes, by name. */
 export function flagsOf(command: string | undefined): Record<string, Kind> {
   return { ...GLOBAL, ...(command ? COMMAND_FLAGS[command] : undefined) };
@@ -62,11 +55,12 @@ function distance(a: string, b: string): number {
   return row[b.length]!;
 }
 
-/** The known flag that `name` is most likely a typo of, or undefined. */
-function closest(name: string, known: string[]): string | undefined {
+/** The known flags that `name` is most likely a typo of: all that are equally close, or none. */
+function closest(name: string, known: string[]): string[] {
   const ranked = known.map((k) => ({ k, d: k.startsWith(name) || name.startsWith(k) ? 1 : distance(name, k) })).sort((a, b) => a.d - b.d || a.k.localeCompare(b.k));
   const best = ranked[0];
-  return best && best.d <= Math.max(1, Math.floor(name.length / 3)) ? best.k : undefined;
+  if (!best || best.d > Math.max(1, Math.floor(name.length / 3))) return [];
+  return ranked.filter((r) => r.d === best.d).map((r) => r.k);
 }
 
 /**
@@ -89,10 +83,11 @@ export function parseArgs(argv: string[], command?: string): Args {
       continue;
     }
     const [name, inline] = arg.slice(2).split(/=(.*)/s) as [string, string | undefined];
+    if (name === "") throw new UsageError(`"${arg}" has no flag name. Nothing ran.`);
     const kind = known[name];
     if (kind === undefined) {
       const guess = closest(name, Object.keys(known));
-      const hint = guess ? ` Did you mean --${guess}?` : ` It takes: ${Object.keys(known).sort().map((k) => `--${k}`).join(", ")}.`;
+      const hint = guess.length > 0 ? ` Did you mean ${guess.map((k) => `--${k}`).join(" or ")}?` : ` It takes: ${Object.keys(known).sort().map((k) => `--${k}`).join(", ")}.`;
       throw new UsageError(`unknown flag --${name} for ${where}.${hint} Nothing ran.`);
     }
     if (kind === "value") {

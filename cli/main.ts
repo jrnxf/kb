@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 // kb: a personal knowledge store for coding agents. Harness-agnostic: flags and stdin only.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { type Args, COMMANDS, USAGE_EXIT, UsageError, parseArgs } from "./args.ts";
+import { type Args, USAGE_EXIT, UsageError, parseArgs } from "./args.ts";
 import { openAudits, proposeAudit, readAudit } from "./audit.ts";
 import { RUN_ENV, startRun, waitRun } from "./audit-run.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
@@ -19,7 +20,7 @@ import { DEFAULT_PORT, isKbServer, runningPort, serve } from "./serve.ts";
 import { resultGroups } from "./wire.ts";
 import { type UnsavedSession, allUnsaved, forgetUnsaved, isDir, isLive, markSaved, recordRecovered, unsavedSession, unsavedSessions } from "./session.ts";
 import { CHANGED_MARK, changedAsk, changedSinceCheck, clearStaleCache, findStale, saveStaleCount } from "./stale.ts";
-import { Store } from "./store.ts";
+import { Store, git } from "./store.ts";
 import { syncNow } from "./sync.ts";
 import { ERR_MIN_CHARS, requireTriggers } from "./trigger.ts";
 import { version, versionText } from "./version.ts";
@@ -176,7 +177,7 @@ function cmdContext(store: Store, args: Args): Output {
   const result = buildContext(store, String(args.flags.get("repo") ?? "."), typeof session === "string" ? session : undefined);
   const text = result.text.trimEnd();
   // A hook reads stdout, so an empty start stays empty there. A person at a terminal gets one line.
-  if (!text && process.stdout.isTTY && !args.flags.has("json")) console.error(`kb context: no note loads at a session start in ${result.scope ?? "global"}.`);
+  if (!text && process.stdout.isTTY && !args.flags.has("json") && !args.flags.has("quiet")) console.error(`kb context: no note loads at a session start in ${result.scope ?? "global"}.`);
   return { json: result, text };
 }
 
@@ -214,6 +215,19 @@ function neighborsHint(neighbors: Neighbor[], scope: string): string {
     .filter((n) => n.scope !== scope)
     .map((n) => `${n.id} is ${n.scope === "global" ? "a global note: update it only when the fact holds in every repo" : `a note of ${n.scope}: update it only when the fact holds in that repo too`}. Else pass "new": true.`);
   return [NEIGHBORS_HINT, ...elsewhere].join(" ");
+}
+
+/** Why git found no repo at `dir`, in words: a missing git, a missing or unreadable folder, or no repo. */
+function noRepoWhy(dir: string): string {
+  if (!git(tmpdir(), "--version").ok) return "kb cannot run git, so it found no git repo";
+  try {
+    if (!statSync(dir).isDirectory()) return `kb found no git repo at ${dir}, which is not a directory`;
+    readdirSync(dir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return `kb found no git repo at ${dir}, which ${code === "ENOENT" ? "does not exist" : "it cannot read"}`;
+  }
+  return `kb found no git repo at ${dir}`;
 }
 
 const ADD_INPUT = "kb add reads one JSON object, from --file <path> or on stdin";
@@ -269,13 +283,6 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   }
 
   const scope = resolveScopeInput(input.scope, repo.scope);
-  // No repo here, so a note with no scope is global, and loads in every repo. An anchor names a
-  // file of one repo, so such a note was meant for a repo: it is refused. Any other note is saved.
-  const looked = resolve(String(args.flags.get("repo") ?? "."));
-  const noRepo = input.scope === undefined && repo.scope === null;
-  if (noRepo && Array.isArray(input.anchors) && input.anchors.length > 0) {
-    throw new KbError(`kb found no git repo at ${looked}, so this note would be global, and its anchors name files of a repo. Run kb add inside the repo, or pass --repo <its directory>. For a fact of every repo, pass "scope": "global".`);
-  }
   // A scope that no repo resolves to never loads in a session. A typing error must not hide a note there.
   if (scope !== repo.scope && !knownScopes(store).includes(scope)) {
     throw new KbError(`${unknownScope(store, scope)} To start the notes of another repo, pass --repo <its directory>.`);
@@ -291,6 +298,14 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   if (twin) {
     const hint = `A note with this title is in ${scope}. To update it, pass "id": "${twin.id}" and no "scope".`;
     return { json: { status: "exists", id: twin.id, path: twin.path, hint }, text: `exists ${twin.id}\n${hint}` };
+  }
+
+  // No repo here, so a note with no scope is global, and loads in every repo. An anchor names a
+  // file of one repo, so such a note was meant for a repo: it is refused. Any other note is saved.
+  const looked = resolve(String(args.flags.get("repo") ?? "."));
+  const noRepo = input.scope === undefined && repo.scope === null;
+  if (noRepo && Array.isArray(input.anchors) && input.anchors.length > 0) {
+    throw new KbError(`${noRepoWhy(looked)}, so this note would be global, and its anchors name files of a repo. Run kb add inside the repo, or pass --repo <its directory>. For a fact of every repo, pass "scope": "global".`);
   }
 
   const raw: Record<string, unknown> = {
@@ -333,7 +348,7 @@ function cmdAdd(store: Store, args: Args, text: string): Output {
   afterWrite(store, `kb: add ${note.id}`);
   logWrites(store, "add", [note.id], shown, typeof from === "string" ? from : undefined);
   recovered(note.id);
-  const where = noRepo ? [`kb found no git repo at ${looked}, so the note is global: it loads in every repo. That is right for a fact of every repo. For a fact of one repo, trash this note and run kb add inside the repo, or pass --repo <its directory>. Pass "scope": "global" to save a global note with no warning.`] : [];
+  const where = noRepo ? [`${noRepoWhy(looked)}, so the note is global: it loads in every repo. That is right for a fact of every repo. For a fact of one repo, trash this note and run kb add inside the repo, or pass --repo <its directory>. Pass "scope": "global" to save a global note with no warning.`] : [];
   return added("created", { id: note.id, path }, note, repo.scope !== null, neighbors, where);
 }
 
@@ -556,12 +571,24 @@ function cmdStale(store: Store, args: Args): Output {
 function cmdVerify(store: Store, args: Args): Output {
   if (args.positional.length === 0) throw new KbError("usage: kb verify <id>... [--repo .]");
   const repo = resolveRepo(String(args.flags.get("repo") ?? "."), store);
-  const notes = args.positional.map((id) => {
-    const note = requireIdOrPart(store, id, false);
-    if (note.trashed) throw new KbError(`${id} is in the trash. Restore it first.`);
-    if (note.scope !== "global" && note.scope !== repo.scope) throw new KbError(`${id} belongs to ${note.scope}. Run kb verify inside that repo, so the commit is recorded.`);
+  const resolved = args.positional.map((given) => {
+    let note;
+    try {
+      note = requireIdOrPart(store, given, false);
+    } catch (error) {
+      // A part that names no active note may name one in the trash: say so, and not "no note".
+      try {
+        note = requireIdOrPart(store, given, true);
+      } catch {
+        throw error;
+      }
+    }
+    if (note.trashed) throw new KbError(`${note.id} is in the trash. Restore it first.`);
+    if (note.scope !== "global" && note.scope !== repo.scope) throw new KbError(`${note.id} belongs to ${note.scope}. Run kb verify inside that repo, so the commit is recorded.`);
     return note;
   });
+  // Two words can name one note.
+  const notes = resolved.filter((note, i) => resolved.findIndex((n) => n.id === note.id) === i);
   const now = nowIso();
   for (const { path: _path, trashed: _trashed, ...note } of notes) {
     note.last_verified = now;
@@ -902,17 +929,48 @@ function cmdSync(store: Store): Output {
   return { json: result, text: `${result.status}: ${result.detail}` };
 }
 
+/** Each command that runs, by name. The words that print the help or the version are in main(). */
+const HANDLERS: Record<string, (store: Store, args: Args, json: boolean) => Output | Promise<Output>> = {
+  context: cmdContext,
+  scope: cmdScope,
+  add: async (store, args) => cmdAdd(store, args, await inputText(args, "add")),
+  show: cmdShow,
+  search: cmdSearch,
+  list: cmdList,
+  verdict: (store, args) => cmdVerdict(store, args.positional[0], args.positional.slice(1), sessionOf(args.flags.get("session"))),
+  use: (store, args) => cmdVerdict(store, "helped", args.positional),
+  log: cmdLog,
+  trash: (store, args) => cmdMove(store, args, true),
+  restore: (store, args) => cmdMove(store, args, false),
+  delete: cmdDelete,
+  "empty-trash": cmdEmptyTrash,
+  stale: cmdStale,
+  verify: cmdVerify,
+  budget: cmdBudget,
+  instructions: cmdInstructions,
+  checkpointed: cmdCheckpointed,
+  unsaved: cmdUnsaved,
+  serve: cmdServe,
+  audit: (store, args) => cmdAudit(store, args, () => inputText(args, "audit propose")),
+  sync: (store) => cmdSync(store),
+};
+
+const INFO_COMMANDS = ["help", "--help", "-h", "version", "--version"];
+
 async function main(): Promise<number> {
   let json = false;
   try {
     const [command, ...rest] = process.argv.slice(2);
+    // Until the flags parse, only a --json before "--" counts: it is the flag, and not a word to search for.
+    const end = rest.indexOf("--");
+    json = (end < 0 ? rest : rest.slice(0, end)).includes("--json");
     // The flags are checked against the command, so an unknown command is named first.
-    json = rest.includes("--json");
-    if (command !== undefined && !COMMANDS.has(command)) throw new UsageError(`unknown command "${command}". Run \`kb help\`.`);
+    if (command !== undefined && !(command in HANDLERS) && !INFO_COMMANDS.includes(command)) throw new UsageError(`unknown command "${command}". Run \`kb help\`.`);
     const args = parseArgs(rest, command);
+    json = args.flags.has("json");
     const store = new Store();
     // A note whose time in the trash is up is gone before any command reads the store.
-    if (command && store.exists() && !["help", "--help", "-h", "version", "--version"].includes(command) && !args.flags.has("help")) {
+    if (command && store.exists() && !INFO_COMMANDS.includes(command) && !args.flags.has("help")) {
       // Housekeeping must never stop the command, above all a restore or a delete.
       try {
         tidyTrash(store);
@@ -938,32 +996,7 @@ async function main(): Promise<number> {
       console.log(json ? JSON.stringify(v, null, 2) : versionText(v));
       return 0;
     }
-    let out: Output;
-    switch (command) {
-      case "context": out = cmdContext(store, args); break;
-      case "scope": out = cmdScope(store, args); break;
-      case "add": out = cmdAdd(store, args, await inputText(args, "add")); break;
-      case "show": out = cmdShow(store, args); break;
-      case "search": out = cmdSearch(store, args); break;
-      case "list": out = cmdList(store, args); break;
-      case "verdict": out = cmdVerdict(store, args.positional[0], args.positional.slice(1), sessionOf(args.flags.get("session"))); break;
-      case "use": out = cmdVerdict(store, "helped", args.positional); break;
-      case "log": out = cmdLog(store, args); break;
-      case "trash": out = cmdMove(store, args, true); break;
-      case "restore": out = cmdMove(store, args, false); break;
-      case "delete": out = cmdDelete(store, args); break;
-      case "empty-trash": out = cmdEmptyTrash(store, args); break;
-      case "stale": out = cmdStale(store, args); break;
-      case "verify": out = cmdVerify(store, args); break;
-      case "budget": out = cmdBudget(store, args); break;
-      case "instructions": out = cmdInstructions(store, args); break;
-      case "checkpointed": out = cmdCheckpointed(store, args); break;
-      case "unsaved": out = cmdUnsaved(store, args); break;
-      case "serve": out = await cmdServe(store, args, json); break;
-      case "audit": out = await cmdAudit(store, args, () => inputText(args, "audit propose")); break;
-      case "sync": out = cmdSync(store); break;
-      default: throw new KbError(`unknown command "${command}". Run \`kb help\`.`);
-    }
+    const out = await HANDLERS[command]!(store, args, json);
     if (json) console.log(JSON.stringify(out.json, null, 2));
     else if (out.text && !args.flags.has("quiet")) console.log(out.text);
     return out.code ?? 0;

@@ -159,12 +159,17 @@ export function noteWarnings(note: Pick<Note, "kind" | "scope" | "body" | "ancho
  * come back until the trash clears it, `trashDays` after it went there.
  */
 export function moveNotes(store: Store, ids: string[], toTrash: boolean): string[] {
-  const moved: string[] = [];
-  for (const id of ids) {
+  // Two words can name one note. Every note is checked before the first one moves.
+  const unique = [...new Set(ids)];
+  const notes = unique.map((id) => {
     const note = requireNote(store, id);
     if (note.trashed === toTrash) throw new KbError(`${id} is already ${toTrash ? "in the trash" : "active"}`);
+    return note;
+  });
+  const moved: string[] = [];
+  for (const note of notes) {
     store.move(note, toTrash, nowIso());
-    moved.push(id);
+    moved.push(note.id);
   }
   afterWrite(store, `kb: ${toTrash ? "trash" : "restore"} ${moved.join(" ")}`);
   logWrites(store, toTrash ? "trash" : "restore", moved);

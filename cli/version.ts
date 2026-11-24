@@ -31,8 +31,9 @@ export function version(root = ROOT): Version {
   // Only a checkout of kb itself: the plugin folder can sit inside another repo.
   const top = git(real, "rev-parse", "--show-toplevel");
   if (top.ok && realOf(top.out) === real) {
-    const head = git(real, "rev-parse", "--short=12", "HEAD");
-    if (head.ok && /^[0-9a-f]{12}$/.test(head.out)) return { commit: head.out, from: "git" };
+    const head = git(real, "rev-parse", "HEAD");
+    // The full sha, cut to 12: `--short=12` prints more when 12 digits would not be unique.
+    if (head.ok && /^[0-9a-f]{12,}$/.test(head.out)) return { commit: head.out.slice(0, 12), from: "git" };
   }
   return { commit: null, from: null };
 }

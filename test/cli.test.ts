@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { COMMAND_FLAGS } from "../cli/args.ts";
 import { beforeCommand } from "../cli/fire.ts";
 import { lastActivity, logEvent } from "../cli/log.ts";
 import { parseNote } from "../cli/note.ts";
@@ -1496,5 +1497,83 @@ describe("kb list --trash and kb budget", () => {
     expect(kb(home, ["scope"], { cwd: repo }).stdout).toBe("github.com/acme/web\n");
     expect(kb(home, ["budget", "--json"], { cwd: repo }).json.scope).toBe("github.com/acme/web");
     expect(existsSync(home)).toBe(false);
+  });
+});
+
+describe("review fixes of the strict CLI", () => {
+  test("kb trash with two words for one note moves it once, commits and logs it", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    putNote(store, { id: "atlas-amounts" });
+    putNote(store, { id: "other" });
+    const result = kb(store, ["trash", "atlas", "atlas-amounts", "other", "--json"]);
+    expect(result).toMatchObject({ code: 0, json: { trashed: ["atlas-amounts", "other"] } });
+    expect(sh(store.home, "git", "log", "-1", "--format=%s")).toBe("kb: trash atlas-amounts other");
+    expect(logged(store).filter((e) => e.ev === "write").map((e) => e.note)).toEqual(["atlas-amounts", "other"]);
+    // A note that is in the wrong place stops the command before any note moves.
+    putNote(store, { id: "live" });
+    expect(kb(store, ["trash", "live", "other"]).code).toBe(1);
+    expect(store.find("live")!.trashed).toBeFalsy();
+  });
+
+  test("--json after -- is a word to search for, and not the flag", () => {
+    const store = tempStore();
+    putNote(store, { id: "json-note", title: "The --json flag", body: "Prints --json output." });
+    expect(kb(store, ["search", "--", "--json"]).stdout).toStartWith("json-note | global");
+    expect(kb(store, ["search", "--json", "--", "--json"]).json[0].id).toBe("json-note");
+    expect(kb(store, ["search", "--bogus", "--json"]).json.error).toContain("unknown flag");
+  });
+
+  test("a twin is named before the refusal of anchors outside a repo", () => {
+    const store = tempStore();
+    const dir = tempDir();
+    add(store, { title: "Pay rounds down", kind: "gotcha", body: "x" }, dir);
+    const again = add(store, { title: "Pay rounds down", kind: "gotcha", body: "x", anchors: ["src/a.ts"] }, dir);
+    expect(again.json).toMatchObject({ status: "exists", id: "pay-rounds-down" });
+  });
+
+  test("the refusal outside a repo says why git found none", () => {
+    const store = tempStore();
+    const note = JSON.stringify({ title: "Pay rounds down", kind: "gotcha", body: "x", anchors: ["src/a.ts"] });
+    const gone = join(tempDir(), "gone");
+    expect(kb(store, ["add", "--json", "--repo", gone], { stdin: note }).json.error).toStartWith(`kb found no git repo at ${gone}, which does not exist, so`);
+    expect(kb(store, ["add", "--json", "--repo", "."], { stdin: note, cwd: tempDir() }).json.error).toMatch(/^kb found no git repo at \S+, so/);
+  });
+
+  test("an ambiguous prefix lists every close flag, and an empty flag name has its own error", () => {
+    const store = tempStore();
+    expect(kb(store, ["list", "--s", "x"]).stderr).toBe("unknown flag --s for kb list. Did you mean --scope or --session? Nothing ran.\n");
+    expect(kb(store, ["list", "--=x"])).toMatchObject({ code: 2, stderr: '"--=x" has no flag name. Nothing ran.\n' });
+  });
+
+  test("kb verify says that a part of an id names a note in the trash, and names the whole id", () => {
+    const store = tempStore();
+    putNote(store, { id: "old-gotcha", trashed_at: daysAgo(1) }, true);
+    expect(kb(store, ["verify", "old-got"]).stderr).toBe("old-gotcha is in the trash. Restore it first.\n");
+    putNote(store, { id: "active-gotcha", scope: "github.com/acme/web" });
+    expect(kb(store, ["verify", "active-got"]).stderr).toBe("active-gotcha belongs to github.com/acme/web. Run kb verify inside that repo, so the commit is recorded.\n");
+    expect(kb(store, ["verify", "zzz"]).stderr).toContain('no note with id "zzz"');
+  });
+
+  test("the version takes a commit that git prints with more than 12 digits", async () => {
+    const { version } = await import("../cli/version.ts");
+    const repo = tempRepo();
+    const full = sh(repo, "git", "rev-parse", "HEAD");
+    // A repo with a longer short name than 12 digits: ask git for 14 through its config.
+    sh(repo, "git", "config", "core.abbrev", "14");
+    expect(version(repo)).toEqual({ commit: full.slice(0, 12), from: "git" });
+  });
+
+  test("--quiet silences the empty kb context line", async () => {
+    const store = tempStore();
+    const repo = tempRepo({ remote: "git@github.com:acme/web.git" });
+    expect(await kbTty(store.home, ["context", "--quiet"], repo)).toEqual({ code: 0, out: "" });
+  });
+
+  test("every command with flags is a command that runs", () => {
+    const store = tempStore();
+    for (const command of Object.keys(COMMAND_FLAGS)) {
+      expect(kb(store, [command, "--zzz-no-flag"]).stderr, command).toStartWith(`unknown flag --zzz-no-flag for kb ${command}.`);
+    }
   });
 });
