@@ -3,11 +3,10 @@
 // audit into the global file, a repo audit into the repo's own file.
 
 import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { KbError } from "./note.ts";
 import { repoRoot } from "./repos.ts";
-import { type Store, tilde } from "./store.ts";
+import { type Store, tilde, userHome } from "./store.ts";
 
 export interface InstructionsFile {
   /** The path as the config gives it, such as ~/.claude/CLAUDE.md. */
@@ -21,7 +20,7 @@ export interface InstructionsFile {
 }
 
 /** The path with the home folder written as ~, for the page and the CLI. */
-export const shortPath = (path: string) => (path.startsWith(`${homedir()}/`) ? `~${path.slice(homedir().length)}` : path);
+export const shortPath = (path: string) => (path.startsWith(`${userHome()}/`) ? `~${path.slice(userHome().length)}` : path);
 
 /**
  * The global instructions file. The configured path is often a link (a dotfiles manager links it
@@ -33,7 +32,12 @@ export function globalInstructions(store: Store): InstructionsFile {
   try {
     path = realpathSync(tilde(name));
   } catch {
-    throw new KbError(`the global instructions file ${name} does not exist. Create it, or set globalInstructions in kb.config.json.`);
+    throw new KbError(`the global instructions file ${name} does not exist. Create it, or set globalInstructions in ${shortPath(join(store.home, "local.json"))}.`);
+  }
+  // Apply writes this file, so it must be the user's own: a file in the home folder, at the end of every link.
+  const home = (() => { try { return realpathSync(userHome()); } catch { return userHome(); } })();
+  if (!path.startsWith(`${home}/`)) {
+    throw new KbError(`the global instructions file ${name} is ${path}, outside your home folder. kb writes only inside it. Set globalInstructions in ${shortPath(join(store.home, "local.json"))} to a file in your home folder.`);
   }
   return { name, path, link: lstatSync(tilde(name)).isSymbolicLink() };
 }

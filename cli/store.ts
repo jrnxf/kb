@@ -20,14 +20,24 @@ export interface Config {
   /** A note in the trash for longer than this is deleted for good. */
   trashDays: number;
   autocommit: boolean;
+  /** Per machine: kb reads it from local.json. */
   sync: boolean;
-  /** The user's global instructions file. A global audit moves rules into it. A leading ~ is the home folder. */
+  /** Per machine: kb reads it from local.json. The user's global instructions file, which a global audit moves rules into. A leading ~ is the home folder. */
   globalInstructions: string;
 }
 
-export interface Local {
+/**
+ * The keys that differ per machine. They live in local.json, which is never synced, so a config
+ * pulled from another machine cannot turn sync on or say where Apply writes.
+ */
+export const MACHINE_KEYS = ["sync", "globalInstructions"] as const;
+type MachineKey = (typeof MACHINE_KEYS)[number];
+
+export interface Local extends Partial<Pick<Config, MachineKey>> {
   machine: string;
   aliases: Record<string, string>;
+  /** True once this machine took its per-machine keys from kb.config.json, where an older kb kept them. */
+  movedKeys?: boolean;
 }
 
 /** What kb recorded per note before it had an event log. Nothing writes it now. */
@@ -65,10 +75,41 @@ const DEFAULT_CONFIG: Config = {
   globalInstructions: "~/.claude/CLAUDE.md",
 };
 
+/** The keys of the first kb.config.json. An older kb wrote all of them into every new store. */
+const FIRST_KEYS = ["budgets", "decayDays", "autocommit", "sync"];
+
+/** Keys that an older kb wrote and that this version ignores. */
+const DEAD_BUDGETS = ["indexLines", "globalIndexLines"];
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * A config that an older kb wrote whole, without the keys whose value is the default. Each default
+ * that kb ever shipped is the default of today, so a value equal to it changes nothing now. The
+ * cost: a user who typed a default on purpose no longer holds it when a later kb changes it.
+ */
+export function withoutDefaults(raw: Record<string, unknown>): Record<string, unknown> {
+  const kept: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === "budgets" && value && typeof value === "object" && !Array.isArray(value)) {
+      const budgets = Object.fromEntries(
+        Object.entries(value).filter(([name, v]) => !DEAD_BUDGETS.includes(name) && !same(v, DEFAULT_CONFIG.budgets[name as keyof Config["budgets"]])),
+      );
+      if (Object.keys(budgets).length > 0) kept.budgets = budgets;
+    } else if (!(key in DEFAULT_CONFIG) || !same(value, DEFAULT_CONFIG[key as keyof Config])) {
+      kept[key] = value;
+    }
+  }
+  return kept;
+}
+
 const GITIGNORE = ["INDEX.md", "index.html", "local.json", ".sync-*", "*.tmp-*", ".state/"];
 
 /** A path with a leading `~` for the home folder, as a config or a shell command writes it. */
-export const tilde = (path: string) => (path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path);
+export const tilde = (path: string) => (path === "~" || path.startsWith("~/") ? join(userHome(), path.slice(1)) : path);
+
+/** The user's home folder. HOME wins, as in a shell. */
+export const userHome = () => process.env.HOME || homedir();
 
 /** The store's folder, always absolute: an agent that kb starts runs in another folder. */
 export function kbHome(): string {
@@ -110,8 +151,7 @@ export class Store {
   /** Create the store layout. Only commands that write call this. */
   ensure(): void {
     for (const dir of ["notes", "trash"]) mkdirSync(join(this.home, dir), { recursive: true });
-    const configPath = join(this.home, "kb.config.json");
-    if (!existsSync(configPath)) writeAtomic(configPath, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`);
+    this.tidyConfig();
     const ignorePath = join(this.home, ".gitignore");
     // Add lines that a store made by an older version lacks.
     const have = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
@@ -124,11 +164,56 @@ export class Store {
     return join(this.home, ".state", name);
   }
 
+  private configPath(): string {
+    return join(this.home, "kb.config.json");
+  }
+
+  /** The synced config as the file has it. A file that is not a JSON object counts as empty. */
+  private sharedConfig(): Record<string, unknown> {
+    const raw = readJson<unknown>(this.configPath());
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  }
+
+  /**
+   * kb.config.json holds only the keys that the user set. An older kb wrote every default into it,
+   * so a later default never reached the user, and it kept the per-machine keys there. A file that
+   * names a per-machine key is such a file: its per-machine keys go to local.json, and a file that
+   * an older kb wrote whole loses the keys whose value is the default.
+   */
+  private tidyConfig(): void {
+    const raw = this.sharedConfig();
+    this.machineKeys(raw);
+    if (!MACHINE_KEYS.some((key) => key in raw)) return;
+    const whole = FIRST_KEYS.every((key) => key in raw);
+    const kept = Object.fromEntries(Object.entries(whole ? withoutDefaults(raw) : raw).filter(([key]) => !(MACHINE_KEYS as readonly string[]).includes(key)));
+    writeAtomic(this.configPath(), `${JSON.stringify(kept, null, 2)}\n`);
+  }
+
+  /**
+   * The per-machine keys of local.json. The first time, a machine takes the ones that an older kb
+   * kept in kb.config.json, before a sync can pull a file that lacks them. After that, kb.config.json
+   * has no say over them.
+   */
+  private machineKeys(shared: Record<string, unknown>): Local {
+    const local = this.local();
+    if (local.movedKeys || !this.exists()) return local;
+    for (const key of MACHINE_KEYS) {
+      if (key in shared && !(key in local) && !same(shared[key], DEFAULT_CONFIG[key])) Object.assign(local, { [key]: shared[key] });
+    }
+    local.movedKeys = true;
+    this.saveLocal(local);
+    return local;
+  }
+
   config(): Config {
-    const raw = readJson<Partial<Config>>(join(this.home, "kb.config.json")) ?? {};
+    const shared = this.sharedConfig() as Partial<Config>;
+    const local = this.machineKeys(shared);
+    const { sync: _sync, globalInstructions: _file, ...raw } = shared;
     return {
       ...DEFAULT_CONFIG,
       ...raw,
+      sync: typeof local.sync === "boolean" ? local.sync : DEFAULT_CONFIG.sync,
+      globalInstructions: typeof local.globalInstructions === "string" && local.globalInstructions ? local.globalInstructions : DEFAULT_CONFIG.globalInstructions,
       // Only the budgets of this version are read. A config of an older kb can still name
       // `indexLines` and `globalIndexLines`: both limits are gone, and the keys are ignored.
       budgets: {
@@ -148,7 +233,7 @@ export class Store {
   /** Per-machine state. It is never committed, because paths and machine ids differ per machine. */
   local(): Local {
     const raw = readJson<Partial<Local>>(join(this.home, "local.json")) ?? {};
-    return { machine: raw.machine ?? "", aliases: raw.aliases ?? {} };
+    return { ...raw, machine: raw.machine ?? "", aliases: raw.aliases ?? {} };
   }
 
   saveLocal(local: Local): void {

@@ -132,9 +132,10 @@ notes, and a note loads when it applies.
 - **A rule goes to an instruction file when the user states it.** The agent starts `/kb:note` on
   its own when the user says "always", "never", "from now on" or corrects it. `kb instructions`
   names the files. A global rule goes into the global file, which `globalInstructions` in
-  `kb.config.json` names (`~/.claude/CLAUDE.md`). kb writes the file at the end of its links, so
-  a dotfiles repo that links it gets the change. A repo rule goes into the repo's `CLAUDE.md` or
-  `AGENTS.md` after you say yes. Nothing is committed for you.
+  `local.json` names (`~/.claude/CLAUDE.md`). kb writes the file at the end of its links, so
+  a dotfiles repo that links it gets the change. kb refuses a file outside your home folder. A
+  repo rule goes into the repo's `CLAUDE.md` or `AGENTS.md` after you say yes. Nothing is
+  committed for you.
 - **Before `/clear`** you run `/kb:clear`. The agent saves what the session learned,
   updates notes instead of duplicating them, writes stated rules to instruction files, trashes
   finished open work, empties Claude Code's auto memory, and gives a verdict on the notes it got with `kb verdict`.
@@ -282,6 +283,18 @@ notes, and a note loads when it applies.
   .state/log/<YYYY-MM>.jsonl                    # the event log of this machine, 12 months
   .state/triggers.json                          # the table of triggers and anchors that the hooks read
 ```
+
+Two files hold settings. kb writes no default into either one, so a new default of kb reaches you:
+
+- `kb.config.json` syncs to every machine: `budgets`, `holdback`, `decayDays`, `expireDays`,
+  `trashDays` and `autocommit`. Put in only the keys you change.
+- `local.json` stays on its machine: `sync` (true) and `globalInstructions`. A config pulled from
+  another machine cannot turn sync on or move where Apply writes.
+
+An older kb wrote every default into `kb.config.json`, with `sync` and `globalInstructions`. The
+first run of this version moves those two keys to `local.json`. If kb wrote the file whole, it
+also drops each key whose value is the default. A value you typed equal to the default then
+follows the default from now on.
 
 ## A note
 
