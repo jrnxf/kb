@@ -1,12 +1,33 @@
 # kb
 
-A personal, repo-agnostic knowledge store for coding agents. It lets you `/clear` at any time
-without losing durable knowledge: gotchas, decisions, conventions, procedures and unfinished work.
+kb is a Claude Code plugin. It keeps what a coding agent learns (gotchas, decisions, how-tos and
+open work) across `/clear` and across sessions. When a note applies, kb loads it.
 
-kb splits knowledge by source. A rule you state ("always", "never", a correction) goes to an
-instruction file, such as `~/.claude/CLAUDE.md`, which every session loads whole. What the agent
-learns (a gotcha, a decision, a how-to, open work) goes to kb. A session start gets an index of the
-notes, and a note loads when it applies.
+![The kb serve page: scopes and kinds on the left, a list of notes, and one note open.](docs/serve.png)
+
+The page above is `kb serve`. It shows the notes of a store and lets you edit them. The notes
+in the picture are invented.
+
+## Quick start
+
+1. Install the plugin. Claude Code, [Bun](https://bun.sh) and git must be on the machine.
+
+   ```bash
+   claude plugin marketplace add jrnxf/plugins
+   claude plugin install kb@jrnxf
+   ```
+
+2. Start a Claude Code session. A session start gives the agent an index of your notes.
+3. Before you `/clear`, run `/kb:save`. The agent saves what it learned as notes.
+
+See [Install](#install) for two optional settings and the shell function that runs `kb serve` in your terminal.
+
+kb works on macOS and Linux.
+
+kb is pre-release. Every commit to `main` is a release. `kb --version` prints the commit. There are no tags yet.
+
+A rule you state ("always", "never", a correction) goes to an instruction file, such as
+`~/.claude/CLAUDE.md`, which every session loads whole. What the agent learns goes to kb.
 
 ## The model
 
@@ -91,7 +112,7 @@ notes, and a note loads when it applies.
   it needs a second word. An `err` text needs 8 characters. Case and line breaks do not count in
   it. The hook runs before every shell command, so it reads no note file: it reads one small table
   of all triggers and anchors, which kb builds again when a note file changes. A command that
-  matches nothing costs about 20 ms.
+  matches nothing costs about 20 ms (median of 20 runs on an Apple M4 Pro, with 50 notes and 25 triggers).
 - **Context stays small.** Budgets in `kb.config.json`: `contextChars` (8000, clamped under the
   10,000 character hook cap, with the save rule on top) and `briefChars` (1500, the part of it that
   the briefs may take). The characters are the one limit of the index. When the index does not
