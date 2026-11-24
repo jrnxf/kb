@@ -33,6 +33,12 @@ export interface Note {
   supersedes?: string[];
   /** When the note moved to trash/. A note in the trash for longer than `trashDays` is deleted. */
   trashed_at?: string;
+  /**
+   * Set on the copy that a sync put in the trash when two machines changed a note: the id of the
+   * note that stayed. The copy syncs, so every machine can tell the user. The trash keeps it until
+   * the user deletes or restores it.
+   */
+  conflict_of?: string;
   body: string;
 }
 
@@ -143,6 +149,7 @@ export function validateNote(raw: Record<string, unknown>): Note {
   need(raw.triggers === undefined || isStringArray(raw.triggers), "triggers: must be a list of texts");
   need(raw.supersedes === undefined || isStringArray(raw.supersedes), "supersedes: must be a list of ids");
   need(raw.promoted_to === undefined || isString(raw.promoted_to), "promoted_to: must be a file name");
+  need(raw.conflict_of === undefined || isString(raw.conflict_of), "conflict_of: must be an id");
   need(raw.verified_at_commit === undefined || isString(raw.verified_at_commit), "verified_at_commit: must be a commit");
   need(typeof raw.body === "string" && raw.body.trim().length > 0, "body: required");
 
@@ -181,6 +188,7 @@ export function validateNote(raw: Record<string, unknown>): Note {
   if (raw.promoted_to !== undefined) note.promoted_to = raw.promoted_to as string;
   if (raw.supersedes !== undefined && (raw.supersedes as string[]).length > 0) note.supersedes = raw.supersedes as string[];
   if (trashedAt) note.trashed_at = trashedAt;
+  if (raw.conflict_of !== undefined) note.conflict_of = raw.conflict_of as string;
   return note;
 }
 
@@ -273,5 +281,6 @@ export function serializeNote(note: Note): string {
   if (note.promoted_to) lines.push(frontLine("promoted_to", note.promoted_to));
   if (note.supersedes?.length) lines.push(frontLine("supersedes", note.supersedes));
   if (note.trashed_at) lines.push(frontLine("trashed_at", note.trashed_at, true));
+  if (note.conflict_of) lines.push(frontLine("conflict_of", note.conflict_of));
   return `---\n${lines.join("\n")}\n---\n${note.body.trim()}\n`;
 }

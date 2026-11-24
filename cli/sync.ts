@@ -1,8 +1,8 @@
 // Sync between machines through the store's git remote. Never blocks a session.
 
-import { existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { rollUp } from "./log.ts";
+import { readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { idsWithHistory, rollUp } from "./log.ts";
 import { type Note, parseNote, serializeNote } from "./note.ts";
 import { clearStaleCache } from "./stale.ts";
 import { type Store, userHome, withLock, writeAtomic } from "./store.ts";
@@ -130,8 +130,8 @@ function syncLocked(store: Store, now: Date): SyncResult {
     store.writeIndex();
     clearStaleCache(store);
     if (merged.length > 0) {
-      recordMerged(store, merged);
-      return { status: "ok", detail: `the store matches the remote. ${merged.map(mergedLine).join(" ")}`, merged };
+      const lines = merged.map((m) => mergedLine(m.id, m.copy, m.kept));
+      return { status: "ok", detail: `the store matches the remote. ${lines.join(" ")}`, merged };
     }
     return { status: "ok", detail: "the store matches the remote" };
   } finally {
@@ -149,69 +149,117 @@ function conflictDetail(store: Store, remote: string, branch: string, files: str
   const what = files.length > 0 ? `two machines changed ${files.join(", ")}, and kb cannot merge ${files.length === 1 ? "it" : "them"}.` : `the rebase on ${remote}/${branch} stopped, and git named no file.`;
   return [
     `${what} This store keeps its own copy and does not sync.`,
-    `To fix it: run \`git -C ${short(store)} rebase ${remote}/${branch}\`, edit each file that git names to keep what is right, \`git add\` it, run \`git rebase --continue\`, then \`kb sync\`.`,
+    `To fix it: run \`git -C ${short(store)} rebase ${remote}/${branch}\`, edit each file that git names to keep what is right, run \`git -C ${short(store)} add <file>\` for it, run \`git -C ${short(store)} rebase --continue\`, then \`kb sync\`.`,
     `To take the remote copy and drop this store's changes: \`git -C ${short(store)} reset --hard ${remote}/${branch}\`.`,
   ].join(" ");
 }
 
-const mergedLine = (m: MergedNote) =>
-  `Two machines changed ${m.id}: kb kept the copy verified last (from ${m.kept}) and put the other in the trash as ${m.copy}. Compare them with \`kb show ${m.id}\` and \`kb show ${m.copy}\`, then bring what the copy adds into ${m.id} and \`kb delete ${m.copy}\`.`;
+/** The line for a note that a sync merged. It names the copy in the trash, which stays there until someone acts. */
+const mergedLine = (id: string, copy: string, kept?: MergedNote["kept"]) =>
+  `Two machines changed ${id}: kb kept the copy verified last${kept ? ` (from ${kept})` : ""} and put the other in the trash as ${copy}. Compare them with \`kb show ${id}\` and \`kb show ${copy}\`, then bring what the copy adds into ${id} and \`kb delete ${copy}\`.`;
 
-const MERGED_FILE = "sync-merged.json";
-
-/** Remember the merged notes, so a session start names each one while its copy is in the trash. */
-function recordMerged(store: Store, merged: MergedNote[]): void {
-  // A note whose copy left the trash is done.
-  const trashed = new Set(store.notes({ trashed: true }).map((n) => n.id));
-  const open = readMerged(store).filter((m) => trashed.has(m.copy));
-  writeAtomic(store.statePath(MERGED_FILE), `${JSON.stringify([...open, ...merged], null, 2)}\n`);
-}
-
-function readMerged(store: Store): MergedNote[] {
-  try {
-    const list = JSON.parse(readFileSync(store.statePath(MERGED_FILE), "utf8"));
-    return Array.isArray(list) ? list.filter((m) => m && typeof m.id === "string" && typeof m.copy === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-/** A line for each merged note whose other copy is still in the trash: the session start shows them. */
+/**
+ * A line for each conflict copy in the trash: the session start shows them. The copy is a note
+ * that syncs, so both machines see it. Only the files whose name ends in -conflict are read.
+ */
 export function mergedNotices(store: Store): string[] {
-  const merged = readMerged(store);
-  if (merged.length === 0) return [];
-  const trashed = new Set(store.notes({ trashed: true }).map((n) => n.id));
-  return merged.filter((m) => trashed.has(m.copy)).map((m) => `kb sync merged a note. ${mergedLine(m)}`);
+  const lines: string[] = [];
+  for (const path of store.walk(join(store.home, "trash"))) {
+    if (!CONFLICT_FILE.test(path)) continue;
+    try {
+      const note = parseNote(readFileSync(path, "utf8"));
+      if (note.conflict_of) lines.push(`kb sync merged a note. ${mergedLine(note.conflict_of, note.id)}`);
+    } catch {
+      // a file that does not parse is no notice
+    }
+  }
+  return lines.sort();
+}
+
+/** The name of a conflict copy: `<id>-conflict`, or `<id>-conflict-2` when that id is taken. */
+const CONFLICT_FILE = /-conflict(-\d+)?\.md$/;
+
+/** What kb does with one file of the conflict. */
+interface Plan {
+  /** The path, from the store, that a merged note takes: the file itself, or the other side of a move. */
+  keptPath: string;
+  kept: Note;
+  /** The note that lost: it goes to the trash as a copy. Null when only one side changed the note. */
+  other: Note | null;
+  /** A path to remove, when the note moved. */
+  remove?: string;
+  localWins: boolean;
 }
 
 /**
  * Rebase on the remote copy. When two machines changed the same note, both copies are kept: the one
  * verified last stays, and the other goes to the trash under a new id, so nothing is lost and the
- * sync goes on. A conflict in any other file, or a note that one machine removed, stops the rebase:
- * the store is as it was, and `files` names what conflicts.
+ * sync goes on. A conflict in any other file stops the rebase: the store is as it was, and `files`
+ * names what conflicts. Several local commits that changed one note conflict once for each, so on
+ * the first conflict they replay as one commit, and the note gets one decision and one copy.
  */
 function rebaseOnto(store: Store, upstream: string, now: Date): { merged: MergedNote[] } | { files: string[] } {
-  const merged: MergedNote[] = [];
-  let step = run(store, "rebase", "-q", "--autostash", upstream);
-  for (let round = 0; !step.ok && round < 1000; round++) {
+  const before = run(store, "rev-parse", "HEAD").out;
+  let squashed = false;
+  const undo = () => {
+    run(store, "rebase", "--abort");
+    // The squash is the one change to undo: it left the tree as it was.
+    if (squashed) run(store, "reset", "-q", "--soft", before);
+  };
+  for (;;) {
+    const step = run(store, "rebase", "-q", "--autostash", upstream);
+    if (step.ok) return { merged: [] };
     const files = run(store, "diff", "--name-only", "--diff-filter=U").out.split("\n").filter(Boolean);
-    const done = files.length === 0 ? null : files.map((file) => mergeNote(store, file, now));
-    if (!done || done.some((m) => m === null)) {
-      run(store, "rebase", "--abort");
+    if (files.length === 0) {
+      undo();
       return { files };
     }
-    merged.push(...(done as MergedNote[]));
-    step = run(store, "rebase", "--continue");
+    if (!squashed && Number(run(store, "rev-list", "--count", `${upstream}..${before}`).out) > 1) {
+      run(store, "rebase", "--abort");
+      if (!squash(store, upstream)) return { files };
+      squashed = true;
+      continue;
+    }
+    // Plan every file first, so a file that kb cannot merge leaves no copy behind.
+    const taken = takenIds(store);
+    const plans = files.map((file) => planFile(store, file, now, taken));
+    if (plans.some((plan) => plan === null)) {
+      undo();
+      return { files };
+    }
+    const merged: MergedNote[] = [];
+    for (const [i, plan] of (plans as Plan[]).entries()) {
+      const copy = apply(store, plan, files[i]!, now, taken);
+      if (copy === null) {
+        undo();
+        return { files };
+      }
+      if (copy) merged.push({ id: plan.kept.id, copy, kept: plan.localWins ? "this machine" : "the remote" });
+    }
+    if (!run(store, "rebase", "--continue").ok) {
+      undo();
+      return { files: [] };
+    }
+    return { merged };
   }
-  if (!step.ok) {
-    run(store, "rebase", "--abort");
-    return { files: [] };
-  }
-  return { merged };
 }
 
-/** A copy of a note in the conflict: stage 2 is the remote side of a rebase, stage 3 this machine's. */
-function stage(store: Store, n: 2 | 3, file: string): Note | null {
+/** Put the local commits that the remote lacks into one commit. False when git refuses. */
+function squash(store: Store, upstream: string): boolean {
+  const base = run(store, "merge-base", "HEAD", upstream).out;
+  if (!base || !run(store, "reset", "-q", "--soft", base).ok) return false;
+  // A machine with no git identity still keeps its history.
+  const who = run(store, "config", "user.email").out ? [] : ["-c", "user.name=kb", "-c", "user.email=kb@localhost"];
+  return run(store, ...who, "commit", "-q", "-m", "kb: sync").ok;
+}
+
+/** Every id that a copy must not take: a note in any scope, active or in the trash, and any id with a history. */
+function takenIds(store: Store): Set<string> {
+  return new Set([...store.notes(), ...store.notes({ trashed: true })].map((n) => n.id).concat([...idsWithHistory(store)]));
+}
+
+/** A copy of a note in the conflict: stage 1 is the base, 2 the remote side of a rebase, 3 this machine's. Null when the stage is missing or no note. */
+function stage(store: Store, n: 1 | 2 | 3, file: string): Note | null {
   const shown = run(store, "show", `:${n}:${file}`);
   if (!shown.ok) return null;
   try {
@@ -221,26 +269,82 @@ function stage(store: Store, n: 2 | 3, file: string): Note | null {
   }
 }
 
-/** Merge one note that both sides changed. Null for any other file. */
-function mergeNote(store: Store, file: string, now: Date): MergedNote | null {
+const withoutTime = (note: Note): Note => {
+  const { trashed_at: _at, ...rest } = note;
+  return rest;
+};
+
+/** The path of a note's other place: notes/ for trash/, and trash/ for notes/. */
+const counterpart = (file: string) => (file.startsWith("notes/") ? `trash/${file.slice(6)}` : `notes/${file.slice(6)}`);
+
+/**
+ * Decide one note that both sides changed. Null for any file that is no note, so the caller can
+ * stop before it writes anything. Git reports a note that one side moved to or from the trash as
+ * modify/delete when the moved file is too unlike the old one (it was rewritten there). Then the
+ * counterpart is in the index, and the note goes where the move put it, with the change.
+ */
+function planFile(store: Store, file: string, now: Date, taken: Set<string>): Plan | null {
   if (!/^(notes|trash)\/.+\.md$/.test(file)) return null;
   const remote = stage(store, 2, file);
   const local = stage(store, 3, file);
-  if (!remote || !local || remote.id !== local.id) return null;
   // The copy verified last wins. On a tie the remote copy stays, as every other machine has it.
-  const localWins = local.last_verified > remote.last_verified;
-  const [kept, other] = localWins ? [local, remote] : [remote, local];
-  let copy = `${kept.id}-conflict`;
-  for (let n = 2; existsSync(store.notePath({ scope: other.scope, id: copy }, true)) || existsSync(store.notePath({ scope: other.scope, id: copy })); n++) copy = `${kept.id}-conflict-${n}`;
-  const copyPath = store.notePath({ scope: other.scope, id: copy }, true);
-  const keptPath = join(store.home, file);
-  writeAtomic(keptPath, serializeNote(kept));
-  writeAtomic(copyPath, serializeNote({ ...other, id: copy, trashed_at: now.toISOString().replace(/\.\d{3}Z$/, "Z") }));
-  // The rebase commits both files. Tracking them keeps a later commit from missing them.
+  const decide = (r: Note, l: Note): Pick<Plan, "kept" | "other" | "localWins"> => {
+    const localWins = l.last_verified > r.last_verified;
+    return { kept: localWins ? l : r, other: localWins ? r : l, localWins };
+  };
+  if (remote && local) return remote.id === local.id ? { keptPath: file, ...decide(remote, local) } : null;
+  const present = remote ?? local;
+  if (!present) return null;
+  // One side removed the file. Where did the note go?
+  const moved = counterpart(file);
+  const movedNote = run(store, "cat-file", "-e", `:${moved}`).ok ? readNote(join(store.home, moved)) : null;
+  if (!movedNote) return { keptPath: file, kept: present, other: null, localWins: remote === null };
+  if (movedNote.id !== present.id) return null;
+  const base = stage(store, 1, file);
+  const at = movedNote.trashed_at ?? now.toISOString().replace(/\.\d{3}Z$/, "Z");
+  const place = (note: Note): Note => (moved.startsWith("trash/") ? { ...note, trashed_at: at } : withoutTime(note));
+  // Only the move: the note takes the change.
+  if (base && JSON.stringify(withoutTime(base)) === JSON.stringify(withoutTime(movedNote))) return { keptPath: moved, kept: place(present), other: null, remove: file, localWins: remote === null };
+  // Both changed it: the mover is the remote side when the remote removed the file.
+  const [r, l] = remote === null ? [movedNote, present] : [present, movedNote];
+  const winner = decide(r, l);
+  return { keptPath: moved, kept: place(winner.kept), other: winner.other, remove: file, localWins: winner.localWins };
+}
+
+function readNote(path: string): Note | null {
+  try {
+    return parseNote(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write what the plan says, and stage it. Returns the id of the copy in the trash, "" when the
+ * plan made none, or null when git refuses.
+ */
+function apply(store: Store, plan: Plan, file: string, now: Date, taken: Set<string>): string | null {
+  const keptPath = join(store.home, plan.keptPath);
+  writeAtomic(keptPath, serializeNote(plan.kept));
   store.track(keptPath);
-  store.track(copyPath);
-  if (!run(store, "add", "--", file, copyPath).ok) return null;
-  return { id: kept.id, copy, kept: localWins ? "this machine" : "the remote" };
+  const staged = [plan.keptPath];
+  let copy = "";
+  if (plan.other) {
+    copy = `${plan.kept.id}-conflict`;
+    for (let n = 2; taken.has(copy); n++) copy = `${plan.kept.id}-conflict-${n}`;
+    taken.add(copy);
+    const copyPath = store.notePath({ scope: plan.other.scope, id: copy }, true);
+    writeAtomic(copyPath, serializeNote({ ...withoutTime(plan.other), id: copy, conflict_of: plan.kept.id, trashed_at: now.toISOString().replace(/\.\d{3}Z$/, "Z") }));
+    // The rebase commits both files. Tracking them keeps a later commit from missing them.
+    store.track(copyPath);
+    staged.push(relative(store.home, copyPath));
+  }
+  if (plan.remove) {
+    store.track(join(store.home, plan.remove));
+    if (!run(store, "rm", "-q", "--cached", "--", plan.remove).ok) return null;
+    rmSync(join(store.home, plan.remove), { force: true });
+  }
+  return run(store, "add", "--", ...staged).ok ? copy : null;
 }
 
 /** Set to stop kickSync, so a writer that nobody watches (the audit agent) never pushes the store. */

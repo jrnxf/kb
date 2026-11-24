@@ -370,19 +370,20 @@ export function movedHint(notes: StoredNote[], scope: string, skip: ReadonlySet<
   return { from: top, text: `No note has the scope ${scope}, but ${top} has ${n} ${n === 1 ? "note" : "notes"} and the same repo name${also}. If they belong to this repo, tell the user: \`kb scope move ${top} ${scope} --dry-run\` shows what moves, and with no --dry-run it moves them. This line shows once.` };
 }
 
+const MERGED_LINES = 3;
+
 /**
  * The parts of the text that every start has: `head`, the lines before the notes, and `index`, the
  * index section of the notes listed, with a last line that counts the hidden ones. `goneIn` gives
  * what is gone from the notes shown.
  */
-const MERGED_LINES = 3;
-
 function partsOf({ scope, goneOf, changed, syncError, merged, moved }: Session, line: (note: StoredNote) => string) {
   const goneIn = (shown: StoredNote[]): ContextResult["gone"] => (goneOf.size === 0 ? [] : shown.filter((n) => goneOf.has(n.id)).map((n) => ({ id: n.id, detail: goneOf.get(n.id)! })));
   const head = (shown: StoredNote[]): string[] => {
     const lines = [`# kb: saved knowledge for ${scope ?? "this machine"}`, FORMAT_LINE, SAVE_RULE];
-    // The error says what to do. A merged note is named while its other copy is in the trash.
-    if (syncError) lines.push(`kb sync did not finish: ${syncError}`);
+    // The error says what to do. An error from an older kb has no next step, so it gets the pointer.
+    if (syncError) lines.push(`kb sync did not finish: ${syncError}${syncError.includes("`kb sync`") ? "" : " `kb sync` shows the detail."}`);
+    // A merged note is named while its other copy is in the trash.
     lines.push(...merged.slice(0, MERGED_LINES));
     if (merged.length > MERGED_LINES) lines.push(`kb sync merged ${merged.length - MERGED_LINES} more notes. \`kb list --trash\` shows each copy, with an id that ends in -conflict.`);
     if (moved) lines.push(moved);

@@ -112,6 +112,17 @@ describe("kb context ranking", () => {
 });
 
 describe("what a session start gives", () => {
+  test("a sync error names the next step: an error of an older kb gets the pointer, a new one has its own", () => {
+    const store = tempStore();
+    mkdirSync(join(store.home, ".state"), { recursive: true });
+    writeFileSync(store.syncErrorPath(), "the remote did not answer.\n");
+    expect(buildContext(store, plain()).text).toContain("kb sync did not finish: the remote did not answer. `kb sync` shows the detail.\n");
+    writeFileSync(store.syncErrorPath(), "the push was refused. Run `git push` to see why, then `kb sync`.\n");
+    const text = buildContext(store, plain()).text;
+    expect(text).toContain("then `kb sync`.\n");
+    expect(text).not.toContain("shows the detail");
+  });
+
   test("the fixed text, the open work of the repo in short form, the index, then the pointer", () => {
     const store = tempStore();
     const repo = tempRepo({ remote: REMOTE });

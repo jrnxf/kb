@@ -505,7 +505,7 @@ export class Store {
     return join(this.home, trashed ? "trash" : "notes", note.scope, `${note.id}.md`);
   }
 
-  private walk(dir: string): string[] {
+  walk(dir: string): string[] {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -553,7 +553,9 @@ export class Store {
     mkdirSync(dirname(target), { recursive: true, mode: DIR_MODE });
     renameSync(note.path, target);
     const { path: _path, trashed: _trashed, trashed_at: _at, ...rest } = note;
-    writeAtomic(target, serializeNote(trashed ? { ...rest, trashed_at: at } : rest));
+    // A conflict copy that comes back from the trash is a note again, so it is no copy now.
+    const { conflict_of: _of, ...restored } = rest;
+    writeAtomic(target, serializeNote(trashed ? { ...rest, trashed_at: at } : restored));
     this.track(note.path);
     this.track(target);
     return target;
