@@ -523,6 +523,11 @@ bun test && bun run test:mod && bun run typecheck && claude plugin validate .
 `test/keys.test.ts` presses the page's keys in a headless Chromium, at desktop and phone width.
 The `playwright install` step downloads that browser once.
 
+The `bun install` at the root also installs `web/` from its lockfile. The root has no lockfile on
+purpose: Claude Code installs a plugin's packages, dev tools too, when its root holds a `package.json`
+and a lockfile. kb needs no package at run time, so the root pins each dev tool to one exact version
+instead.
+
 To try a change on a store that looks like months of use (about 165 invented notes, 9 repos):
 
 ```bash

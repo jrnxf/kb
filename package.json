@@ -4,14 +4,15 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
+    "postinstall": "bun install --cwd web --frozen-lockfile",
     "test": "bun test",
     "test:mod": "scripts/test-mod.sh",
     "typecheck": "tsc --noEmit && bun run --cwd web typecheck",
     "build": "bun run --cwd web build"
   },
   "devDependencies": {
-    "@types/bun": "latest",
-    "playwright": "^1.65.1",
-    "typescript": "^5"
+    "@types/bun": "1.4.4",
+    "playwright": "1.65.1",
+    "typescript": "5.9.3"
   }
 }
