@@ -14,7 +14,7 @@ interface Props {
   q: string;
   onQ: (q: string) => void;
   searchRef: React.RefObject<HTMLInputElement | null>;
-  onOpen: (note: PageNote) => void;
+  onOpen: (note: PageNote, byKey: boolean) => void;
   /** Why the list is empty, and the shortest way back to notes. */
   empty: { text: string; hint?: React.ReactNode; action?: { label: string; run: () => void } };
   /** The list shows the trash: it says how long a note stays, and offers to empty it. */
@@ -30,7 +30,7 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, tra
     const row = current && rows.current.get(current.id);
     if (!row) return;
     row.scrollIntoView({ block: "nearest" });
-    if (document.activeElement?.closest("[data-id]")) row.focus({ preventScroll: true });
+    if (document.activeElement?.closest("button[data-id]")) row.focus({ preventScroll: true });
   }, [current?.id]);
   const first = notes[0];
   // On a phone the filter sticks once the page scrolls past the point above it. Only then do the rows fade under it.
@@ -129,7 +129,7 @@ export function NoteList({ notes, current, q, onQ, searchRef, onOpen, empty, tra
                 tabIndex={note === (current ?? first) ? 0 : -1}
                 data-id={note.id}
                 aria-current={note === current}
-                onClick={() => onOpen(note)}
+                onClick={(event) => onOpen(note, event.detail === 0)}
                 // A title cut at two lines shows whole on hover.
                 onPointerEnter={(event) => {
                   const text = event.currentTarget.lastElementChild as HTMLElement;

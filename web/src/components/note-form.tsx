@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { NoteEdit, PageNote } from "../../../cli/wire.ts";
 import { Button } from "@/components/ui/button";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -43,6 +44,7 @@ export function NoteForm({ note, kinds, onCancel, onSave }: Props) {
   const form = useRef<HTMLFormElement>(null);
   const title = useRef<HTMLInputElement>(null);
   const body = useRef<HTMLTextAreaElement>(null);
+  const other = useRef<HTMLDivElement>(null);
   // The caret starts at the end of the body, where an edit most often goes.
   useEffect(() => {
     const el = body.current;
@@ -52,15 +54,16 @@ export function NoteForm({ note, kinds, onCancel, onSave }: Props) {
   }, []);
   // Escape cancels also when the focus is outside the form, as after a failed save. Inside the form
   // the form's own handler takes it, as the phone's drawer stops the key before the document.
+  const cancel = useEffectEvent(() => onCancel());
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || form.current?.contains(event.target as Node) || (event.target as HTMLElement).closest?.("[role=listbox]")) return;
       event.preventDefault();
-      onCancel();
+      cancel();
     };
     document.addEventListener("keydown", escape);
     return () => document.removeEventListener("keydown", escape);
-  }, [onCancel]);
+  }, []);
   const set = (key: keyof NoteEdit) => (value: string | null) => setEdit((e) => ({ ...e, [key]: value ?? "" }));
 
   async function submit(event: React.FormEvent) {
@@ -71,10 +74,12 @@ export function NoteForm({ note, kinds, onCancel, onSave }: Props) {
       await onSave(edit);
     } catch (problem) {
       const found = problems((problem as Error).message);
-      setError(found);
+      // The footer error is not in the page yet, so the page renders first, and then the focus moves.
+      flushSync(() => setError(found));
       setSaving(false);
-      // The Save button is off while it saves, so the focus fell to the page. It goes to the field to fix.
-      (found.title ? title.current : body.current)?.focus();
+      // The Save button is off while it saves, so the focus fell to the page. It goes to the field to fix,
+      // or to the error in the footer when no field has one.
+      (found.title ? title.current : found.body ? body.current : other.current)?.focus();
     }
   }
 
@@ -160,7 +165,11 @@ export function NoteForm({ note, kinds, onCancel, onSave }: Props) {
           {error.body && <FieldError id="edit-body-error">{error.body}</FieldError>}
         </Field>
         <div className="flex items-center justify-end gap-2">
-          {error.other && <FieldError className="mr-auto">{error.other}</FieldError>}
+          {error.other && (
+            <FieldError ref={other} tabIndex={-1} className="mr-auto">
+              {error.other}
+            </FieldError>
+          )}
           <Button type="button" variant="outline" className="pr-1 text-muted-foreground hover:text-foreground" onClick={onCancel}>
             Cancel <Kbd>esc</Kbd>
           </Button>

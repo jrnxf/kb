@@ -30,6 +30,7 @@ async function open(options: BrowserContextOptions = { viewport: { width: 1280, 
   putNote(store, { id: "one", title: "Note one", kind: "decision", body: TABLE });
   putNote(store, { id: "two", title: "Note two", kind: "decision" });
   putNote(store, { id: "three", title: "Note three", kind: "decision" });
+  putNote(store, { id: "four", title: "Note four", kind: "gotcha", scope: "github.com/example/app" });
   served = serve(store, { port: 0 });
   const context = await browser.newContext(options);
   page = await context.newPage();
@@ -126,6 +127,63 @@ describe("the keyboard", () => {
   });
 });
 
+describe("keys on a focused button", () => {
+  /** Tab from the filter onto the open row. */
+  async function toRow(page: Page) {
+    await page.keyboard.press("/");
+    await page.keyboard.press("Tab");
+    expect(await focused(page)).toBe((await selected(page))!);
+  }
+
+  test("h and l move the focus with the pane, so Enter and Space act on the item the user sees", async () => {
+    const page = await open();
+    await toRow(page);
+    await page.keyboard.press("h");
+    expect(await focused(page)).toBe("scope:*");
+    // Space on a kind in the sidebar presses it once, and Enter presses it once.
+    const kind = page.locator('[data-rail="kind:decision"]');
+    for (let i = 0; i < 12 && (await focused(page)) !== "kind:decision"; i++) await page.keyboard.press("j");
+    expect(await focused(page)).toBe("kind:decision");
+    await page.evaluate(() => {
+      const w = window as unknown as { clicks: number };
+      w.clicks = 0;
+      document.addEventListener("click", () => w.clicks++, true);
+    });
+    await page.keyboard.press(" ");
+    expect(await kind.getAttribute("aria-pressed")).toBe("true");
+    await page.keyboard.press("Enter");
+    expect(await kind.getAttribute("aria-pressed")).toBe("false");
+    await page.keyboard.press("Space");
+    await page.keyboard.up("Space");
+    expect(await kind.getAttribute("aria-pressed")).toBe("true");
+    // A key press is not a click, so a key press never presses twice.
+    expect(await page.evaluate(() => (window as unknown as { clicks: number }).clicks)).toBe(0);
+    await page.keyboard.press("l");
+    expect(await focused(page)).toBe((await selected(page))!);
+  });
+
+  test("Enter on the open row keeps the focus on it", async () => {
+    const page = await open();
+    await toRow(page);
+    const row = await focused(page);
+    await page.keyboard.press("Enter");
+    expect(await focused(page)).toBe(row);
+    // A click still gives the keys back to the page.
+    await page.locator('[data-id="two"]').click();
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  });
+
+  test("Enter and Space on another button press that button and nothing else", async () => {
+    const page = await open();
+    const theme = page.getByRole("button", { name: /^Theme/ });
+    const before = await theme.getAttribute("aria-label");
+    await theme.focus();
+    await page.keyboard.press("Enter");
+    expect(await theme.getAttribute("aria-label")).not.toBe(before);
+    expect(await page.locator("main table").count()).toBe(1);
+  });
+});
+
 describe("contrast", () => {
   for (const colorScheme of ["light", "dark"] as const) {
     test(`${colorScheme}: faint text passes 4.5:1, and a kind with no notes is not faded`, async () => {
@@ -156,11 +214,77 @@ describe("a note's table", () => {
       const cell = getComputedStyle(el.querySelector("td")!), head = getComputedStyle(el.querySelector("th")!);
       return { collapse: getComputedStyle(el).borderCollapse, overflow: getComputedStyle(el).overflowX, padding: cell.padding, border: cell.borderTopWidth, align: head.textAlign };
     });
-    expect(style).toEqual({ collapse: "collapse", overflow: "auto", padding: "6px 10px", border: "1px", align: "left" });
+    expect(style).toEqual({ collapse: "collapse", overflow: "visible", padding: "6px 10px", border: "1px", align: "left" });
+    // The table keeps its own display, so a screen reader still reads it as a table. A wrapper scrolls.
+    expect(await page.locator("main table").evaluate((el) => getComputedStyle(el).display)).toBe("table");
+    expect(await page.locator("main .table-scroll").evaluate((el) => getComputedStyle(el).overflowX)).toBe("auto");
+    expect(await page.getByRole("table").count()).toBe(1);
+  });
+});
+
+describe("history and the sidebar", () => {
+  test("Back puts the sidebar cursor and the held scope back with the view", async () => {
+    const page = await open();
+    await page.locator('[data-id="two"]').click();
+    await page.locator('[data-rail="scope:github.com/example/app"]').click();
+    await page.locator('[data-rail="scope:github.com/example/app"]').waitFor();
+    expect(await page.locator('[data-rail][tabindex="0"]').getAttribute("data-rail")).toBe("scope:github.com/example/app");
+    await page.goBack();
+    await page.waitForFunction(() => !new URLSearchParams(location.hash.slice(1)).get("scope"));
+    expect(await page.locator('[data-rail][tabindex="0"]').getAttribute("data-rail")).toBe("scope:*");
+    expect(await page.locator('[data-rail="scope:*"]').getAttribute("aria-pressed")).toBe("true");
+  });
+
+  test("Back on a screen that turned narrow goes to the note before, and the address keeps it", async () => {
+    const page = await open();
+    await page.locator('[data-id="two"]').click();
+    await page.locator('[data-id="three"]').click();
+    await page.setViewportSize({ width: 400, height: 800 });
+    await page.waitForFunction(() => innerWidth === 400);
+    await page.goBack();
+    await page.waitForFunction(() => new URLSearchParams(location.hash.slice(1)).get("note") === "two");
+    expect(await selected(page)).toBe("two");
+  });
+});
+
+describe("the tab", () => {
+  test("the audit page has its own title, and the notes page takes its title back", async () => {
+    const page = await open();
+    await page.locator('[data-id="two"]').click();
+    await page.evaluate(() => (location.hash = "#audit=global"));
+    await page.waitForFunction(() => document.title === "Audit of global - kb");
+    await page.goBack();
+    await page.waitForFunction(() => document.title === "Note two - kb");
+  });
+});
+
+describe("the edit form, on an error that no field owns", () => {
+  test("the focus goes to the error in the footer, and a valid body keeps it", async () => {
+    const page = await open();
+    await page.route("**/api/notes/*", (route) => (route.request().method() === "PUT" ? route.fulfill({ status: 500, json: { error: "disk full" } }) : route.fallback()));
+    await page.keyboard.press("e");
+    await page.getByRole("button", { name: /Save/ }).click();
+    const alert = page.getByRole("alert");
+    await alert.waitFor();
+    expect(await alert.textContent()).toBe("disk full");
+    expect(await page.evaluate(() => document.activeElement?.getAttribute("role"))).toBe("alert");
   });
 });
 
 describe("on a phone", () => {
+  test("a utility still beats the tap-target rule: an absolute button stays absolute", async () => {
+    const page = await open({ ...devices["iPhone 13"] });
+    const position = await page.evaluate(() => {
+      const button = document.createElement("button");
+      button.dataset.slot = "button";
+      button.className = "absolute";
+      document.body.append(button);
+      return getComputedStyle(button).position;
+    });
+    expect(position).toBe("absolute");
+  });
+
+
   test("every chip, row and button takes a tap 21 px above and below its centre, so its target is 44 px tall", async () => {
     const page = await open({ ...devices["iPhone 13"] });
     const misses = await page.evaluate(() => {

@@ -148,7 +148,8 @@
   & pre { overflow-x: auto; background: var(--muted); border-radius: 6px; padding: 10px 12px; }
   & pre code { padding: 0; background: none; }
   /* A wide table scrolls inside the note, not the page. */
-  & table { display: block; max-width: 100%; width: max-content; overflow-x: auto; margin: 0 0 12px; border-collapse: collapse; font-size: 14px; line-height: 1.5; overflow-wrap: normal; }
+  & .table-scroll { max-width: 100%; overflow-x: auto; margin: 0 0 12px; }
+  & table { width: max-content; border-collapse: collapse; font-size: 14px; line-height: 1.5; overflow-wrap: normal; }
   & th, & td { border: 1px solid var(--border); padding: 6px 10px; vertical-align: top; }
   & th { text-align: left; font-weight: 600; background: var(--muted); }
 }
@@ -160,12 +161,15 @@ code {
 }
 
 /* On a phone every tap target is at least 44 px: a smaller button, chip or link gets a larger hit area around it. */
-@media (pointer: coarse) and (width < 56.3125rem) {
-  [data-slot="button"], [data-rail], [data-audit] { position: relative; }
-  [data-slot="button"]::after, [data-rail]::after, [data-audit]::after {
-    content: "";
-    position: absolute;
-    inset: min(0px, calc((100% - 44px) / 2));
+@layer components {
+  @media (pointer: coarse) and (width < 56.3125rem) {
+    /* :where() keeps the rule weaker than a utility, such as the absolute position of a dialog's close button. */
+    :where([data-slot="button"], [data-rail], [data-audit]) { position: relative; }
+    :where([data-slot="button"], [data-rail], [data-audit])::after {
+      content: "";
+      position: absolute;
+      inset: min(0px, calc((100% - 44px) / 2));
+    }
   }
 }
 
