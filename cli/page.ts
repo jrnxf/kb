@@ -50,8 +50,11 @@ export function safeSrc(value: string): boolean {
 
 /** The host an image would have loaded from, or a plain word when the address has none. */
 function imageHost(src: string): string {
+  const url = bare(src);
+  // An address with no // after its scheme has no host: it would only take the host of a made-up base.
+  if (!/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(url)) return "blocked";
   try {
-    return new URL(bare(src), "http://localhost").host || "blocked";
+    return new URL(url, "http://localhost").host || "blocked";
   } catch {
     return "blocked";
   }

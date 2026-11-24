@@ -157,7 +157,7 @@ export function pagePolicy(html: string): string {
   const hashes: string[] = [];
   let code: string | undefined;
   const flush = () => {
-    if (code !== undefined) hashes.push(` 'sha256-${createHash("sha256").update(code).digest("base64")}'`);
+    if (code !== undefined) hashes.push(` 'sha256-${createHash("sha256").update(code.replace(/\r\n?/g, "\n")).digest("base64")}'`);
     code = undefined;
   };
   // A script with a src is no inline script. The browser hashes the text after its parser turns CRLF into LF.
@@ -169,15 +169,14 @@ export function pagePolicy(html: string): string {
         script.onEndTag(flush);
       },
       text(chunk) {
-        if (code !== undefined) code += chunk.text.replace(/\r\n?/g, "\n");
+        if (code !== undefined) code += chunk.text;
       },
     })
     .transform(html);
   flush();
-  const inline = hashes;
   return [
     "default-src 'none'",
-    `script-src 'self'${inline.join("")}`,
+    `script-src 'self'${hashes.join("")}`,
     "style-src 'self'",
     "img-src 'self' data:",
     "font-src 'self'",

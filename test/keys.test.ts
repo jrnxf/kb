@@ -35,7 +35,7 @@ async function open(width: number): Promise<{ page: Page; store: Store; served: 
 }
 
 /** Close the page and stop the server, each step on its own, and then report a block or the first failure. */
-async function teardown(page: Page, served: Served): Promise<void> {
+async function teardown(page: Page | undefined, served: Served | undefined): Promise<void> {
   const errors: unknown[] = [];
   let policy: string[] = [];
   try {
@@ -44,17 +44,17 @@ async function teardown(page: Page, served: Served): Promise<void> {
     errors.push(error);
   }
   try {
-    served.stop();
+    served?.stop();
   } catch (error) {
     errors.push(error);
   }
   try {
-    await page.close();
+    await page?.close();
   } catch (error) {
     errors.push(error);
   }
-  expect(policy).toEqual([]);
   if (errors.length) throw errors[0];
+  expect(policy).toEqual([]);
 }
 
 /** The id of the selected note, from the address. */
@@ -77,7 +77,12 @@ describe("keys on a wide screen", () => {
     ({ page, store, served } = await open(1280));
   }, 20_000);
   afterEach(async () => {
-    await teardown(page, served);
+    try {
+      await teardown(page, served);
+    } finally {
+      // A later test whose setup fails must not meet this test's page.
+      page = served = undefined as never;
+    }
   });
 
   test("a note an agent adds shows without a reload, and a trash from the page is not undone by the poll", async () => {
@@ -212,7 +217,12 @@ describe("keys on a phone", () => {
     await drawer().waitFor();
   }, 20_000);
   afterEach(async () => {
-    await teardown(page, served);
+    try {
+      await teardown(page, served);
+    } finally {
+      // A later test whose setup fails must not meet this test's page.
+      page = served = undefined as never;
+    }
   });
 
   test("in the open drawer, e opens the form and Escape keeps the drawer", async () => {
@@ -272,8 +282,8 @@ describe("a page with data from an older kb serve", () => {
       expect(await page.getByText("loads at").count()).toBe(0);
       expect(errors).toEqual([]);
     } finally {
-      served.stop();
-      await page.close();
+      served?.stop();
+      await page?.close();
     }
   });
 });

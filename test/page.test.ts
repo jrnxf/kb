@@ -31,12 +31,13 @@ describe("the data behind the page", () => {
       "[g](data:text/html,<script>alert(1)</script>)",
       "[h](vbscript:msgbox(1))",
       "[i]( javascript:alert(1))",
+      "[j](javascript&colon;alert(1))",
     ];
     for (const link of links) {
       const html = renderBody(link);
       expect(html).not.toContain("<a");
       expect(html).not.toContain("href");
-      expect(html).toMatch(/<span>[a-i]<\/span>/);
+      expect(html).toMatch(/<span>[a-j]<\/span>/);
     }
     expect(safeHref("&#0;javascript:alert(1)")).toBe(false);
     expect(safeHref("\u0001javascript:alert(1)")).toBe(false);
@@ -59,6 +60,7 @@ describe("the data behind the page", () => {
     expect(renderBody("![](//tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
     expect(renderBody("![ ](https://tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
     expect(renderBody("![&#0;](https://tracker.example.com/p.png)")).toBe("<p>[image: tracker.example.com]</p>\n");
+    expect(renderBody("![](http:p.png)")).toBe("<p>[image: blocked]</p>\n");
     expect(renderBody("![](javascript:alert(1))")).toBe("<p>[image: blocked]</p>\n");
     expect(renderBody("![x](javascript:alert(1))")).toBe("<p>x</p>\n");
     expect(renderBody("![x](data:image/svg+xml,%3Csvg%20onload=alert(1)%3E)")).toBe("<p>x</p>\n");

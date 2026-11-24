@@ -77,13 +77,19 @@ describe("kb serve", () => {
       const page = await browser.newPage();
       page.setDefaultTimeout(3000);
       const blocked = await watchPolicy(page);
+      const policy = (await fetch(served!.url)).headers.get("content-security-policy")!;
       const dialogs: string[] = [];
       const elsewhere: string[] = [];
       page.on("dialog", (dialog) => void (dialogs.push(dialog.message()), dialog.dismiss()));
       page.on("request", (request) => void (request.url().startsWith(served!.url) || elsewhere.push(request.url())));
       await page.goto(`${served!.url}#note=xss`);
-      // The inline theme script ran under the policy: it set the color scheme.
-      expect(await page.evaluate(() => document.documentElement.style.colorScheme)).toMatch(/^(?:light|dark)$/);
+      // The header holds the hash of the inline script as the browser reads it, so the script runs by that hash.
+      const hashed = await page.evaluate(async () => {
+        const text = document.querySelector("script:not([src])")!.textContent!;
+        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+        return `'sha256-${btoa(String.fromCharCode(...digest))}'`;
+      });
+      expect(policy).toContain(`script-src 'self' ${hashed};`);
       const body = page.locator(".prose-kb");
       await body.getByText("entity").waitFor();
       for (const name of ["plain", "mixed", "entity"]) await body.getByText(name).click();
