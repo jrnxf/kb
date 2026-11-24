@@ -1,8 +1,6 @@
 #!/bin/sh
 # Thin launcher, so skills can call bare `kb`. Bun runs the TypeScript source directly.
-. "$(dirname "$0")/../hooks/bun.sh"
-if [ -z "$BUN" ]; then
-  echo "kb: $BUN_MISSING" >&2
-  exit 127
-fi
-exec "$BUN" "$(dirname "$0")/../cli/main.ts" "$@"
+d=$(dirname "$0")
+. "$d/../hooks/bun.sh"
+kb_need_bun kb || exit 127
+exec "$BUN" "$d/../cli/main.ts" "$@"

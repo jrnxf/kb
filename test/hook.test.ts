@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { SAVE_RULE } from "../cli/context.ts";
 import { CHECKPOINT_RULE } from "../hooks/checkpoint-rule.ts";
@@ -17,9 +17,9 @@ const HOOK = join(ROOT, "hooks", "session-start.sh");
 const QUIET_CONFIG = tempDir("kb-claude-");
 writeFileSync(join(QUIET_CONFIG, "settings.json"), JSON.stringify({ autoMemoryEnabled: false }));
 
-function runHook(options: { home: string; stdin: string; path?: string; env?: Record<string, string | undefined> }) {
+function runHook(options: { home: string; stdin: string; path?: string; hook?: string; env?: Record<string, string | undefined> }) {
   const started = performance.now();
-  const r = Bun.spawnSync([HOOK], {
+  const r = Bun.spawnSync([options.hook ?? HOOK], {
     cwd: plain(),
     // The tests can run inside a headless agent. A start is one with a person there, unless a test says otherwise.
     env: { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: undefined, CLAUDE_PROJECT_DIR: undefined, CLAUDE_CONFIG_DIR: QUIET_CONFIG, CLAUDE_CODE_ENTRYPOINT: "cli", KB_HOME: options.home, PATH: options.path ?? process.env.PATH, ...options.env },
@@ -36,14 +36,14 @@ const SAVING = `# kb\n${SAVE_RULE}\n${CHECKPOINT_RULE}\n`;
 const input = (cwd: string, source = "startup") => JSON.stringify({ session_id: "abc", transcript_path: "/home/user/t.jsonl", cwd, hook_event_name: "SessionStart", source });
 
 // Claude Code gives hooks the PATH it started with. An app started from the desktop often has no
-// bun on it. The PATH is a folder with only sh and dirname, HOME and BUN_INSTALL are empty temp
+// bun on it. The PATH is a folder with only sh, dirname and sed, HOME and BUN_INSTALL are empty temp
 // folders, and KB_BUN_SYSTEM_DIRS takes the Homebrew folders away, so the test does not depend on this machine.
 const bare = (home: string, env: Record<string, string> = {}) => {
   const bin = tempDir("kb-nobun-");
-  for (const tool of ["sh", "dirname"]) symlinkSync(Bun.which(tool)!, join(bin, tool));
+  for (const tool of ["sh", "dirname", "sed"]) symlinkSync(Bun.which(tool)!, join(bin, tool));
   return { PATH: bin, HOME: home, BUN_INSTALL: tempDir("kb-bun-"), KB_BUN_SYSTEM_DIRS: "", ...env };
 };
-const MISSING = "Bun is not on the PATH, in $BUN_INSTALL/bin, in ~/.bun/bin, or in the Homebrew folders. Install it from bun.sh.";
+const MISSING = "Bun is not on the PATH or in the usual install folders (~/.bun/bin, ~/.local/bin, mise, asdf, Homebrew). Set KB_BUN to the path of bun, or install it from bun.sh.";
 
 describe("SessionStart hook", () => {
   test("prints only the rules for saving when there is no store, and creates none", () => {
@@ -57,23 +57,46 @@ describe("SessionStart hook", () => {
     const home = tempDir("kb-home-");
     const store = tempStore();
     putNote(store, { id: "a" });
-    const start = Bun.spawnSync([HOOK], { cwd: plain(), env: { ...bare(home), KB_HOME: store.home }, stdin: Buffer.from(input(plain())), stdout: "pipe", stderr: "pipe" });
-    expect(start.exitCode).toBe(0);
-    expect(start.stderr.toString()).toBe("");
-    const out = start.stdout.toString();
-    expect(out.split("\n")).toHaveLength(2);
-    expect(JSON.parse(out)).toEqual({ systemMessage: `kb: ${MISSING}` });
+    const env = { ...bare(home), KB_HOME: store.home };
+    const start = runHook({ home: store.home, stdin: input(plain()), path: env.PATH, env });
+    expect(start).toMatchObject({ code: 0, stderr: "" });
+    expect(start.stdout.split("\n")).toHaveLength(2);
+    expect(JSON.parse(start.stdout)).toEqual({ systemMessage: `kb: ${MISSING}` });
     for (const hook of ["post-read.sh", "session-end.sh", "tool-call.sh"]) {
-      const r = Bun.spawnSync([join(ROOT, "hooks", hook)], { cwd: plain(), env: { ...bare(home), KB_HOME: store.home }, stdin: Buffer.from("{}"), stdout: "pipe", stderr: "pipe" });
-      expect({ hook, code: r.exitCode, stdout: r.stdout.toString(), stderr: r.stderr.toString() }).toEqual({ hook, code: 0, stdout: "", stderr: "" });
+      const r = runHook({ home: store.home, stdin: "{}", path: env.PATH, hook: join(ROOT, "hooks", hook), env });
+      expect({ hook, code: r.code, stdout: r.stdout, stderr: r.stderr }).toEqual({ hook, code: 0, stdout: "", stderr: "" });
     }
   });
 
-  test("says that kb is off on startup only, not on a resume, clear, compact or fork", () => {
+  test("says that kb is off on a startup or a resume, not on a clear, compact or fork", () => {
     const home = tempDir("kb-home-");
     for (const source of ["startup", "resume", "clear", "compact", "fork"]) {
-      const r = Bun.spawnSync([HOOK], { cwd: plain(), env: { ...bare(home), KB_HOME: join(home, "missing") }, stdin: Buffer.from(input(plain(), source)), stdout: "pipe", stderr: "pipe" });
-      expect({ source, code: r.exitCode, stdout: r.stdout.toString(), stderr: r.stderr.toString() }).toEqual({ source, code: 0, stdout: source === "startup" ? `{"systemMessage":"kb: ${MISSING}"}\n` : "", stderr: "" });
+      const r = runHook({ home, stdin: input(plain(), source), env: bare(home) });
+      expect({ source, code: r.code, stdout: r.stdout, stderr: r.stderr }).toEqual({ source, code: 0, stdout: source === "startup" || source === "resume" ? `{"systemMessage":"kb: ${MISSING}"}\n` : "", stderr: "" });
+    }
+  });
+
+  test("reads the source whatever the spacing of the JSON, and stays silent in a headless run", () => {
+    const home = tempDir("kb-home-");
+    for (const stdin of ['{"source" : "startup"}', '{"source":   "resume","x":1}', '{\n  "source":\t"startup"\n}']) {
+      expect({ stdin, stdout: runHook({ home, stdin, env: bare(home) }).stdout }).toEqual({ stdin, stdout: `{"systemMessage":"kb: ${MISSING}"}\n` });
+    }
+    const headless = runHook({ home, stdin: input(plain()), env: { ...bare(home), CLAUDE_CODE_ENTRYPOINT: "sdk-cli" } });
+    expect(headless).toMatchObject({ code: 0, stdout: "", stderr: "" });
+  });
+
+  test("a hook exits 0 and prints nothing when bun.sh is missing, under dash and sh", () => {
+    const copy = tempDir("kb-hooks-");
+    for (const file of ["session-start.sh", "post-read.sh", "session-end.sh", "tool-call.sh"]) {
+      copyFileSync(join(ROOT, "hooks", file), join(copy, file));
+      chmodSync(join(copy, file), 0o755);
+    }
+    for (const shell of ["/bin/dash", "/bin/sh"]) {
+      if (!existsSync(shell)) continue;
+      for (const file of readdirSync(copy)) {
+        const r = Bun.spawnSync([shell, join(copy, file)], { cwd: plain(), env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" }, stdin: Buffer.from(input(plain())), stdout: "pipe", stderr: "pipe" });
+        expect({ shell, file, code: r.exitCode, stdout: r.stdout.toString() }).toEqual({ shell, file, code: 0, stdout: "" });
+      }
     }
   });
 
@@ -91,16 +114,25 @@ describe("SessionStart hook", () => {
     expect({ code: r.exitCode, stdout: r.stdout.toString(), stderr: r.stderr.toString() }).toEqual({ code: 127, stdout: "", stderr: `kb: ${MISSING}\n` });
   });
 
-  test("finds bun in ~/.bun/bin or $BUN_INSTALL/bin when it is not on the PATH", () => {
-    for (const where of ["home", "install"] as const) {
+  test("finds bun in the usual folders, or at KB_BUN, when it is not on the PATH", () => {
+    const places = ["install", ".bun/bin", ".local/bin", ".local/share/mise/shims", ".asdf/shims", ".linuxbrew/bin", "system", "KB_BUN"];
+    for (const where of places) {
       const home = tempDir("kb-home-");
-      const folder = where === "home" ? join(home, ".bun", "bin") : join(tempDir("kb-bun-"), "bin");
+      const folder = where === "install" ? join(tempDir("kb-bun-"), "bin") : where === "system" ? tempDir("kb-sys-") : where === "KB_BUN" ? tempDir("kb-kbbun-") : join(home, where);
       mkdirSync(folder, { recursive: true });
       symlinkSync(process.execPath, join(folder, "bun"));
-      const env = where === "home" ? bare(home) : bare(home, { BUN_INSTALL: dirname(folder) });
-      const r = Bun.spawnSync([HOOK], { cwd: plain(), env: { ...env, KB_HOME: join(home, "missing"), CLAUDE_CONFIG_DIR: QUIET_CONFIG, CLAUDE_CODE_ENTRYPOINT: "cli" }, stdin: Buffer.from(input(plain())), stdout: "pipe", stderr: "pipe" });
-      expect({ where, code: r.exitCode, stdout: r.stdout.toString() }).toEqual({ where, code: 0, stdout: SAVING });
+      const extra: Record<string, string> = where === "install" ? { BUN_INSTALL: dirname(folder) } : where === "system" ? { KB_BUN_SYSTEM_DIRS: `/nowhere:${folder}` } : where === "KB_BUN" ? { KB_BUN: join(folder, "bun") } : {};
+      const r = runHook({ home: join(home, "missing"), stdin: input(plain()), env: bare(home, extra) });
+      expect({ where, code: r.code, stdout: r.stdout }).toEqual({ where, code: 0, stdout: SAVING });
     }
+  });
+
+  test("splits the system folders on a colon only, and does not expand a glob in them", () => {
+    const home = tempDir("kb-home-");
+    const folder = tempDir("kb-sys-");
+    symlinkSync(process.execPath, join(folder, "bun"));
+    const r = runHook({ home: join(home, "missing"), stdin: input(plain()), env: bare(home, { KB_BUN_SYSTEM_DIRS: `${dirname(folder)}/*:${folder} ` }) });
+    expect(r.stdout).toBe(`{"systemMessage":"kb: ${MISSING}"}\n`);
   });
 
   test("exits 0 on bad stdin, a missing directory or a broken store", () => {
