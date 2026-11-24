@@ -533,6 +533,9 @@ bun test && bun run test:mod && bun run typecheck && claude plugin validate .
 `test/keys.test.ts` presses the page's keys in a headless Chromium, at desktop and phone width.
 The `playwright install` step downloads that browser once.
 
+The `test` workflow in `.github/workflows/test.yml` runs these checks on each pull request and each push to `main`.
+It also rebuilds `web/` and fails when the committed `web/dist` differs.
+
 To try a change on a store that looks like months of use (about 165 invented notes, 9 repos):
 
 ```bash
