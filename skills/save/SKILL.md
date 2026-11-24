@@ -61,7 +61,7 @@ For each fact in it, apply the skip rules of step 1 first: a dated status, a fin
 - It is about this session's project, and the folder belongs to it: treat it as a candidate with the scope `"repo"`.
 - It is about another project: leave it, and list it under **Skipped**.
 
-When kb or an instruction file holds the fact, after a write or because it was there already, remove the memory file with `kb-transcript --remove-memory <absolute path of the file>` (one file per command, never a glob), and remove its line from that folder's `MEMORY.md`. It keeps a private copy first and prints its `backup` path. Never remove a memory file with `rm`.
+When kb or an instruction file holds the fact, after a write or because it was there already, remove the memory file with `kb-transcript --remove-memory <absolute path of the file>` (one file per command, never a glob: it refuses more than one path), and remove its line from that folder's `MEMORY.md`. It keeps a private copy first and prints its `backup` path. Never remove a memory file with `rm`.
 Remove nothing when the write failed, and leave the files you skipped. Never leave the same fact in two places.
 
 ### Write a rule
@@ -209,13 +209,13 @@ End with this, and nothing after it. Write it as Markdown, not in a code block, 
 - **<title>**
   <new note or rule, or the place that already held it>
 
-Copies of the removed memory files: <the folder that holds the `backup` paths, as `--remove-memory` printed them>
+Copies of the removed memory files: <each folder that holds `backup` paths, as `--remove-memory` printed them>
 
 **Skipped:** <candidate> (<reason>), <candidate> (<reason>).
 ```
 
 - The first line is the verdict. Write `**Safe to clear**`, or `**Not safe to clear** - <what is unsaved>` when a `kb` command failed, or when open work exists that no note describes. Never add "yes" or "no".
-- Print the `Copies of the removed memory files` line only when `--remove-memory` removed a file in this run, and name the exact folder: the part of a `backup` path before the file name. Leave the line out otherwise.
+- Print the `Copies of the removed memory files` line only when `--remove-memory` removed a file in this run, and name each folder: the part of a `backup` path before the file name. A run can write to more than one folder (one per project and per day), so list them all, separated by commas. Leave the line out otherwise.
 - Show the title of a note, not its id. Keep each reason to one short sentence.
 - Under a saved gotcha or how-to that has no trigger and no anchor, add one line: `No trigger: <why none fits>`.
 - Under a saved repo note, not open work, that has no anchor, add one line: `No anchor: <why no file fits>`.

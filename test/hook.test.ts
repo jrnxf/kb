@@ -5,7 +5,7 @@ import { SAVE_RULE } from "../cli/context.ts";
 import { CHECKPOINT_RULE } from "../hooks/checkpoint-rule.ts";
 import { RUN_ENV } from "../cli/audit-run.ts";
 import { rememberRepo } from "../cli/repos.ts";
-import { forgetUnsaved, isLive, isSaved, markSaved, recordRecovered, recordWorth, recordUnsaved, unsavedSession } from "../cli/session.ts";
+import { forgetUnsaved, isLive, privateDir, pruneMemoryBackups, isSaved, markSaved, recordRecovered, recordWorth, recordUnsaved, unsavedSession } from "../cli/session.ts";
 import { MEMORY_ON_NOTICE, MEMORY_RULE } from "../hooks/auto-memory.ts";
 import { OUTPUT_CLOSE, OUTPUT_OPEN, TAIL_BYTES } from "../hooks/transcript.ts";
 import { BUDGET_MS, ELSEWHERE_FLOOR, MIN_FAILED, PARSE_LIMIT, unsavedNotice } from "../hooks/unsaved-notice.ts";
@@ -564,14 +564,72 @@ describe("kb-transcript --remove-memory", () => {
     expect(existsSync(join(root, "2999-01-01"))).toBe(true);
   });
 
+  test("a huge trashDays or a copy that cannot go never stops a command", () => {
+    const store = tempStore();
+    const root = join(store.home, ".state", "memory-backup");
+    mkdirSync(join(root, "2020-01-01"), { recursive: true });
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ trashDays: 1e15 }));
+    expect(kb(store, ["list"]).code).toBe(0);
+    expect(existsSync(join(root, "2020-01-01"))).toBe(true);
+    expect(() => pruneMemoryBackups(store, 1e15)).not.toThrow();
+    // A folder that cannot be removed does not stop the trash from clearing.
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ trashDays: 7 }));
+    chmodSync(root, 0o500);
+    try {
+      expect(kb(store, ["list"]).code).toBe(0);
+    } finally {
+      chmodSync(root, 0o700);
+    }
+  });
+
+  test("privateDir refuses a top that is not above the folder, so it never changes a folder it does not own", () => {
+    const base = tempDir();
+    const other = join(base, "other");
+    chmodSync(base, 0o755);
+    mkdirSync(other, { mode: 0o755 });
+    expect(() => privateDir(join(base, "a", "b"), other)).toThrow("not inside");
+    expect(statSync(base).mode & 0o777).not.toBe(0o700);
+    privateDir(join(base, "a", "b"), join(base, "a"));
+    expect(statSync(join(base, "a", "b")).mode & 0o777).toBe(0o700);
+    expect(statSync(base).mode & 0o777).not.toBe(0o700);
+  });
+
   test("names the day folder by the local day", () => {
     const store = tempStore();
     const dir = folder();
-    // 23:30 in Lisbon in summer is 22:30 UTC, and 02:30 on the next day in Tokyo: the folder is the day of this machine.
+    // At 23:30 in Lisbon in summer it is 22:30 UTC, and 12:30 on the next day in Kiritimati (UTC+14): the folder is the day of this machine.
+    const day = (zone: string, at = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(at);
+    const before = day("Pacific/Kiritimati");
     const r = Bun.spawnSync([BIN, "--remove-memory", join(dir, "fact.md")], { cwd: plain(), env: { ...process.env, KB_HOME: store.home, CLAUDE_CONFIG_DIR: dirname(dirname(dirname(dir))), TZ: "Pacific/Kiritimati" }, stdout: "pipe", stderr: "pipe" });
+    const after = day("Pacific/Kiritimati");
     const backup = (JSON.parse(r.stdout.toString()) as { backup: string }).backup;
-    const day = (zone: string) => new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(new Date());
-    expect(basename(dirname(dirname(backup)))).toBe(day("Pacific/Kiritimati"));
+    // The run can cross midnight, so either day around it is right.
+    expect([before, after]).toContain(basename(dirname(dirname(backup))));
+  });
+
+  test("refuses more than one path, and says why a path is no good", () => {
+    const store = tempStore();
+    const dir = folder();
+    const two = Bun.spawnSync([BIN, "--remove-memory", join(dir, "fact.md"), join(dir, "MEMORY.md")], { cwd: plain(), env: { ...process.env, KB_HOME: store.home, CLAUDE_CONFIG_DIR: dirname(dirname(dirname(dir))) }, stdout: "pipe", stderr: "pipe" });
+    expect(two.exitCode).toBe(1);
+    expect(JSON.parse(two.stdout.toString()).error).toContain("one file per command");
+    expect(existsSync(join(dir, "fact.md"))).toBe(true);
+    // A config folder with no projects folder, and a folder that is gone, each name their own cause.
+    const noProjects = run(store.home, join(dir, "fact.md"), tempDir("kb-claude-"));
+    expect(noProjects.out.error).toContain("projects folder");
+    expect(run(store.home, join(dir, "gone", "fact.md")).out.error).toContain("no folder");
+  });
+
+  test("prints one JSON error and keeps the file when the copy cannot be written", () => {
+    const store = tempStore();
+    const dir = folder();
+    // A file where the backup folder should be makes the copy fail.
+    mkdirSync(join(store.home, ".state"), { recursive: true });
+    writeFileSync(join(store.home, ".state", "memory-backup"), "not a folder");
+    const r = run(store.home, join(dir, "fact.md"));
+    expect(r.code).toBe(1);
+    expect(r.out.error).toContain("could not remove");
+    expect(existsSync(join(dir, "fact.md"))).toBe(true);
   });
 
   test("the save skills remove memory with it, and allow no rm", () => {

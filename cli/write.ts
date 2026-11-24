@@ -244,7 +244,6 @@ export function clearsAt(trashedAt: string, days: number): string {
  */
 export function tidyTrash(store: Store, now = nowIso()): string[] {
   const days = store.config().trashDays;
-  pruneMemoryBackups(store, days, Date.parse(now)); // the copies of removed memory files age out with the trash
   const expired: StoredNote[] = [];
   let stamped = 0;
   for (const note of store.notes({ trashed: true })) {
@@ -254,7 +253,13 @@ export function tidyTrash(store: Store, now = nowIso()): string[] {
       stamped++;
     } else if (clearsAt(note.trashed_at, days) <= now) expired.push(note);
   }
-  if (expired.length > 0) return removeNotes(store, expired, `kb: clear ${expired.length} from the trash after ${days} days: ${expired.map((n) => n.id).join(" ")}`);
-  if (stamped > 0) afterWrite(store, "kb: record when trashed notes went to the trash");
-  return [];
+  let cleared: string[] = [];
+  if (expired.length > 0) cleared = removeNotes(store, expired, `kb: clear ${expired.length} from the trash after ${days} days: ${expired.map((n) => n.id).join(" ")}`);
+  else if (stamped > 0) afterWrite(store, "kb: record when trashed notes went to the trash");
+  try {
+    pruneMemoryBackups(store, days, Date.parse(now)); // the copies of removed memory files age out with the trash
+  } catch {
+    // A copy that cannot go now goes on the next command. It must not stop the trash from clearing.
+  }
+  return cleared;
 }
