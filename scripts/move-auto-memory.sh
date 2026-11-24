@@ -96,7 +96,6 @@ logs="$config/auto-memory-move-$stamp"
 # The memory files are private, so the tar file and the logs are for this user only.
 mkdir -p -m 700 "$logs"
 (umask 077 && cd "$config" && tar -czf "$backup" projects/*/memory)
-chmod 600 "$backup"
 echo "backup: $backup"
 echo "logs:   $logs"
 
@@ -114,7 +113,7 @@ for memory in "${folders[@]}"; do
   # Only user settings load: a project's own hooks (a Stop hook that waits, for one) can hang -p.
   if (cd "${dir:-$HOME}" && CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude -p "/kb:save $memory" --setting-sources user ${claude_args[@]+"${claude_args[@]}"} </dev/null >"$log" 2>&1); then
     after="$(count "$memory")"
-    # claude exits 0 also when a write or an rm was refused, so the files left are the real check.
+    # claude exits 0 also when a write or a kb-transcript --remove-memory was refused, so the files left are the real check.
     [ "$after" -lt "$before" ] || untouched=$((untouched + 1))
     echo "$((before - after)) of $before files moved, see the log for the skipped ones"
   else

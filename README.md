@@ -489,7 +489,8 @@ only to sync the store with its git remote. This is what it touches:
   starts `claude -p` for each memory folder, when you run it. Each is a Claude Code session, and
   it talks to Anthropic as any session does.
 - **It serves** a page on `127.0.0.1` only, with a token per start. A request with another
-  Host header is refused.
+  Host header is refused, unless the name is in `KB_SERVE_HOSTS` (a comma list, where a name that
+  starts with a dot takes that domain and all names under it). Set it only for a reverse proxy you trust.
 - **Its limits:** a write that looks like a secret is refused, and a transcript read is masked,
   but the scan knows common shapes only. A note is plain text in a git repo. Keep secrets out.
 
@@ -533,8 +534,8 @@ Then two settings in `~/.claude/settings.json`:
   of each session asks the agent to tell you, and every session start tells the agent to save
   nothing there. With it off, that rule is not sent. `/kb:save` empties it: rules go to
   instruction files, and facts go to kb. Before it removes a memory file, it keeps a copy that only you can
-  read in `.state/memory-backup/<day>/` of the store, and the report says where. A copy goes after
-  `trashDays` (30). `scripts/move-auto-memory.sh` also saves every memory folder to a tar file
+  read in `.state/memory-backup/<day>/` of the store, and the report says where. A copy goes with the trash:
+  the next kb command clears the copies that are older than `trashDays` (30). `scripts/move-auto-memory.sh` also saves every memory folder to a tar file
   that only you can read.
 - The allow rules let the agent read and save notes with no question. The session start and the
   hooks tell it to run these commands. The skills allow their own commands. Without the rules, the

@@ -209,12 +209,13 @@ End with this, and nothing after it. Write it as Markdown, not in a code block, 
 - **<title>**
   <new note or rule, or the place that already held it>
 
-A copy of each removed memory file is in <the folder of the backup paths>.
+Copies of the removed memory files: <the folder that holds the `backup` paths, as `--remove-memory` printed them>
 
 **Skipped:** <candidate> (<reason>), <candidate> (<reason>).
 ```
 
 - The first line is the verdict. Write `**Safe to clear**`, or `**Not safe to clear** - <what is unsaved>` when a `kb` command failed, or when open work exists that no note describes. Never add "yes" or "no".
+- Print the `Copies of the removed memory files` line only when `--remove-memory` removed a file in this run, and name the exact folder: the part of a `backup` path before the file name. Leave the line out otherwise.
 - Show the title of a note, not its id. Keep each reason to one short sentence.
 - Under a saved gotcha or how-to that has no trigger and no anchor, add one line: `No trigger: <why none fits>`.
 - Under a saved repo note, not open work, that has no anchor, add one line: `No anchor: <why no file fits>`.

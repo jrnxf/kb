@@ -6,6 +6,7 @@ import { type WriteOp, logEvent, rollUp } from "./log.ts";
 import { BODY_CHARS, KbError, type Note, serializeNote, validateNote } from "./note.ts";
 import { type RepoInfo, commitAt } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
+import { pruneMemoryBackups } from "./session.ts";
 import { clearStaleCache } from "./stale.ts";
 import { type Store, type StoredNote, writeAtomic } from "./store.ts";
 import { kickSync } from "./sync.ts";
@@ -243,6 +244,7 @@ export function clearsAt(trashedAt: string, days: number): string {
  */
 export function tidyTrash(store: Store, now = nowIso()): string[] {
   const days = store.config().trashDays;
+  pruneMemoryBackups(store, days, Date.parse(now)); // the copies of removed memory files age out with the trash
   const expired: StoredNote[] = [];
   let stamped = 0;
   for (const note of store.notes({ trashed: true })) {

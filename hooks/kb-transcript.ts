@@ -6,12 +6,13 @@
 // `kb-transcript --memory` names Claude Code's auto memory folder of this project, for /kb:save.
 // `kb-transcript --remove-memory <file>` keeps a private copy of one memory file, then removes it.
 
-import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { maskSecrets } from "../cli/secrets.ts";
-import { type UnsavedSession, allUnsaved, isDir, unsavedSession, writeRecoverFile } from "../cli/session.ts";
-import { Store, git, writeAtomic } from "../cli/store.ts";
+import { MEMORY_BACKUPS, type UnsavedSession, allUnsaved, isDir, privateDir, unsavedSession, writeRecoverFile } from "../cli/session.ts";
+import { localDate } from "../cli/note.ts";
+import { Store, git } from "../cli/store.ts";
 import { readConversation } from "./transcript.ts";
 import { settle } from "./unsaved-notice.ts";
 
@@ -109,57 +110,47 @@ function memory(): void {
   console.log(JSON.stringify({ folder, files }));
 }
 
-/** The copies of removed memory files, one folder per day. A folder older than `trashDays` goes, as a note in the trash does. */
-const BACKUPS = "memory-backup";
-
 /**
  * Remove one auto memory file that kb or an instruction file holds now, after a private copy of it
  * goes to the store's per-machine state folder. /kb:save runs this in place of `rm`, so a fact that
  * a save got wrong can come back. The path must be a memory file, as Claude Code lays them out:
- * `<config>/projects/<name>/memory/<file>.md`, not MEMORY.md, and not a link.
+ * `<config>/projects/<name>/memory/<file>.md` in Claude's own config folder, not MEMORY.md, and not
+ * a link. A copy goes with the trash, `trashDays` after the day of its removal.
  */
 function removeMemory(store: Store, file: string | undefined): void {
   if (!file) fail("usage: kb-transcript --remove-memory <absolute path of the memory file>");
   let real: string;
+  let projects: string;
   try {
     real = join(realpathSync(dirname(file)), basename(file));
     if (!lstatSync(real).isFile()) fail(`${file} is not a file`);
+    projects = realpathSync(join(process.env.CLAUDE_CONFIG_DIR || join(process.env.HOME || homedir(), ".claude"), "projects"));
   } catch {
     fail(`no memory file ${file}`);
   }
   const folder = dirname(real);
-  const project = basename(dirname(folder));
-  if (!real.endsWith(".md") || basename(real) === "MEMORY.md" || basename(folder) !== "memory" || basename(dirname(dirname(folder))) !== "projects") {
-    fail(`${file} is not an auto memory file: kb removes only <config>/projects/<name>/memory/<file>.md, and never MEMORY.md`);
+  const name = basename(dirname(folder));
+  if (!real.endsWith(".md") || basename(real) === "MEMORY.md" || basename(folder) !== "memory" || dirname(dirname(folder)) !== projects) {
+    fail(`${file} is not an auto memory file: kb removes only ${join(projects, "<name>", "memory", "<file>.md")}, and never MEMORY.md`);
   }
   store.ensure();
-  const root = store.statePath(BACKUPS);
-  const day = new Date().toISOString().slice(0, 10);
-  const into = join(root, day, project);
-  mkdirSync(into, { recursive: true, mode: 0o700 });
-  for (const dir of [root, join(root, day), into]) chmodSync(dir, 0o700);
-  // A second file of the same name on the same day gets a number, so no copy is lost.
+  const root = store.statePath(MEMORY_BACKUPS);
+  const into = join(root, localDate(new Date().toISOString()), name);
+  privateDir(into, root);
+  // A second file of the same name on the same day gets a number. An exclusive create never takes a copy that is there.
+  const text = readFileSync(real, "utf8");
   let backup = join(into, basename(real));
-  for (let n = 2; isFile(backup); n++) backup = join(into, `${basename(real, ".md")}.${n}.md`);
-  writeAtomic(backup, readFileSync(real, "utf8"), 0o600);
+  for (let n = 2; ; n++) {
+    try {
+      writeFileSync(backup, text, { flag: "wx", mode: 0o600 });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      backup = join(into, `${basename(real, ".md")}.${n}.md`);
+    }
+  }
   rmSync(real);
-  pruneBackups(root, store.config().trashDays);
   console.log(JSON.stringify({ removed: real, backup }));
-}
-
-const isFile = (path: string) => {
-  try {
-    return lstatSync(path).isFile();
-  } catch {
-    return false;
-  }
-};
-
-function pruneBackups(root: string, days: number): void {
-  const oldest = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
-  for (const day of readdirSync(root)) {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(day) && day < oldest) rmSync(join(root, day), { recursive: true, force: true });
-  }
 }
 
 const arg = process.argv[2];

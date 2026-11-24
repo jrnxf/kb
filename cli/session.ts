@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fstatSync, ftruncateSync, futimesSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { type ForgetWhy, type LogEvent, logEvent } from "./log.ts";
+import { localDate } from "./note.ts";
 import { type Store, writeAtomic } from "./store.ts";
 
 const KEEP_MS = 7 * 86_400_000;
@@ -63,10 +64,36 @@ const recoverPath = (store: Store, session: string) => store.statePath(join("rec
  */
 export function writeRecoverFile(store: Store, session: string, text: string): string {
   const path = recoverPath(store, session);
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  chmodSync(dirname(path), 0o700); // the folder can be older than this rule
+  privateDir(dirname(path));
   writeAtomic(path, text, 0o600);
   return path;
+}
+
+/** Make a folder that only the user can read, and the folders above it up to `top`. A folder can be older than this rule. */
+export function privateDir(path: string, top = path): void {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  for (let dir = path; ; dir = dirname(dir)) {
+    chmodSync(dir, 0o700);
+    if (dir === top || dirname(dir) === dir) break;
+  }
+}
+
+/** The copies of removed auto memory files, one folder per day, in the store's state folder. */
+export const MEMORY_BACKUPS = "memory-backup";
+
+/** Remove the day folders of the copies that are older than `days`, as the trash clears a note. */
+export function pruneMemoryBackups(store: Store, days: number, now = Date.now()): void {
+  const root = store.statePath(MEMORY_BACKUPS);
+  const oldest = localDate(new Date(now - days * 86_400_000).toISOString());
+  let names: string[];
+  try {
+    names = readdirSync(root);
+  } catch {
+    return; // no file was ever removed on this machine
+  }
+  for (const day of names) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day) && day < oldest) rmSync(join(root, day), { recursive: true, force: true });
+  }
 }
 
 const markPath = (store: Store, session: string) => store.statePath(`unsaved-${safe(session)}.json`);

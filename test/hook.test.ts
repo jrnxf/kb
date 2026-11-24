@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { SAVE_RULE } from "../cli/context.ts";
 import { CHECKPOINT_RULE } from "../hooks/checkpoint-rule.ts";
 import { RUN_ENV } from "../cli/audit-run.ts";
@@ -485,8 +485,9 @@ describe("kb-transcript --memory", () => {
 // /kb:save removes a memory file that kb holds now. A save can get a fact wrong, so a copy stays.
 describe("kb-transcript --remove-memory", () => {
   const BIN = join(ROOT, "bin", "kb-transcript");
-  const run = (home: string, file: string) => {
-    const r = Bun.spawnSync([BIN, "--remove-memory", file], { cwd: plain(), env: { ...process.env, KB_HOME: home }, stdout: "pipe", stderr: "pipe" });
+  // The config folder of a file is four folders up: <config>/projects/<name>/memory/<file>.
+  const run = (home: string, file: string, config = dirname(dirname(dirname(dirname(file))))) => {
+    const r = Bun.spawnSync([BIN, "--remove-memory", file], { cwd: plain(), env: { ...process.env, KB_HOME: home, CLAUDE_CONFIG_DIR: config }, stdout: "pipe", stderr: "pipe" });
     return { code: r.exitCode, out: JSON.parse(r.stdout.toString()) as { removed?: string; backup?: string; error?: string } };
   };
   const folder = () => {
@@ -532,13 +533,45 @@ describe("kb-transcript --remove-memory", () => {
     expect(existsSync(join(dir, "link.md"))).toBe(true);
   });
 
-  test("clears the copies of days older than trashDays", () => {
+  test("removes nothing outside Claude's own config folder, even at the same depth", () => {
     const store = tempStore();
-    const old = join(store.home, ".state", "memory-backup", "2020-01-01", "-home-user-app");
-    mkdirSync(old, { recursive: true });
-    writeFileSync(join(old, "x.md"), "x");
-    run(store.home, join(folder(), "fact.md"));
-    expect(existsSync(join(store.home, ".state", "memory-backup", "2020-01-01"))).toBe(false);
+    const site = join(tempDir(), "dev", "site", "projects", "blog", "memory");
+    mkdirSync(site, { recursive: true });
+    writeFileSync(join(site, "plan.md"), "the plan");
+    const other = tempDir("kb-claude-");
+    mkdirSync(join(other, "projects"));
+    const r = run(store.home, join(site, "plan.md"), other);
+    expect(r.code).toBe(1);
+    expect(r.out.error).toContain("not an auto memory file");
+    expect(existsSync(join(site, "plan.md"))).toBe(true);
+    // A link in the config folder that leads out of it does not count either.
+    const config = tempDir("kb-claude-");
+    mkdirSync(join(config, "projects"), { recursive: true });
+    symlinkSync(join(site, "..", ".."), join(config, "projects", "elsewhere"));
+    const viaLink = run(store.home, join(config, "projects", "elsewhere", "blog", "memory", "plan.md"), config);
+    expect(viaLink.code).toBe(1);
+    expect(existsSync(join(site, "plan.md"))).toBe(true);
+  });
+
+  test("a command of kb clears the copies of days older than trashDays", () => {
+    const store = tempStore();
+    const root = join(store.home, ".state", "memory-backup");
+    mkdirSync(join(root, "2020-01-01", "-home-user-app"), { recursive: true });
+    writeFileSync(join(root, "2020-01-01", "-home-user-app", "x.md"), "x");
+    mkdirSync(join(root, "2999-01-01"), { recursive: true });
+    expect(kb(store, ["list"]).code).toBe(0);
+    expect(existsSync(join(root, "2020-01-01"))).toBe(false);
+    expect(existsSync(join(root, "2999-01-01"))).toBe(true);
+  });
+
+  test("names the day folder by the local day", () => {
+    const store = tempStore();
+    const dir = folder();
+    // 23:30 in Lisbon in summer is 22:30 UTC, and 02:30 on the next day in Tokyo: the folder is the day of this machine.
+    const r = Bun.spawnSync([BIN, "--remove-memory", join(dir, "fact.md")], { cwd: plain(), env: { ...process.env, KB_HOME: store.home, CLAUDE_CONFIG_DIR: dirname(dirname(dirname(dir))), TZ: "Pacific/Kiritimati" }, stdout: "pipe", stderr: "pipe" });
+    const backup = (JSON.parse(r.stdout.toString()) as { backup: string }).backup;
+    const day = (zone: string) => new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(new Date());
+    expect(basename(dirname(dirname(backup)))).toBe(day("Pacific/Kiritimati"));
   });
 
   test("the save skills remove memory with it, and allow no rm", () => {
