@@ -103,12 +103,16 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
   }
 }
 
+/** Set to stop kickSync, so a writer that nobody watches (the audit agent) never pushes the store. */
+export const NO_SYNC_ENV = "KB_NO_SYNC";
+
 /**
  * Start a sync in a detached process and return at once.
  * With throttleMs, skip it when the last sync is more recent than that.
  */
 export function kickSync(store: Store, throttleMs = 0): boolean {
   try {
+    if (process.env[NO_SYNC_ENV]) return false;
     if (!store.exists() || !store.config().sync || !store.hasRemote()) return false;
     const stamp = join(store.home, ".sync-last");
     if (throttleMs > 0 && Date.now() - mtime(stamp) < throttleMs) return false;

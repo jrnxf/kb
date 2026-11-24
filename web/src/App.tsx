@@ -268,7 +268,7 @@ export function App() {
     mutationFn: api.startAudit,
     onSuccess: (run) => {
       auditing.current = run.scope;
-      toast(`An agent audits ${scopeName(run.scope)}. This takes a few minutes.`, { id: "kb" });
+      toast(`An agent audits ${scopeName(run.scope)}. ${run.notice ?? ""} This takes a few minutes.`, { id: "kb" });
     },
     onError: toastError,
     onSettled: () => reloadPage(),

@@ -3,7 +3,8 @@ import { type Browser, chromium } from "playwright";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { applyAudit, auditData, openAudits, proposeAudit, readAudit } from "../cli/audit.ts";
-import { AGENT_ENV, AGENT_TOOLS, auditPrompt, runState, startRun, waitRun } from "../cli/audit-run.ts";
+import { AGENT_ENV, AGENT_TOOLS, agentArgs, auditModel, auditPrompt, costNotice, runState, skillTools, startRun, waitRun } from "../cli/audit-run.ts";
+import { kickSync } from "../cli/sync.ts";
 import { buildContext, contextBudget, contextFor, indexLine } from "../cli/context.ts";
 import { auditableScopes, rememberRepo, repoRoot } from "../cli/repos.ts";
 import type { RepoInfo } from "../cli/scope.ts";
@@ -527,6 +528,83 @@ describe("kb audit starts an agent", () => {
     expect(existsSync(cwd)).toBe(false);
   });
 
+  test("the agent gets the narrow tools, the read limit and the model of auditModel, and the user reads what it costs", () => {
+    const store = setup();
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ auditModel: "sonnet" }));
+    const r = cli(store, tempRepo({ remote: REMOTE }), "nothing", ["audit"]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("It runs a headless Claude session on sonnet, which counts against your Claude plan or API bill");
+    const args = readFileSync(join(r.out, "args.bin"), "utf8").split("\0").slice(0, -1);
+    expect(args).toEqual(agentArgs(auditPrompt(), "sonnet"));
+    expect(args.slice(2)).toEqual([
+      "--model", "sonnet",
+      "--setting-sources", "",
+      "--permission-mode", "dontAsk",
+      "--settings", '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}',
+      "--allowedTools", ...AGENT_TOOLS,
+    ]);
+    expect(args.slice(0, 2)).toEqual(["-p", auditPrompt()]);
+  });
+
+  test("the agent runs on opus by default, and a model that is not a model name is refused, not replaced by opus", () => {
+    const store = setup();
+    expect(auditModel(store)).toBe("opus");
+    const set = (auditModel: unknown) => writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ auditModel }));
+    for (const bad of ["--dangerously-skip-permissions", "", "opus sonnet", 7, null]) {
+      set(bad);
+      // Other commands still work with the wrong value.
+      expect(() => store.config()).not.toThrow();
+      expect(() => auditModel(store), String(bad)).toThrow("auditModel in kb.config.json");
+      expect(() => startRun(store, "global"), String(bad)).toThrow("not a model name");
+    }
+    set("--dangerously-skip-permissions");
+    const refused = cli(store, tempRepo({ remote: REMOTE }), "nothing", ["audit"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain("not a model name");
+    expect(existsSync(join(refused.out, "args.bin"))).toBe(false);
+    for (const good of ["claude-opus-4-1[1m]", "us.anthropic.claude-opus-4-1-v1:0", "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-4-1-v1:0", "projects/p/locations/l/models/m"]) {
+      set(good);
+      expect(auditModel(store)).toBe(good);
+    }
+    set("claude-opus-4-1[1m]");
+    const r = cli(store, tempRepo({ remote: REMOTE }), "nothing", ["audit", "--no-wait"]);
+    expect(r.stdout).toContain("headless Claude session on claude-opus-4-1[1m]");
+  });
+
+  test("--json carries the cost notice, with and without --no-wait", () => {
+    const store = setup();
+    const notice = costNotice(store);
+    const dir = tempRepo({ remote: REMOTE });
+    expect(JSON.parse(cli(store, dir, "nothing", ["audit", "--no-wait", "--json"]).stdout).notice).toBe(notice);
+    expect(JSON.parse(cli(store, dir, "nothing", ["audit", "--json"]).stdout).notice).toBe(notice);
+    expect(JSON.parse(cli(store, dir, "propose", ["audit", "--json"]).stdout).notice).toBe(notice);
+  });
+
+  test("the page's start answer carries the same cost notice", () => {
+    const store = setup();
+    process.env[AGENT_ENV] = "/usr/bin/true";
+    try {
+      expect(startRun(store, "global").notice).toBe(costNotice(store));
+    } finally {
+      delete process.env[AGENT_ENV];
+    }
+  });
+
+  test("the agent's own writes never push the store", () => {
+    const store = setup();
+    const r = cli(store, tempRepo({ remote: REMOTE }), "nothing", ["audit"]);
+    expect(readFileSync(join(r.out, "nosync.txt"), "utf8")).toBe("1");
+    // With a remote and sync on, a write starts a sync, except where the agent sets KB_NO_SYNC.
+    sh(store.home, "git", "remote", "add", "origin", "https://example.com/team/store.git");
+    expect(store.config().sync && store.hasRemote()).toBe(true);
+    process.env.KB_NO_SYNC = "1";
+    try {
+      expect(kickSync(store)).toBe(false);
+    } finally {
+      delete process.env.KB_NO_SYNC;
+    }
+  });
+
   test("a session start records where the repo is checked out", () => {
     const store = setup();
     const dir = tempRepo({ remote: REMOTE });
@@ -548,11 +626,44 @@ describe("kb audit starts an agent", () => {
   // A real headless run saved its cards this way. A file anywhere else needs the Write tool, which
   // the agent does not get, and a heredoc with the JSON is refused.
   test("the headless agent writes its proposal to the scratchpad directory and passes --file, so it needs no Write permission", () => {
-    expect(AGENT_TOOLS).toEqual(["Bash(kb *)", "Read", "Grep", "Glob"]);
+    expect(AGENT_TOOLS.filter((t) => !t.startsWith("Bash("))).toEqual(["Read", "Grep", "Glob"]);
     const prompt = auditPrompt();
     expect(prompt).toContain("to a file in your scratchpad directory with the Write tool");
     expect(prompt).toContain("kb audit propose --file /full/path/of/the/file.json");
     expect(prompt).not.toMatch(/kb audit propose <<|\| kb audit propose/);
+  });
+});
+
+describe("the tools of the headless agent", () => {
+  // Claude Code reads Bash(kb stale *) as the prefix `kb stale`: it matches the bare command too.
+  const allowed = (command: string) => AGENT_TOOLS.some((t) => {
+    const m = /^Bash\((.*) \*\)$/.exec(t);
+    return m && (command === m[1] || command.startsWith(`${m[1]} `));
+  });
+  const skill = readFileSync(join(import.meta.dir, "..", "skills", "audit", "SKILL.md"), "utf8");
+
+  test("the skill and the headless agent share one list", () => {
+    expect(/^allowed-tools: (.*)$/m.exec(skill)![1]!.split(", ")).toEqual(skillTools());
+    expect(AGENT_TOOLS).toEqual([...skillTools(), "Read", "Grep", "Glob"]);
+    expect(skillTools()).not.toContain("Bash(kb *)");
+  });
+
+  test("allow every kb command the audit skill runs", () => {
+    // A command the skill tells the agent to run is a line, or an inline code span in the prose.
+    // A command it names to forbid (kb delete, kb restore, kb serve) is not run, so it is not here.
+    const spans = [...skill.matchAll(/`(kb [^`]+)`/g)].map((m) => m[1]!);
+    const lines = [...skill.matchAll(/^kb .*$/gm)].map((m) => m[0]);
+    const forbidden = /^kb (delete|restore|serve)\b/;
+    const commands = [...spans, ...lines].filter((c) => !forbidden.test(c));
+    expect(commands.length).toBeGreaterThan(10);
+    for (const command of commands) expect(allowed(command), command).toBe(true);
+    for (const command of ["kb show v --check", "kb list --scope global --json", "kb audit status", "kb instructions", "kb search token", "kb budget"]) expect(allowed(command)).toBe(true);
+  });
+
+  test("allow no kb command that deletes, restores, serves or syncs", () => {
+    for (const command of ["kb delete v", "kb restore v", "kb serve", "kb sync", "kb empty-trash", "kb audit", "kb scope move a b"]) expect(allowed(command)).toBe(false);
+    expect(AGENT_TOOLS).not.toContain("Bash(kb *)");
+    expect(AGENT_TOOLS).not.toContain("Write");
   });
 });
 
