@@ -514,21 +514,27 @@ sets no `version`, so every commit is a release.
 
 The plugin puts `kb` on the PATH of Claude Code's shell only. For `kb serve` and the other commands
 in your own terminal, add this function to `~/.bashrc` or `~/.zshrc`. It reads Claude Code's list of
-installed plugins and runs the `kb@` install of your user scope:
+installed plugins and runs the `kb@` install of your user scope. Failing that, it runs a project
+install whose folder holds the current directory:
 
 ```bash
 kb() {
-  local dir
-  dir=$(bun -e '
-    const file = `${process.env.CLAUDE_CONFIG_DIR || `${process.env.HOME}/.claude`}/plugins/installed_plugins.json`;
-    let plugins = {};
-    try { plugins = JSON.parse(await Bun.file(file).text()).plugins ?? {}; } catch {}
-    const [, installs] = Object.entries(plugins).find(([key]) => key.startsWith("kb@")) ?? [];
-    const install = installs?.find((i) => i.scope === "user") ?? installs?.[0];
-    if (!install) { console.error(`kb: the kb plugin is not in ${file}. Run: claude plugin install kb@jrnxf`); process.exit(1); }
-    console.log(install.installPath);
-  ') || return
-  bun "$dir/cli/main.ts" "$@"
+  bun -e '
+    const { readFileSync } = require("node:fs"), { homedir } = require("node:os"), { join } = require("node:path");
+    const env = process.env, cwd = process.cwd();
+    const file = join(env.CLAUDE_CONFIG_DIR || join(env.HOME || homedir(), ".claude"), "plugins", "installed_plugins.json");
+    const fail = (why) => { console.error(`kb: ${why}`); process.exit(1); };
+    let plugins;
+    try { plugins = JSON.parse(readFileSync(file, "utf8")).plugins ?? {}; }
+    catch (e) { fail(e.code === "ENOENT" ? `the kb plugin is not in ${file}. Run: claude plugin install kb@jrnxf` : `cannot read ${file}: ${e.message}`); }
+    const keys = Object.keys(plugins).filter((k) => k.startsWith("kb@")).sort((a, b) => (b === "kb@jrnxf") - (a === "kb@jrnxf"));
+    const installs = keys.flatMap((k) => [plugins[k]].flat()).filter((i) => i?.installPath);
+    const inside = (i) => i.scope === "project" && i.projectPath && (cwd + "/").startsWith(i.projectPath.replace(/\/$/, "") + "/");
+    const install = installs.find((i) => (i.scope ?? "user") === "user") ?? installs.find(inside);
+    if (!install) fail(`no user install of the kb plugin in ${file}. Run: claude plugin install kb@jrnxf`);
+    process.argv = [process.argv[0], "kb", ...process.argv.slice(1)];
+    await import(join(install.installPath, "cli", "main.ts"));
+  ' -- "$@"
 }
 ```
 
