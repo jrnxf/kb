@@ -1,9 +1,10 @@
-// The store on disk: paths, config, notes, the usage counters of older versions, generated files and git.
+// The store on disk: paths, config, notes, generated files and git.
 
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import { foldOldCounters } from "./log.ts";
 import { KINDS, KbError, type Note, parseNote, serializeNote } from "./note.ts";
 
 export interface Config {
@@ -41,12 +42,6 @@ export interface Local extends Partial<Pick<Config, MachineKey>> {
   pinned?: boolean;
   machine: string;
   aliases: Record<string, string>;
-}
-
-/** What kb recorded per note before it had an event log. Nothing writes it now. */
-export interface Usage {
-  uses: number;
-  last_used?: string;
 }
 
 export interface StoredNote extends Note {
@@ -312,6 +307,7 @@ export class Store {
     this.closeOldStore();
     this.moveToState();
     this.tidyConfig();
+    foldOldCounters(this); // counters of an older kb go into the roll-up, before any command reads the ids
     const ignorePath = join(this.home, ".gitignore");
     // Add lines that a store made by an older version lacks.
     const have = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
@@ -441,8 +437,7 @@ export class Store {
       ...raw,
       sync: machine("sync"),
       globalInstructions: machine("globalInstructions"),
-      // Only the budgets of this version are read. A config of an older kb can still name
-      // `indexLines` and `globalIndexLines`: both limits are gone, and the keys are ignored.
+      // Only these budgets are read. Any other key is ignored.
       budgets: {
         contextChars: within(raw.budgets?.contextChars, 0, Infinity, DEFAULT_CONFIG.budgets.contextChars),
         // 0 is a choice: no briefs, so open work is in the index only.
@@ -568,34 +563,6 @@ export class Store {
   remove(note: StoredNote): void {
     rmSync(note.path, { force: true });
     this.track(note.path);
-  }
-
-  // ---- usage, from older versions ----
-
-  /**
-   * The counters that kb kept in usage/, one file per machine, before it had an event log. They
-   * are synced history, so the files stay. Two things still read them: the last activity of a note
-   * takes `last_used`, and `kb add` never gives a new note an id that has counters. What a machine
-   * shares of its log now is the roll-up in activity/, which log.ts reads and writes.
-   */
-  usage(): Map<string, Usage> {
-    const total = new Map<string, Usage>();
-    let files: string[] = [];
-    try {
-      files = readdirSync(join(this.home, "usage")).filter((f) => f.endsWith(".json"));
-    } catch {
-      return total;
-    }
-    for (const file of files) {
-      const data = readJson<Record<string, Usage>>(join(this.home, "usage", file)) ?? {};
-      for (const [id, entry] of Object.entries(data)) {
-        const current = total.get(id) ?? { uses: 0 };
-        current.uses += entry.uses ?? 0;
-        if (entry.last_used && (!current.last_used || entry.last_used > current.last_used)) current.last_used = entry.last_used;
-        total.set(id, current);
-      }
-    }
-    return total;
   }
 
   // ---- generated files and git ----

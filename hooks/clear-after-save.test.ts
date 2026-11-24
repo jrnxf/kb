@@ -27,7 +27,7 @@ function world(on: On) {
 
 async function kbClear($: Engine, opts: { record?: string | null; report?: string; reason?: string; agentEndsFirst?: boolean } = {}) {
   await $.command.run({ command: 'kb:clear', args: '' } as never)
-  const record = opts.record === undefined ? 'kb checkpointed abc-123' : opts.record
+  const record = opts.record === undefined ? 'kb saved abc-123' : opts.record
   if (record !== null) await $.tool.call({ tool: 'Bash', command: record } as never)
   if (opts.agentEndsFirst) await $.turn.complete(answer('found it', { agentId: 'agent-1' }))
   await $.turn.complete(answer(opts.report ?? REPORT, { reason: opts.reason }))
@@ -48,16 +48,16 @@ test('a subagent that ends during the save does not end the watch', async ($, on
   expect(w.ran).toEqual(['kb:clear', 'clear'])
 })
 
-test('no clear when kb checkpointed did not run', async ($, on) => {
+test('no clear when kb saved did not run', async ($, on) => {
   const w = world(on)
   await kbClear($, { record: null })
   await w.clock.advance(1000)
   expect(w.ran).toEqual(['kb:clear'])
 })
 
-test('no clear when kb checkpointed failed', async ($, on) => {
+test('no clear when kb saved failed', async ($, on) => {
   const w = world(on)
-  await kbClear($, { record: 'kb checkpointed abc-123 FAIL' })
+  await kbClear($, { record: 'kb saved abc-123 FAIL' })
   await w.clock.advance(1000)
   expect(w.ran).toEqual(['kb:clear'])
 })
@@ -87,7 +87,7 @@ test('no clear when the turn was interrupted', async ($, on) => {
 test('/kb:save never clears', async ($, on) => {
   const w = world(on)
   await $.command.run({ command: 'kb:save', args: '' } as never)
-  await $.tool.call({ tool: 'Bash', command: 'kb checkpointed abc-123' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'kb saved abc-123' } as never)
   await $.turn.complete(answer(REPORT))
   await w.clock.advance(1000)
   expect(w.ran).toEqual(['kb:save'])
@@ -96,7 +96,7 @@ test('/kb:save never clears', async ($, on) => {
 test('the watch lasts one turn', async ($, on) => {
   const w = world(on)
   await kbClear($, { report: 'May I add it to CLAUDE.md?' })
-  await $.tool.call({ tool: 'Bash', command: 'kb checkpointed abc-123' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'kb saved abc-123' } as never)
   await $.turn.complete(answer(REPORT))
   await w.clock.advance(1000)
   expect(w.ran).toEqual(['kb:clear'])

@@ -494,6 +494,8 @@ export const LOG_MONTHS = 12;
 export interface NoteRollUp {
   /** The last activity. */
   last?: string;
+  /** The note had a counter in usage/ of an older kb, with no time. Its id has a history, and it has no activity. */
+  seen?: boolean;
   /** The newest verdict "helped", and the newest verdict "wrong". */
   helped?: string;
   wrong?: string;
@@ -521,6 +523,7 @@ function readRollUp(path: string): Map<string, NoteRollUp> {
     const { last, helped, wrong, not_needed } = value as Record<string, unknown>;
     const entry: NoteRollUp = {};
     if (text(last)) entry.last = last as string;
+    if ((value as { seen?: unknown }).seen === true) entry.seen = true;
     if (text(helped)) entry.helped = helped as string;
     if (text(wrong)) entry.wrong = wrong as string;
     if (texts(not_needed).length > 0) entry.not_needed = texts(not_needed);
@@ -599,7 +602,10 @@ function buildRollUp(store: Store, before: Map<string, NoteRollUp>): Map<string,
     if (!notes.has(id)) notes.set(id, {});
     return notes.get(id)!;
   };
-  for (const [id, was] of before) if (was.last) of(id).last = was.last;
+  for (const [id, was] of before) {
+    if (was.last) of(id).last = was.last;
+    if (was.seen) of(id).seen = true;
+  }
   for (const [id, t] of logActivity(store)) of(id).last = newest(of(id).last, t);
   for (const [id, judged] of logJudgments(store)) {
     const entry = of(id);
@@ -612,8 +618,82 @@ function buildRollUp(store: Store, before: Map<string, NoteRollUp>): Map<string,
 
 /** One line per note, in id order, so a commit of the file shows only the notes that changed. */
 function rollUpText(notes: Map<string, NoteRollUp>): string {
-  const rows = [...notes].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, n]) => `${JSON.stringify(id)}: ${JSON.stringify({ last: n.last, helped: n.helped, wrong: n.wrong, not_needed: n.not_needed })}`);
+  const rows = [...notes].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([id, n]) => `${JSON.stringify(id)}: ${JSON.stringify({ last: n.last, seen: n.seen, helped: n.helped, wrong: n.wrong, not_needed: n.not_needed })}`);
   return `{\n"v": 1,\n"notes": {\n${rows.join(",\n")}\n}\n}\n`;
+}
+
+/** What the counters of an older kb say: the newest `last_used` of each note, and the files that could be read. */
+function readOldCounters(store: Store): { notes: Map<string, string | null>; good: string[]; bad: number } | null {
+  const dir = join(store.home, "usage");
+  let files: string[];
+  try {
+    files = readdirSync(dir).filter((name) => name.endsWith(".json")).sort();
+  } catch {
+    return null;
+  }
+  const notes = new Map<string, string | null>();
+  const good: string[] = [];
+  let bad = 0;
+  for (const file of files) {
+    let data: unknown;
+    try {
+      data = JSON.parse(readFileSync(join(dir, file), "utf8"));
+    } catch {
+      bad++;
+      continue;
+    }
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+      bad++;
+      continue;
+    }
+    good.push(file);
+    for (const [id, value] of Object.entries(data as Record<string, unknown>)) {
+      if (!id) continue;
+      const last = text((value as { last_used?: unknown } | null)?.last_used);
+      notes.set(id, last === null ? (notes.get(id) ?? null) : newest(notes.get(id) ?? undefined, last) ?? last);
+    }
+  }
+  return { notes, good, bad };
+}
+
+/**
+ * An older kb kept counters in usage/<machine>.json, one file per machine, before it had a log.
+ * Store.ensure() calls this, so the first command that writes folds them, once: the newest
+ * `last_used` of each note goes into the roll-up of this machine, a note with no `last_used` keeps
+ * its id with `seen`, and the files go. The use counts go, as no ranking reads them. A file that
+ * does not parse stays, with its folder. A machine id that is no safe file name folds nothing.
+ * Until a fold succeeds, lastActivity() and idsWithHistory() read the files. It never throws.
+ */
+export function foldOldCounters(store: Store): void {
+  try {
+    const old = readOldCounters(store);
+    if (!old || old.good.length === 0) return;
+    const machine = store.machine();
+    if (!SAFE_MACHINE.test(machine)) return;
+    const path = join(rollUpDir(store), `${machine}.json`);
+    const notes = readRollUp(path);
+    for (const [id, last] of old.notes) {
+      const entry = notes.get(id) ?? {};
+      if (last) entry.last = newest(entry.last, last);
+      else entry.seen = true;
+      notes.set(id, entry);
+    }
+    // The roll-up is written first: a file that stays is folded again, and the newest time wins.
+    if (notes.size > 0) {
+      mkdirSync(rollUpDir(store), { recursive: true });
+      writeAtomic(path, rollUpText(notes));
+      store.track(path);
+    }
+    const dir = join(store.home, "usage");
+    // The next commit takes the roll-up and each removed file. Git keeps no empty folder.
+    for (const file of old.good) {
+      rmSync(join(dir, file), { force: true });
+      store.track(join(dir, file));
+    }
+    if (old.bad === 0) rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // the files stay, and the readers still use them
+  }
 }
 
 /**
@@ -625,8 +705,9 @@ function rollUpText(notes: Map<string, NoteRollUp>): string {
  */
 export function rollUp(store: Store, now: Date = new Date()): boolean {
   try {
-    // No log: nothing to roll up and nothing to remove. A store with no log gets no file.
-    if (!store.exists() || logFiles(store).length === 0) return false;
+    if (!store.exists()) return false;
+    // No log: nothing to roll up and nothing to remove.
+    if (logFiles(store).length === 0) return false;
     const day = stamp(now).slice(0, 10);
     const mark = join(logDir(store), "rolled-up");
     try {
@@ -676,17 +757,17 @@ export function rollUp(store: Store, now: Date = new Date()): boolean {
 
 /**
  * The last activity of each note on any machine: the newest of a `kb show` for a task, a fire and
- * a verdict "helped" in the log of this machine, the roll-up of each machine, and the `last_used`
- * that kb recorded in usage/ before it had a log. A note with no activity is not in the map. The
- * ranking and `kb stale` both read it here.
+ * a verdict "helped" in the log of this machine, and the roll-up of each machine. A note with no
+ * activity is not in the map. The ranking and `kb stale` both read it here.
  */
 export function lastActivity(store: Store): Map<string, string> {
   const last = new Map<string, string>();
   const take = (id: string, t: string) => {
     if (t > (last.get(id) ?? "")) last.set(id, t);
   };
-  for (const [id, legacy] of store.usage()) if (legacy.last_used) take(id, legacy.last_used);
   for (const { notes } of rollUps(store)) for (const [id, entry] of notes) if (entry.last) take(id, entry.last);
+  // Counters of an older kb, until the first write folds them.
+  for (const [id, t] of readOldCounters(store)?.notes ?? []) if (t) take(id, t);
   try {
     for (const [id, t] of logActivity(store)) take(id, t);
   } catch {
@@ -697,14 +778,15 @@ export function lastActivity(store: Store): Map<string, string> {
 
 /**
  * The ids that have a history on any machine: an event of any kind in the log of this machine,
- * activity or a verdict in a roll-up, or counters of an older kb. A verdict "wrong", a check and a
+ * or activity or a verdict in a roll-up. A verdict "wrong", a check and a
  * session start are a history too, and none of them is in the roll-up of this machine before the
  * next day. `kb add` gives none of these ids to a new note, so a new note never takes the history
  * of a deleted one.
  */
 export function idsWithHistory(store: Store): Set<string> {
-  const ids = new Set<string>([...store.usage().keys(), ...lastActivity(store).keys()]);
+  const ids = new Set<string>(lastActivity(store).keys());
   for (const { notes } of rollUps(store)) for (const id of notes.keys()) ids.add(id);
+  for (const id of readOldCounters(store)?.notes.keys() ?? []) ids.add(id);
   try {
     for (const event of scanLog(store, "") as Raw[]) {
       const note = text(event.note);

@@ -81,7 +81,7 @@ const USAGE = `kb - a personal knowledge store for coding agents
                                          sent back for a rewrite
   kb instructions [--repo .]             the instruction files for a rule the user states: the global
                                          one, and the repo's CLAUDE.md and AGENTS.md
-  kb checkpointed <session-id>           record that this session saved its knowledge. A recovery adds
+  kb saved <session-id>                  record that this session saved its knowledge. A recovery adds
                                          --ended <time>, the end it read: a session that ran again
                                          since then is not marked
   kb log [--session id] [--since days]   what the log of this machine says of each note: how often a
@@ -410,11 +410,8 @@ function scopeFilter(store: Store, args: Args): string | undefined {
   return value;
 }
 
-/**
- * Why the command reads: for a task, or as a check (an audit, a look before an update). --no-use is
- * the older name of --check, which a cached skill on another machine may still pass.
- */
-const whyOf = (args: Args): Why => (args.flags.has("check") || args.flags.has("no-use") ? "check" : "task");
+/** Why the command reads: for a task, or as a check (an audit, a look before an update). */
+const whyOf = (args: Args): Why => (args.flags.has("check") ? "check" : "task");
 
 function cmdShow(store: Store, args: Args): Output {
   const given = args.positional[0];
@@ -495,10 +492,7 @@ function cmdList(store: Store, args: Args): Output {
   return { json: rows, text };
 }
 
-/**
- * `kb verdict`: what a note did for the session that got it. `kb use <id>...` is the older form of
- * `kb verdict helped`, which a cached skill on another machine may still run.
- */
+/** `kb verdict`: what a note did for the session that got it. */
 function cmdVerdict(store: Store, verdict: string | undefined, ids: string[], session?: string): Output {
   if (!VERDICTS.includes(verdict as Verdict) || ids.length === 0) throw new KbError(`usage: kb verdict <${VERDICTS.join("|")}> <id>...`);
   // A session may judge a note that it trashed a moment ago, for example a note that was wrong.
@@ -648,11 +642,11 @@ function cmdBudget(store: Store, args: Args): Output {
   return { json: b, text: lines.join("\n") };
 }
 
-function cmdCheckpointed(store: Store, args: Args): Output {
+function cmdSaved(store: Store, args: Args): Output {
   const session = args.positional[0];
-  if (!session) throw new KbError("usage: kb checkpointed <session-id> [--ended <time>]");
+  if (!session) throw new KbError("usage: kb saved <session-id> [--ended <time>]");
   // A session that ended with no checkpoint, and that another session now saves, is recovered. A
-  // session that was resumed and saves itself is checkpointed, as any session is.
+  // session that was resumed and saves itself is saved, as any session is.
   const mark = store.exists() ? unsavedSession(store, session) : null;
   const by = sessionOf(args.flags.get("session"));
   // A recovery names the end of the session that it read: the `ended` of `kb-transcript`.
@@ -969,7 +963,6 @@ const HANDLERS: Record<string, (store: Store, args: Args, json: boolean) => Outp
   search: cmdSearch,
   list: cmdList,
   verdict: (store, args) => cmdVerdict(store, args.positional[0], args.positional.slice(1), sessionOf(args.flags.get("session"))),
-  use: (store, args) => cmdVerdict(store, "helped", args.positional),
   log: cmdLog,
   trash: (store, args) => cmdMove(store, args, true),
   restore: (store, args) => cmdMove(store, args, false),
@@ -979,11 +972,17 @@ const HANDLERS: Record<string, (store: Store, args: Args, json: boolean) => Outp
   verify: cmdVerify,
   budget: cmdBudget,
   instructions: cmdInstructions,
-  checkpointed: cmdCheckpointed,
+  saved: cmdSaved,
   unsaved: cmdUnsaved,
   serve: cmdServe,
   audit: (store, args) => cmdAudit(store, args, () => inputText(args, "audit propose")),
   sync: (store) => cmdSync(store),
+};
+
+/** Commands of older versions that are gone, with what to say of each. */
+const REMOVED_COMMANDS: Record<string, string> = {
+  checkpointed: "It is now `kb saved`.",
+  use: "It is gone: kb keeps no use counts. Run `kb help`.",
 };
 
 const INFO_COMMANDS = ["help", "--help", "-h", "version", "--version"];
@@ -996,7 +995,10 @@ async function main(): Promise<number> {
     const end = rest.indexOf("--");
     json = (end < 0 ? rest : rest.slice(0, end)).includes("--json");
     // The flags are checked against the command, so an unknown command is named first.
-    if (command !== undefined && !Object.hasOwn(HANDLERS, command) && !INFO_COMMANDS.includes(command)) throw new UsageError(`unknown command "${command}". Run \`kb help\`.`);
+    if (command !== undefined && !Object.hasOwn(HANDLERS, command) && !INFO_COMMANDS.includes(command)) {
+      const gone = Object.hasOwn(REMOVED_COMMANDS, command) ? REMOVED_COMMANDS[command] : undefined;
+      throw new UsageError(`unknown command "${command}". ${gone ?? "Run `kb help`."}`);
+    }
     const args = parseArgs(rest, command);
     json = args.flags.has("json");
     const store = new Store();

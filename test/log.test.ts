@@ -246,15 +246,15 @@ describe("the summary of the log", () => {
 });
 
 describe("last activity", () => {
-  test("is the newest of a show for a task, a fire, a verdict helped and the last_used of an older kb", () => {
+  test("is the newest of a show for a task, a fire, a verdict helped and the roll-ups of the other machines", () => {
     const store = tempStore();
     logAt(store, "2026-03-01T00:00:00Z", { ev: "show", note: "shown", why: "task" });
     logAt(store, "2026-03-05T00:00:00Z", { ev: "show", note: "shown", why: "task" });
     logAt(store, "2026-03-02T00:00:00Z", { ev: "show", note: "shown", why: "task" });
     logAt(store, "2026-03-03T00:00:00Z", { ev: "fire", kind: "path", form: "title", note: "fired", tool: "Read", match: "a.ts" });
     logAt(store, "2026-03-04T00:00:00Z", { ev: "verdict", note: "helped", verdict: "helped" });
-    legacyUsage(store, "machine-a", { old: { uses: 3, last_used: "2026-01-01T00:00:00Z" }, shown: { uses: 1, last_used: "2026-02-01T00:00:00Z" }, both: { uses: 1, last_used: "2026-04-01T00:00:00Z" } });
-    legacyUsage(store, "machine-b", { old: { uses: 1, last_used: "2026-01-09T00:00:00Z" }, never: { uses: 0 } });
+    otherMachine(store, "machine-a", { old: { last: "2026-01-01T00:00:00Z" }, shown: { last: "2026-02-01T00:00:00Z" }, both: { last: "2026-04-01T00:00:00Z" } });
+    otherMachine(store, "machine-b", { old: { last: "2026-01-09T00:00:00Z" }, never: { wrong: "2026-01-09T00:00:00Z" } });
     logAt(store, "2026-03-06T00:00:00Z", { ev: "show", note: "both", why: "task" });
     // None of these is activity: a check, a look into the trash, the two other verdicts, a write, a start.
     logAt(store, "2026-06-01T00:00:00Z", { ev: "show", note: "checked", why: "check" });
@@ -463,14 +463,12 @@ describe("the roll-up of the log", () => {
       "judged-there": { wrong: "2026-02-01T00:00:00Z" },
     });
     otherMachine(store, "machine-c", { "only-there": { last: "2026-02-03T00:00:00Z" }, "there-newer": { last: "2026-03-08T00:00:00Z" } });
-    legacyUsage(store, "machine-b", { legacy: { uses: 2, last_used: "2026-01-01T00:00:00Z" }, counted: { uses: 1 } });
     expect([...lastActivity(store)].sort()).toEqual([
       ["here-newer", "2026-03-05T00:00:00Z"],
-      ["legacy", "2026-01-01T00:00:00Z"],
       ["only-there", "2026-02-03T00:00:00Z"],
       ["there-newer", "2026-03-09T00:00:00Z"],
     ]);
-    expect([...idsWithHistory(store)].sort()).toEqual(["counted", "here-newer", "judged-there", "legacy", "only-there", "there-newer"]);
+    expect([...idsWithHistory(store)].sort()).toEqual(["here-newer", "judged-there", "only-there", "there-newer"]);
     // A fresh clone has no log at all: the roll-ups still say what was active.
     rmSync(logDir(store), { recursive: true });
     expect(lastActivity(store).get("there-newer")).toBe("2026-03-09T00:00:00Z");
@@ -506,5 +504,96 @@ describe("the roll-up of the log", () => {
     expect([...lastActivity(store)]).toEqual([["d", "2026-01-02T00:00:00Z"]]);
     expect([...judgments(store)]).toEqual([["d", { notNeeded: ["2026-01-03T00:00:00Z"] }]]);
     expect([...idsWithHistory(store)]).toEqual(["d"]);
+  });
+});
+
+describe("the counters of an older kb", () => {
+  test("go once into the roll-up of this machine at the next write, the newest time wins, and the folder goes", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    putNote(store, { id: "a" });
+    putNote(store, { id: "b" });
+    const machine = store.machine();
+    otherMachine(store, machine, { a: { last: "2026-02-01T00:00:00Z" } });
+    legacyUsage(store, "machine-a", { a: { uses: 3, last_used: "2026-01-01T00:00:00Z" }, b: { uses: 1, last_used: "2026-01-05T00:00:00Z" }, never: { uses: 0 } });
+    legacyUsage(store, "machine-b", { b: { uses: 2, last_used: "2026-01-09T00:00:00Z" } });
+    writeFileSync(join(store.home, "usage", "broken.json"), "{ not json");
+    // The store of an older kb has all of this in its history already.
+    sh(store.home, "git", "add", "-A");
+    sh(store.home, "git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "old store");
+    // A read changes nothing, and it still sees the old activity.
+    expect(kb(store, ["list"]).code).toBe(0);
+    expect(existsSync(join(store.home, "usage"))).toBe(true);
+    expect(lastActivity(store).get("b")).toBe("2026-01-09T00:00:00Z");
+    // A write folds it, in the commit of the write.
+    expect(kb(store, ["add"], { stdin: JSON.stringify({ title: "New", kind: "gotcha", body: "x", scope: "global" }) }).code).toBe(0);
+    // The file that does not parse stays, and the folder with it. The others go.
+    expect(readdirSync(join(store.home, "usage"))).toEqual(["broken.json"]);
+    expect(sh(store.home, "git", "status", "--porcelain")).toBe("");
+    expect(lastActivity(store).get("a")).toBe("2026-02-01T00:00:00Z");
+    expect(lastActivity(store).get("b")).toBe("2026-01-09T00:00:00Z");
+    // A note with no time keeps its id, and has no activity.
+    expect(idsWithHistory(store).has("never")).toBe(true);
+    expect(lastActivity(store).has("never")).toBe(false);
+    // Once only: the next roll-up has nothing to fold.
+    expect(rollUp(store)).toBe(false);
+  });
+
+  test("the fold is committed with the write: the roll-up and every removed file, a clean tree after", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    legacyUsage(store, "machine-a", { a: { uses: 3, last_used: "2026-01-01T00:00:00Z" } });
+    legacyUsage(store, "machine-b", { b: { uses: 2, last_used: "2026-01-09T00:00:00Z" } });
+    // The old files are in the history, as a store of an older kb has them.
+    sh(store.home, "git", "add", "-A");
+    sh(store.home, "git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "old counters");
+    expect(kb(store, ["add"], { stdin: JSON.stringify({ title: "New", kind: "gotcha", body: "x", scope: "global" }) }).code).toBe(0);
+    expect(existsSync(join(store.home, "usage"))).toBe(false);
+    expect(sh(store.home, "git", "status", "--porcelain")).toBe("");
+    expect(sh(store.home, "git", "ls-files", "usage")).toBe("");
+    expect(sh(store.home, "git", "ls-files", "activity")).toContain(`activity/${store.machine()}.json`);
+  });
+
+  test("a new note never takes an id that only the old counters know", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    legacyUsage(store, "machine-a", { old: { uses: 2, last_used: "2026-01-01T00:00:00Z" }, never: { uses: 0 } });
+    for (const [title, id] of [["Old", "old-2"], ["Never", "never-2"]]) {
+      const out = kb(store, ["add", "--json"], { stdin: JSON.stringify({ title, kind: "gotcha", body: "x", scope: "global" }) });
+      expect(JSON.parse(out.stdout).id).toBe(id);
+    }
+    expect(lastActivity(store).get("old")).toBe("2026-01-01T00:00:00Z");
+    expect(lastActivity(store).has("old-2")).toBe(false);
+  });
+
+  test("a read before the fold sees the old activity and ids", () => {
+    const store = tempStore();
+    legacyUsage(store, "machine-a", { a: { uses: 1, last_used: "2026-01-01T00:00:00Z" }, b: { uses: 0 } });
+    expect(lastActivity(store).get("a")).toBe("2026-01-01T00:00:00Z");
+    expect([...idsWithHistory(store)].sort()).toEqual(["a", "b"]);
+    expect(existsSync(join(store.home, "usage"))).toBe(true);
+  });
+
+  test("a file that does not parse is kept, and the good files fold", () => {
+    const store = tempStore();
+    sh(store.home, "git", "init", "-q", "-b", "main");
+    legacyUsage(store, "machine-a", { a: { uses: 1, last_used: "2026-01-01T00:00:00Z" } });
+    writeFileSync(join(store.home, "usage", "broken.json"), "{ not json");
+    store.ensure();
+    expect(readFileSync(join(store.home, "usage", "broken.json"), "utf8")).toBe("{ not json");
+    expect(existsSync(join(store.home, "usage", "machine-a.json"))).toBe(false);
+    expect(lastActivity(store).get("a")).toBe("2026-01-01T00:00:00Z");
+  });
+
+  test("a machine id that is no file name folds nothing, and the files are still read", () => {
+    const store = tempStore();
+    store.updateLocal((local) => {
+      local.machine = "bad/machine";
+    });
+    legacyUsage(store, "machine-a", { a: { uses: 1, last_used: "2026-01-01T00:00:00Z" } });
+    store.ensure();
+    expect(existsSync(join(store.home, "usage", "machine-a.json"))).toBe(true);
+    expect(lastActivity(store).get("a")).toBe("2026-01-01T00:00:00Z");
+    expect(idsWithHistory(store).has("a")).toBe(true);
   });
 });

@@ -463,7 +463,7 @@ export function promptAfter(path: string, since: string): { offset?: number } | 
     }
     first ??= start + lineStart;
     if (line.type !== "user" || line.isMeta || line.isSidechain || line.isCompactSummary) continue;
-    // A tool result, such as the one of `kb checkpointed`, is no prompt. Nor is a bare slash command, such as /clear.
+    // A tool result, such as the one of `kb saved`, is no prompt. Nor is a bare slash command, such as /clear.
     if (userSaid(line, none).some((said) => said.kind === "prompt" || (said.kind === "command" && said.args !== "" && said.name !== RECOVER))) typed = true;
   }
   if (!timed) return null;

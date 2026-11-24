@@ -189,7 +189,7 @@ export function isLive(store: Store, session: string): boolean {
 
 /**
  * Change the mark of an unsaved session, and say if it was written. The mark is written in place,
- * and only while it exists: a write to a new file would bring back a mark that `kb checkpointed`
+ * and only while it exists: a write to a new file would bring back a mark that `kb saved`
  * or a forget removed a moment ago. The mark keeps its age, so it still goes 7 days after the
  * session ended. Never throws: a store that cannot be written changes nothing.
  */
