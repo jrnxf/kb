@@ -38,11 +38,31 @@ export function logWrites(store: Store, op: WriteOp, ids: string[], neighbors: s
   logEvent(store, ids.map((note) => ({ ev: "write" as const, note, op, ...(from ? { from } : {}), ...(neighbors.length > 0 ? { neighbors } : {}) })));
 }
 
-/** Ids that contain the given text. For a caller who remembers a part of an id. */
-export function closeIds(store: Store, part: string): string[] {
+/** Every note of the store, or only the active (false) or trashed (true) ones. */
+const poolOf = (store: Store, trashed?: boolean): StoredNote[] => (trashed === undefined ? [...store.notes(), ...store.notes({ trashed: true })] : store.notes({ trashed }));
+
+/** Ids that contain the given text, in `trashed` notes only or in all. For a caller who remembers a part of an id. */
+export function closeIds(store: Store, part: string, trashed?: boolean): string[] {
   const text = part.toLowerCase();
   if (!text) return [];
-  return [...store.notes(), ...store.notes({ trashed: true })].filter((n) => n.id.includes(text)).map((n) => n.id).sort();
+  return poolOf(store, trashed).filter((n) => n.id.includes(text)).map((n) => n.id).sort();
+}
+
+/**
+ * The note of a whole id, or of a part of one that exactly one note has. `trashed` limits the part
+ * to the notes in the trash (true) or the active notes (false), so `kb trash` never picks a note
+ * that is in the trash already. Two notes with the part are an error that names both: a command
+ * never guesses which note it changes.
+ */
+export function requireIdOrPart(store: Store, given: string, trashed?: boolean): StoredNote {
+  const exact = store.find(given);
+  if (exact) return exact;
+  const ids = closeIds(store, given, trashed);
+  if (ids.length === 1) return poolOf(store, trashed).find((n) => n.id === ids[0])!;
+  if (ids.length > 1) {
+    throw new KbError(`${ids.length} notes have "${given}" in their id: ${ids.slice(0, 8).join(", ")}${ids.length > 8 ? `, and ${ids.length - 8} more` : ""}. Pass the whole id.`);
+  }
+  return requireNote(store, given);
 }
 
 export function requireNote(store: Store, id: string): StoredNote {
@@ -133,7 +153,7 @@ export function noteWarnings(note: Pick<Note, "kind" | "scope" | "body" | "ancho
     warnings.push(`open work belongs to a repo. With the scope global it is one index line in every repo session, and none shows its next step. Trash this note and save it in the repo of the work, with "scope": "repo".`);
   }
   const chars = note.body.trim().length;
-  if (chars > BODY_CHARS) warnings.push(`the body has ${chars} characters. A trigger loads at most ${BODY_CHARS}, and cuts the rest. Keep the fact, why it matters, and how to apply it.`);
+  if (chars > BODY_CHARS) warnings.push(`the body has ${chars} characters, not counting the spaces and newlines at its ends, which kb removes. A trigger loads at most ${BODY_CHARS}, and cuts the rest. Keep the fact, why it matters, and how to apply it.`);
   return warnings;
 }
 
@@ -142,12 +162,17 @@ export function noteWarnings(note: Pick<Note, "kind" | "scope" | "body" | "ancho
  * come back until the trash clears it, `trashDays` after it went there.
  */
 export function moveNotes(store: Store, ids: string[], toTrash: boolean): string[] {
-  const moved: string[] = [];
-  for (const id of ids) {
+  // Two words can name one note. Every note is checked before the first one moves.
+  const unique = [...new Set(ids)];
+  const notes = unique.map((id) => {
     const note = requireNote(store, id);
     if (note.trashed === toTrash) throw new KbError(`${id} is already ${toTrash ? "in the trash" : "active"}`);
+    return note;
+  });
+  const moved: string[] = [];
+  for (const note of notes) {
     store.move(note, toTrash, nowIso());
-    moved.push(id);
+    moved.push(note.id);
   }
   afterWrite(store, `kb: ${toTrash ? "trash" : "restore"} ${moved.join(" ")}`);
   logWrites(store, toTrash ? "trash" : "restore", moved);
