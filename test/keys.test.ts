@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { type Browser, type Page, chromium } from "playwright";
 import { type Served, serve } from "../cli/serve.ts";
 import type { Store } from "../cli/store.ts";
-import { putNote, tempStore } from "./helpers.ts";
+import { putNote, tempStore, watchPolicy } from "./helpers.ts";
 
 // The page's keys in a real browser, at desktop and phone width. A key that stops working
 // shows no error anywhere, so only a browser finds it.
@@ -18,6 +18,9 @@ afterAll(async () => {
 
 const LONG = Array.from({ length: 80 }, (_, i) => `Line ${i} of a long note.`).join("\n\n");
 
+/** What the page policy blocked in the open page. Every test ends with none. */
+let blocked: () => Promise<string[]>;
+
 async function open(width: number): Promise<{ page: Page; store: Store; served: Served }> {
   const store = tempStore();
   for (const id of ["one", "two", "three"]) putNote(store, { id, title: `Note ${id}`, body: LONG });
@@ -25,6 +28,7 @@ async function open(width: number): Promise<{ page: Page; store: Store; served: 
   const page = await browser.newPage({ viewport: { width, height: 800 } });
   // Fail inside Bun's 5 s test timeout, so one broken key does not break the next test.
   page.setDefaultTimeout(3000);
+  blocked = await watchPolicy(page);
   await page.goto(served.url);
   await page.getByRole("heading", { level: 1, name: "kb" }).waitFor();
   return { page, store, served };
@@ -48,10 +52,12 @@ describe("keys on a wide screen", () => {
   let page: Page, store: Store, served: Served;
   beforeEach(async () => {
     ({ page, store, served } = await open(1280));
-  });
+  }, 20_000);
   afterEach(async () => {
+    const policy = await blocked();
     served.stop();
     await page.close();
+    expect(policy).toEqual([]);
   });
 
   test("a note an agent adds shows without a reload, and a trash from the page is not undone by the poll", async () => {
@@ -184,10 +190,12 @@ describe("keys on a phone", () => {
     ({ page, store, served } = await open(390));
     await page.keyboard.press("Enter");
     await drawer().waitFor();
-  });
+  }, 20_000);
   afterEach(async () => {
+    const policy = await blocked();
     served.stop();
     await page.close();
+    expect(policy).toEqual([]);
   });
 
   test("in the open drawer, e opens the form and Escape keeps the drawer", async () => {

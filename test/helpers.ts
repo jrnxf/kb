@@ -1,6 +1,7 @@
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Page } from "playwright";
 import { type LogEvent, type NoteRollUp, logEvent, readLog } from "../cli/log.ts";
 import type { Note } from "../cli/note.ts";
 import { Store } from "../cli/store.ts";
@@ -20,6 +21,18 @@ export const MAIN = join(ROOT, "cli", "main.ts");
 
 export function tempDir(prefix = "kb-test-"): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
+/**
+ * Records what the page policy of kb serve blocks in a browser page, from before the page loads.
+ * The returned function lists it. The built page must work under the policy, so a test expects none.
+ */
+export async function watchPolicy(page: Page): Promise<() => Promise<string[]>> {
+  await page.addInitScript(() => {
+    const seen: string[] = ((globalThis as { kbBlocked?: string[] }).kbBlocked = []);
+    document.addEventListener("securitypolicyviolation", (e) => seen.push(`${e.effectiveDirective} ${e.blockedURI} ${e.sample}`.trim()));
+  });
+  return () => page.evaluate(() => (globalThis as { kbBlocked?: string[] }).kbBlocked ?? []);
 }
 
 export function tempStore(): Store {
