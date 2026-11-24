@@ -11,6 +11,7 @@ import { type Reader, type Seen, covers, fileInRepo, isFolder, pathInRepo, realF
 import { isNeighborsAnswer } from "./neighbors.ts";
 import { BODY_CHARS, KINDS, type Note, parseNote } from "./note.ts";
 import { resolveRepo } from "./scope.ts";
+import { CHANGED_ASK, CHANGED_MARK, changedAtLoad } from "./stale.ts";
 import { type Store, tilde } from "./store.ts";
 import { type TableNote, triggerTable } from "./table.ts";
 import { commandAt, errorText, matchesCommand, mayMatchCommand, pathWords, simpleCommands } from "./trigger.ts";
@@ -26,6 +27,11 @@ export const NOTES_PER_FILE = 5;
  * the same message from a fast second try, so the reason of each refusal names the wait.
  */
 export const STOP_WINDOW_MS = 3000;
+
+/** At most this many changed paths are named for one note. */
+const CHANGED_PATHS = 3;
+/** Under the notes of a call, when one has the mark. It comes with the note, so the session that uses the note checks it. */
+const CHANGED_NOTE = `A note with "${CHANGED_MARK}" is on a file that changed after the note was last checked. ${CHANGED_ASK}`;
 
 /** A title longer than this is cut. With the caps above, the text stays far under the 10,000 character limit of a hook. */
 const TITLE_CHARS = 200;
@@ -46,6 +52,8 @@ export interface Fire {
   form: Form;
   /** What matched: the words of the trigger, the text of the error trigger, or the repo-relative path. */
   match: string;
+  /** True when the note came with the mark that an anchored file changed after its last check. */
+  changed?: true;
 }
 
 export interface Fired {
@@ -160,9 +168,10 @@ function refuse(seen: Seen, id: string, now: number): "first" | "again" | null {
 /**
  * Give the reader the hits it has not got yet, at most `cap`, and record each. null when there is
  * nothing new and nothing refuses the call. A refusal claims every stop note of the call, so a run
- * after the window passes: the first `cap` of them come whole, and the others as a title.
+ * after the window passes: the first `cap` of them come whole, and the others as a title. `roots`
+ * has the checkout of each repo of the call, so a note is compared with the files of that checkout.
  */
-function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: number, shape: Shape, now: number): Fired | null {
+function give(store: Store, hits: Hit[], reader: Reader, scope: string, roots: Map<string, string>, cap: number, shape: Shape, now: number): Fired | null {
   if (hits.length === 0) return null;
   const seen = seenBy(store, reader, now);
   const blocks: string[] = [];
@@ -174,6 +183,13 @@ function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: num
   const taken = new Set<string>();
   let given = 0;
   let rest = 0;
+  // The anchors of a note that changed after its last check. Only a note that is given costs a read of its files.
+  const checks = new Map<string, ReturnType<typeof changedAtLoad>>();
+  const changedOf = (note: Note): string[] => {
+    if (note.scope === "global") return [];
+    if (!checks.has(note.scope)) checks.set(note.scope, changedAtLoad(store, note.scope, roots.get(note.scope) ?? null));
+    return checks.get(note.scope)!(note);
+  };
   for (const hit of [...hits].sort(byOrder)) {
     const { id } = hit.note;
     if (taken.has(id)) continue;
@@ -204,9 +220,12 @@ function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: num
       given++;
     }
     const head = `${note.id} [${note.kind}] ${oneLine(note.title, TITLE_CHARS)}`;
-    if (form === "title") (stops ? stopLines : lines).push(`- ${head}`);
-    else blocks.push(`### ${head}\n${kind === "path" ? `anchor on ${oneLine(hit.match, PATH_CHARS)}` : `trigger ${kind}: ${hit.match}`}\n${cutBody(note)}`);
-    fires.push({ note: id, kind, form, match: hit.match });
+    const changed = changedOf(note);
+    const more = changed.length > CHANGED_PATHS ? `, and ${changed.length - CHANGED_PATHS} more` : "";
+    const mark = changed.length > 0 ? `${CHANGED_MARK}: ${oneLine(changed.slice(0, CHANGED_PATHS).join(", "), PATH_CHARS)}${more}` : "";
+    if (form === "title") (stops ? stopLines : lines).push(`- ${head}${mark ? ` (${mark})` : ""}`);
+    else blocks.push(`### ${head}\n${kind === "path" ? `anchor on ${oneLine(hit.match, PATH_CHARS)}` : `trigger ${kind}: ${hit.match}`}\n${mark ? `${mark}\n` : ""}${cutBody(note)}`);
+    fires.push({ note: id, kind, form, match: hit.match, ...(mark ? { changed: true as const } : {}) });
   }
   if (fires.length === 0 && again.length === 0) return null;
   const first = fires.some((fire) => fire.kind === "stop");
@@ -216,6 +235,7 @@ function give(store: Store, hits: Hit[], reader: Reader, scope: string, cap: num
   if (lines.length > 0) parts.push(`${blocks.length === 0 ? shape.onlyTitles : shape.titles}\n${lines.join("\n")}`);
   let text = parts.join("\n\n");
   if (shape.countRest && rest > 0) text += `\n${rest} more. \`kb search\` finds them.`;
+  if (fires.some((fire) => fire.changed)) text += `\n\n${CHANGED_NOTE}`;
   return { text, stop: first || again.length > 0, scope, fires };
 }
 
@@ -297,11 +317,12 @@ export function beforeCommand(store: Store, command: string, cwd: string, reader
   };
   // The log names the repo of the session, or else the first repo that the line goes to.
   const scope = repos.find((repo) => repo.scope)?.scope ?? "global";
-  return give(store, hits, reader, scope, NOTES_PER_CALL, shape, now);
+  const roots = new Map(repos.flatMap((repo) => (repo.scope && repo.root ? [[repo.scope, repo.root] as const] : [])));
+  return give(store, hits, reader, scope, roots, NOTES_PER_CALL, shape, now);
 }
 
 /** The repo notes whose anchor names the file or a folder above it. */
-function onFile(store: Store, file: string, reader: Reader, now: number): { hits: Hit[]; scope: string; path: string } | null {
+function onFile(store: Store, file: string, reader: Reader, now: number): { hits: Hit[]; scope: string; root: string; path: string } | null {
   if (!store.exists() || !isAbsolute(file)) return null;
   const { notes } = triggerTable(store);
   const seen = seenBy(store, reader, now);
@@ -324,13 +345,13 @@ function fileShape(path: string, ask: string): Shape {
 /** Before a change of a file: the notes on it. A gotcha comes whole, another kind as its title. */
 export function beforeEdit(store: Store, file: string, reader: Reader, now = Date.now()): Fired | null {
   const found = onFile(store, file, reader, now);
-  return found && give(store, found.hits, reader, found.scope, NOTES_PER_CALL, fileShape(found.path, "Read the notes that apply with `kb show <id>`:"), now);
+  return found && give(store, found.hits, reader, found.scope, new Map([[found.scope, found.root]]), NOTES_PER_CALL, fileShape(found.path, "Read the notes that apply with `kb show <id>`:"), now);
 }
 
 /** After a read of a file: the notes on it, so the agent has them when it works on the file. */
 export function afterRead(store: Store, file: string, reader: Reader, now = Date.now()): Fired | null {
   const found = onFile(store, file, reader, now);
-  return found && give(store, found.hits, reader, found.scope, NOTES_PER_FILE, fileShape(found.path, "Before you change this file, read the notes that apply with `kb show <id>`:"), now);
+  return found && give(store, found.hits, reader, found.scope, new Map([[found.scope, found.root]]), NOTES_PER_FILE, fileShape(found.path, "Before you change this file, read the notes that apply with `kb show <id>`:"), now);
 }
 
 /** After a tool call that failed: the notes whose `err` trigger is in the error text, of the repo and of the global scope. */
@@ -348,9 +369,10 @@ export function afterFailure(store: Store, error: string, cwd: string, reader: R
     if (text !== undefined && !seen.has(note.id)) hits.push({ note, kind: "err", match: text });
   }
   if (hits.length === 0) return null;
-  const scope = repoOf(store, cwd).scope ?? "global";
+  const repo = repoOf(store, cwd);
+  const scope = repo.scope ?? "global";
   hits = hits.filter((hit) => hit.note.scope === "global" || hit.note.scope === scope);
   // Every note of an error comes whole, so the lines for titles are never used.
   const shape: Shape = { lead: (count) => (count === 1 ? "kb has a note for this error." : "kb has notes for this error."), titles: "", onlyTitles: "" };
-  return give(store, hits, reader, scope, NOTES_PER_CALL, shape, now);
+  return give(store, hits, reader, scope, new Map(repo.scope && repo.root ? [[repo.scope, repo.root]] : []), NOTES_PER_CALL, shape, now);
 }
