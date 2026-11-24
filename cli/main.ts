@@ -121,8 +121,9 @@ kb add reads: {"title", "kind", "body", "scope"?, "id"?, "anchors"?, "triggers"?
       as the reason. A run 3 seconds later passes. For a command where one run does damage.
     "err: address already in use"  after a tool call that failed with this text in its error.
       At least ${ERR_MIN_CHARS} characters. Case does not count.
-  A saved note can come with "warnings": a gotcha or a how-to with no trigger and no anchor, open
-  work that a repo session saves with the scope "global", and a body over ${BODY_CHARS} characters.
+  A saved note can come with "warnings": a gotcha or a how-to with no trigger and no anchor, a
+  repo note that is not open work with no anchor, open work that a repo session saves with the
+  scope "global", and a body over ${BODY_CHARS} characters.
   The note is stored in each case.
   With "id", the note is updated. A new title, body or anchors also counts as a verification.
   New triggers alone do not.

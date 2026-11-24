@@ -174,7 +174,9 @@ notes, and a note loads when it applies.
   and the audit is the backstop. A check gives the note the commit of HEAD, which ends the mark.
   The record is as new as the last `kb stale`: a session start runs it in the background when HEAD
   moved, so the index of the first session after a pull can lack the mark, and the loads in that
-  session have it. A note with no anchor, or with a commit that left the history, gets no mark.
+  session have it. The compare is by content, so a note checked on a branch that was squash-merged or
+  rebased is compared too, while the clone still has that commit. A note with no anchor gets no
+  mark, so `kb add` warns when a repo note has none.
   `kb stale` and `/kb:audit` cover one scope: the repo's notes in a repo, the global notes outside
   any repo. `/kb:audit` reads the code for each candidate, checks the budget, and proposes keep, rewrite,
   merge, shorten or trash with `kb audit propose`. Each audit also moves rules to the
@@ -323,8 +325,9 @@ Pass `--project <name>`. A wipe with no project takes ten minutes to rebuild.
 
 kb also writes `promoted_to` (the instruction file a rule moved to), `supersedes` (the notes a merge
 took in) and `trashed_at`. `kb add` answers with `warnings`, and still saves the note, when a gotcha
-or a how-to has no trigger and no anchor, when a session in a repo saves open work with the scope
-`global`, and when a body is over 700 characters.
+or a how-to has no trigger and no anchor, when a repo note that is not open work has no anchor,
+when a session in a repo saves open work with the scope `global`, and when a body is over 700
+characters.
 
 ## Hooks
 

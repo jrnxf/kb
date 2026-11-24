@@ -81,9 +81,13 @@ export function missingAnchors(note: Pick<StoredNote, "anchors">, root: string, 
   return missing;
 }
 
-/** The files that changed between a commit and HEAD. null when the commit is not in the history of HEAD. */
+/**
+ * The files that differ between a commit and HEAD. null when the clone does not have the commit.
+ * The compare is by content, so the commit need not be in the history of HEAD: a note checked on a
+ * branch that was squash-merged, or rebased, is compared with the files it was checked against.
+ */
 function filesChangedSince(root: string, commit: string): Set<string> | null {
-  const known = git(root, "merge-base", "--is-ancestor", commit, "HEAD").ok;
+  const known = git(root, "cat-file", "-e", `${commit}^{commit}`).ok;
   const diff = known ? git(root, "diff", "--name-only", commit, "HEAD") : null;
   return diff?.ok ? new Set(diff.out.split("\n").filter(Boolean)) : null;
 }
@@ -104,7 +108,7 @@ function movedAnchors(note: Pick<StoredNote, "anchors">, changed: Set<string>, g
 /**
  * The anchored paths of one note that changed after its last check, in the checkout at `root`. It
  * runs git, so it is for a command (`kb show`), not for a hook. Empty when nothing changed, and
- * when the note has no commit or its commit is not in the history of HEAD.
+ * when the note has no commit or the clone does not have its commit.
  */
 export function changedSinceCheck(note: Pick<StoredNote, "anchors" | "verified_at_commit">, root: string): string[] {
   if (!note.verified_at_commit || note.anchors.length === 0) return [];
@@ -120,7 +124,7 @@ function anchorCandidates(note: StoredNote, root: string, changedSince: (commit:
   const commit = note.verified_at_commit;
   const changed = commit ? changedSince(commit) : null;
   if (commit && changed === null) {
-    found.push({ reason: "commit-unknown", detail: `commit ${commit} is not in the history of HEAD (a rebase, or a shallow clone)` });
+    found.push({ reason: "commit-unknown", detail: `commit ${commit} is not in this clone (a shallow clone, or a commit of a branch that was never fetched or is deleted)` });
   }
 
   const missing = missingAnchors(note, root, read);
