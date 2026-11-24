@@ -96,6 +96,8 @@ for (const [name, out] of [["index.html", html], ["404.html", notFound]]) {
   if (/fonts\.googleapis|fonts\.gstatic/.test(out)) fail(`${name} still loads Google Fonts`);
 }
 // The site is public: no LAN hosts, private IPs or local paths in any file that it publishes. Fonts and pictures are binary, and are skipped.
+// HSTS must stay on every path: the browser then refuses plain http for this host for a year.
+if (!/^\/\*\n(?:  .+\n)*?  Strict-Transport-Security: max-age=31536000\n/m.test(readFileSync(join(dist, "_headers"), "utf8"))) fail("_headers has no Strict-Transport-Security: max-age=31536000 line under /*");
 const TEXT = /\.(html|txt|xml|svg|json|js|css)$|^_headers$/;
 for (const name of readdirSync(dist, { recursive: true, encoding: "utf8" })) {
   if (TEXT.test(name) && /\.lan\.|\/Users\/|127\.0\.0\.1|192\.168\.|\b10\.\d+\.\d+\.\d+/.test(readFileSync(join(dist, name), "utf8"))) fail(`${name} has a local host, IP or path`);
