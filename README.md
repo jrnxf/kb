@@ -369,7 +369,15 @@ kb instructions [--repo .]   kb sync      kb checkpointed <session-id> [--ended 
 kb log [--session id] [--since days]      (what the log says of each note, or of one session)
 kb unsaved [--forget <session-id>]   sessions here that ended with no checkpoint, never the one that asks
 kb unsaved --all             those of every directory, with the count per project
+kb version                   the commit kb runs from, as kb <12-digit sha> (pre-release). Also kb --version
 ```
+
+A flag that the command does not take is an error with exit code 1, and nothing runs (2 is the answer `neighbors` of `kb add`). A typo such as
+`--scop` gets `Did you mean --scope?`. After `--`, every word is plain text: `kb search -- --force`.
+`kb show`, `kb trash`, `kb restore` and `kb verify` take a part of an id when only one note has it. `kb delete`
+removes notes for good, so it takes whole ids only.
+Outside any git repo, `kb add` refuses a note with anchors and no scope, as an anchor names a file of a repo.
+It saves any other note as global, with a warning. Pass `"scope": "global"` for a note of every repo.
 
 `kb serve`, or `kb` alone in a terminal, opens the store as a page at `http://127.0.0.1:4810/`: a sidebar of scopes and kinds, a
 list, and the open note. The arrow keys move through the sidebar and the list. `e` edits the open
