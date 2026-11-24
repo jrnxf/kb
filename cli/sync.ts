@@ -50,11 +50,19 @@ function touch(path: string): void {
  * The commit takes the roll-up of this machine's log, which is due once per day.
  */
 export function syncNow(store: Store, now: Date = new Date()): SyncResult {
-  if (!store.hasRemote()) return { status: "no-remote", detail: "the store has no git remote" };
+  if (!store.hasRemote()) {
+    // A store with git and no remote keeps its history on this machine: commit, and push nowhere.
+    if (store.isGitRepo()) {
+      store.ensure();
+      rollUp(store, now);
+      store.commit("kb: sync", { all: true });
+    }
+    return { status: "no-remote", detail: store.isGitRepo() ? "the store has no git remote, so its commits stay on this machine" : "the store has no git remote" };
+  }
   // A fresh clone of an empty remote has no layout yet. Sync is a write, so create it.
   store.ensure();
 
-  const lock = join(store.home, ".sync-lock");
+  const lock = store.statePath("sync-lock");
   if (Date.now() - mtime(lock) > LOCK_STALE_MS) rmSync(lock, { recursive: true, force: true });
   try {
     mkdirSync(lock);
@@ -64,7 +72,7 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
 
   try {
     rollUp(store, now);
-    store.commit("kb: sync");
+    store.commit("kb: sync", { all: true });
     const fail = (status: "conflict" | "error", detail: string): SyncResult => {
       writeFileSync(store.syncErrorPath(), `${detail}\n`);
       return { status, detail };
@@ -79,9 +87,13 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
     const hasLocal = run(store, "rev-parse", "-q", "--verify", "HEAD").ok;
     const hasRemoteBranch = run(store, "rev-parse", "-q", "--verify", `${remote}/${branch}`).ok;
     if (hasRemoteBranch && hasLocal) {
-      const rebase = run(store, "rebase", "-q", "--autostash", `${remote}/${branch}`);
+      // A write that commits while the rebase runs would break it, so the two take turns.
+      const rebase = store.withGitLock(() => {
+        const result = run(store, "rebase", "-q", "--autostash", `${remote}/${branch}`);
+        if (!result.ok) run(store, "rebase", "--abort");
+        return result;
+      }) ?? { ok: false };
       if (!rebase.ok) {
-        run(store, "rebase", "--abort");
         return fail("conflict", "two machines changed the same note. Local notes are kept.");
       }
     } else if (hasRemoteBranch) {
@@ -98,7 +110,7 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
     clearStaleCache(store);
     return { status: "ok", detail: "the store matches the remote" };
   } finally {
-    touch(join(store.home, ".sync-last"));
+    touch(store.statePath("sync-last"));
     rmSync(lock, { recursive: true, force: true });
   }
 }
@@ -110,7 +122,7 @@ export function syncNow(store: Store, now: Date = new Date()): SyncResult {
 export function kickSync(store: Store, throttleMs = 0): boolean {
   try {
     if (!store.exists() || !store.config().sync || !store.hasRemote()) return false;
-    const stamp = join(store.home, ".sync-last");
+    const stamp = store.statePath("sync-last");
     if (throttleMs > 0 && Date.now() - mtime(stamp) < throttleMs) return false;
     touch(stamp);
     return detached(store, ["sync", "--quiet"]);

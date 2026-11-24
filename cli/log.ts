@@ -5,7 +5,7 @@
 
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { type Store, writeAtomic } from "./store.ts";
+import { DIR_MODE, FILE_MODE, type Store, writeAtomic } from "./store.ts";
 
 export const VERDICTS = ["helped", "not-needed", "wrong"] as const;
 export type Verdict = (typeof VERDICTS)[number];
@@ -173,12 +173,12 @@ export function logEvent(store: Store, events: LogEvent | LogEvent[], now: Date 
       .join("");
     const path = join(logDir(store), `${t.slice(0, 7)}.jsonl`);
     try {
-      appendFileSync(path, text);
+      appendFileSync(path, text, { mode: FILE_MODE });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
       store.ensure(); // keeps .state/ out of git in a store made by an older version
-      mkdirSync(logDir(store), { recursive: true });
-      appendFileSync(path, text);
+      mkdirSync(logDir(store), { recursive: true, mode: DIR_MODE });
+      appendFileSync(path, text, { mode: FILE_MODE });
     }
     return true;
   } catch {
@@ -648,6 +648,7 @@ export function rollUp(store: Store, now: Date = new Date()): boolean {
       }
       if (next !== current && (notes.size > 0 || current)) {
         writeAtomic(path, next);
+        store.track(path);
         changed = true;
       }
     }

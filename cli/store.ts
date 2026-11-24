@@ -1,6 +1,6 @@
 // The store on disk: paths, config, notes, the usage counters of older versions, generated files and git.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -103,7 +103,14 @@ export function withoutDefaults(raw: Record<string, unknown>): Record<string, un
   return kept;
 }
 
+// `index.html` and `.sync-*` are files of an older kb in the store's top folder. They stay ignored.
 const GITIGNORE = ["INDEX.md", "index.html", "local.json", ".sync-*", "*.tmp-*", ".state/"];
+
+/** Files of the store itself, which ensure() writes. Each commit takes them when they changed. */
+const STORE_FILES = [".gitignore", "kb.config.json"];
+
+/** Files that an older kb kept in the store's top folder, and their place in .state/ now. */
+const MOVED_TO_STATE: Record<string, string> = { ".sync-error": "sync-error", ".sync-last": "sync-last" };
 
 /** A path with a leading `~` for the home folder, as a config or a shell command writes it. */
 export const tilde = (path: string) => (path === "~" || path.startsWith("~/") ? join(userHome(), path.slice(1)) : path);
@@ -117,20 +124,63 @@ export function kbHome(): string {
 }
 
 export function git(cwd: string, ...args: string[]): { ok: boolean; out: string } {
+  const result = gitRaw(cwd, ...args);
+  return { ok: result.ok, out: result.out.trim() };
+}
+
+/** git with its output as git wrote it, for output where a leading space counts. */
+function gitRaw(cwd: string, ...args: string[]): { ok: boolean; out: string } {
   try {
     const result = Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
-    return { ok: result.exitCode === 0, out: result.stdout.toString().trim() };
+    return { ok: result.exitCode === 0, out: result.stdout.toString() };
   } catch {
     return { ok: false, out: "" };
   }
 }
 
-/** With `mode`, the file gets those permissions, for text that only the user may read. */
-export function writeAtomic(path: string, content: string, mode?: number): void {
-  mkdirSync(dirname(path), { recursive: true });
+/** Only the user may read the store: notes, the event log and the audits hold their work. */
+export const DIR_MODE = 0o700;
+export const FILE_MODE = 0o600;
+
+/** Write a file in one step. It and any folder made for it are for the user alone. */
+export function writeAtomic(path: string, content: string, mode: number = FILE_MODE): void {
+  mkdirSync(dirname(path), { recursive: true, mode: DIR_MODE });
   const temp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
-  writeFileSync(temp, content, mode === undefined ? undefined : { mode });
+  writeFileSync(temp, content, { mode });
   renameSync(temp, path);
+}
+
+/** A lock older than this is left over from a process that died. */
+const LOCK_STALE_MS = 30_000;
+
+/**
+ * Run `fn` while this process holds the lock folder `path`. Another process waits for it, up to
+ * `waitMs`. Returns undefined when the lock stays taken.
+ */
+export function withLock<T>(path: string, fn: () => T, waitMs = 10_000): T | undefined {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    try {
+      mkdirSync(path, { mode: DIR_MODE });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") mkdirSync(dirname(path), { recursive: true, mode: DIR_MODE });
+      else {
+        try {
+          if (Date.now() - statSync(path).mtimeMs > LOCK_STALE_MS) rmSync(path, { recursive: true, force: true });
+        } catch {
+          // the holder removed it: try again
+        }
+        if (Date.now() > until) return undefined;
+        Bun.sleepSync(10 + Math.random() * 20);
+      }
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    rmSync(path, { recursive: true, force: true });
+  }
 }
 
 function readJson<T>(path: string): T | null {
@@ -148,15 +198,55 @@ export class Store {
     return existsSync(join(this.home, "notes"));
   }
 
-  /** Create the store layout. Only commands that write call this. */
+  /** The files that this process changed since its last commit. A commit takes only these. */
+  private touched = new Set<string>();
+
+  /** Mark a file in the store as changed, so the next commit takes it. */
+  track(path: string): void {
+    this.touched.add(relative(this.home, path));
+  }
+
+  /**
+   * Create the store layout. Only commands that write call this. A new store starts as a git repo
+   * with no remote, so a note that leaves the trash for good stays in the history.
+   */
   ensure(): void {
-    for (const dir of ["notes", "trash"]) mkdirSync(join(this.home, dir), { recursive: true });
+    // A store is new when it has no notes folder and no git: an empty folder, or no folder at all.
+    const fresh = !existsSync(join(this.home, "notes")) && !this.isGitRepo();
+    mkdirSync(this.home, { recursive: true, mode: DIR_MODE });
+    for (const dir of ["notes", "trash", ".state"]) mkdirSync(join(this.home, dir), { recursive: true, mode: DIR_MODE });
+    // A store made by an older version can be readable by every user of the machine.
+    for (const dir of [this.home, join(this.home, ".state")]) {
+      try {
+        if ((statSync(dir).mode & 0o077) !== 0) chmodSync(dir, DIR_MODE);
+      } catch {
+        // a store on a file system with no modes still works
+      }
+    }
+    this.moveToState();
     this.tidyConfig();
     const ignorePath = join(this.home, ".gitignore");
     // Add lines that a store made by an older version lacks.
     const have = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
     const missing = GITIGNORE.filter((line) => !have.split("\n").includes(line));
     if (missing.length > 0) writeAtomic(ignorePath, `${have}${have && !have.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
+    if (fresh) git(this.home, "init", "-q");
+  }
+
+  /** Move the files that an older kb kept in the store's top folder into .state/. */
+  private moveToState(): void {
+    for (const [old, now] of Object.entries(MOVED_TO_STATE)) {
+      const from = join(this.home, old);
+      if (!existsSync(from)) continue;
+      try {
+        if (existsSync(this.statePath(now))) rmSync(from, { force: true });
+        else renameSync(from, this.statePath(now));
+      } catch {
+        // the next write tries again
+      }
+    }
+    // The page of `kb html`, a command that is gone. Nothing reads it.
+    rmSync(join(this.home, "index.html"), { force: true });
   }
 
   /** Per-machine state that is never committed: session marks, the stale cache and the event log. */
@@ -292,6 +382,7 @@ export class Store {
   writeNote(note: Note, trashed = false): string {
     const path = this.notePath(note, trashed);
     writeAtomic(path, serializeNote(note));
+    this.track(path);
     return path;
   }
 
@@ -299,16 +390,19 @@ export class Store {
   move(note: StoredNote, trashed: boolean, at: string): string {
     const target = this.notePath(note, trashed);
     if (existsSync(target)) throw new KbError(`cannot move ${note.id}: ${relative(this.home, target)} already exists`);
-    mkdirSync(dirname(target), { recursive: true });
+    mkdirSync(dirname(target), { recursive: true, mode: DIR_MODE });
     renameSync(note.path, target);
     const { path: _path, trashed: _trashed, trashed_at: _at, ...rest } = note;
     writeAtomic(target, serializeNote(trashed ? { ...rest, trashed_at: at } : rest));
+    this.track(note.path);
+    this.track(target);
     return target;
   }
 
   /** Remove a note file for good. In a git store, the history still has it. Another session may have removed it first. */
   remove(note: StoredNote): void {
     rmSync(note.path, { force: true });
+    this.track(note.path);
   }
 
   // ---- usage, from older versions ----
@@ -365,24 +459,38 @@ export class Store {
     return this.isGitRepo() && git(this.home, "remote").out.length > 0;
   }
 
-  /** Commit every change in the store. Returns true when a commit was made. */
-  commit(message: string): boolean {
+  /**
+   * Commit the files that this process changed, and only those, so each write gets its own commit
+   * with its own message, also when other sessions write at the same time. With `all`, commit every
+   * change in the store: a sync takes what a crash or a hand edit left. Returns true when a commit
+   * was made.
+   */
+  commit(message: string, options: { all?: boolean } = {}): boolean {
+    // The store's own files go with any write: ensure() may have changed them in an earlier command.
+    const touched = [...this.touched, ...STORE_FILES];
+    this.touched.clear();
     if (!this.isGitRepo() || !this.config().autocommit) return false;
-    // Another session may hold the index lock for a moment.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (!git(this.home, "add", "-A").ok) {
-        Bun.sleepSync(50);
-        continue;
-      }
-      if (git(this.home, "diff", "--cached", "--quiet").ok) return false;
-      if (git(this.home, "commit", "-q", "-m", message).ok) return true;
-      Bun.sleepSync(50);
-    }
-    return false;
+    return this.withGitLock(() => {
+      // Only the paths that changed: a path that was made and removed again is not a pathspec git knows.
+      const status = gitRaw(this.home, "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--", ...(options.all ? ["."] : touched.map((path) => `:(literal)${path}`)));
+      if (!status.ok) return false;
+      const changed = status.out.split("\0").filter(Boolean).map((entry) => entry.slice(3));
+      if (changed.length === 0) return false;
+      const paths = changed.map((path) => `:(literal)${path}`);
+      if (!git(this.home, "add", "-A", "--", ...paths).ok) return false;
+      // A machine with no git identity still keeps its history.
+      const who = git(this.home, "config", "user.email").out ? [] : ["-c", "user.name=kb", "-c", "user.email=kb@localhost"];
+      return git(this.home, ...who, "commit", "-q", "-m", message, "--", ...paths).ok;
+    }) ?? false;
+  }
+
+  /** Run `fn` while no other kb process changes the store's git index. */
+  withGitLock<T>(fn: () => T): T | undefined {
+    return withLock(this.statePath("git-lock"), fn);
   }
 
   syncErrorPath(): string {
-    return join(this.home, ".sync-error");
+    return this.statePath("sync-error");
   }
 
   syncError(): string | null {

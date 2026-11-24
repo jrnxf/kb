@@ -36,7 +36,7 @@ describe("the event log", () => {
     expect(lastActivity(missing).size).toBe(0);
 
     const blocked = tempStore();
-    mkdirSync(join(blocked.home, ".state"));
+    mkdirSync(join(blocked.home, ".state"), { recursive: true });
     writeFileSync(logDir(blocked), "a file where the folder should be");
     expect(logEvent(blocked, { ev: "checkpoint" })).toBe(false);
     expect(readLog(blocked)).toEqual([]);

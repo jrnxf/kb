@@ -148,8 +148,9 @@ notes, and a note loads when it applies.
   headless run and a subagent do not get this rule.
 - **A trash that clears itself.** `kb trash` moves a note to `trash/`, and `kb restore` brings it
   back. A note in the trash for more than `trashDays` (30) is deleted for good, before the next
-  command. `kb delete` removes a note now, and `kb empty-trash` removes the whole trash. If the
-  store is a git repo, every write is one commit.
+  command. `kb delete` removes a note now, and `kb empty-trash` removes the whole trash. A new
+  store is a git repo, so a deleted note stays in its history. Every write is one commit with
+  only the files it changed, also when sessions write at the same time.
 - **A project goes whole.** `kb trash --scope <repo id>` moves every note of one repo to the
   trash in one commit, and `kb restore --scope` brings back that move and no older trash.
   `kb delete --scope` removes the project's notes for good, and `kb empty-trash --scope` only its
@@ -269,7 +270,8 @@ notes, and a note loads when it applies.
   Nothing runs in the background. Before a compaction, a hook tells the summary what to keep, and
   the next start says once that no checkpoint ran.
 - **Sync.** If the store has a git remote, each write starts a background pull and push, and
-  each session start does the same at most once per 5 minutes. The event log stays on its
+  each session start does the same at most once per 5 minutes. With no remote, `kb sync` commits
+  on this machine and pushes nowhere. The event log stays on its
   machine, and its roll-up in `activity/` syncs. The `usage/` files of an older kb stay in the
   store as history: kb reads the last use in them, and writes them no more. `kb add` never gives a
   new note an id that has a history on any machine.
@@ -280,6 +282,7 @@ notes, and a note loads when it applies.
   kb.config.json            usage/<machine>.json    # counters of an older kb, read only
   activity/<machine>.json                       # the roll-up of each machine's log, synced
   INDEX.md  local.json  .state/                 # generated or per-machine, not committed
+  .state/sync-error  .state/sync-last           # how the last sync ended, and when
   .state/log/<YYYY-MM>.jsonl                    # the event log of this machine, 12 months
   .state/triggers.json                          # the table of triggers and anchors that the hooks read
 ```
@@ -520,11 +523,16 @@ To work on the plugin, load a checkout for one session:
 claude --plugin-dir /path/to/kb
 ```
 
-To back up and sync the store, make it a clone of a private repo before the first note:
+Only you can read the store: kb makes `~/.kb` and `.state/` with mode 0700 and each file with
+0600, and closes a store that an older kb left open on the next write.
+
+A new store is a git repo with no remote. To back up and sync it, give it a private remote:
 
 ```bash
-git clone <your-private-repo-url> ~/.kb
+git -C ~/.kb remote add origin <your-private-repo-url> && kb sync
 ```
+
+On a second machine, clone that repo before the first note: `git clone <your-private-repo-url> ~/.kb`.
 
 ## Develop
 
