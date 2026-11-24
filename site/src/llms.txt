@@ -1,0 +1,29 @@
+# kb
+
+> kb is a memory plugin for Claude Code. It keeps what the agent learns as plain markdown notes in a local git repo. Every new session gets a small index of the notes, and a note loads only when it applies: when the agent runs a command, hits an error, or reads a file that the note names. kb is free and open source (MIT), and it is pre-release.
+
+kb is for people who use Claude Code. It fills the gap between the two places for memory that Claude Code already has:
+
+- CLAUDE.md holds the rules that you state. Every session loads all of it.
+- Auto memory holds what Claude Code saves by itself. It loads all of it at every start.
+- kb keeps what the agent learns. A fixed character budget (8,000 characters by default) caps what a session start loads, however large the store grows.
+
+## Install
+
+Requirements: Claude Code 2.1.275 or later, Bun 1.x and git, on macOS or Linux. Windows is not supported.
+
+1. In Claude Code, run `/plugin install kb --marketplace jrnxf/plugins`.
+2. In `~/.claude/settings.json`, set `"autoMemoryEnabled": false` and allow `Bash(kb help)`, `Bash(kb show *)`, `Bash(kb search *)` and `Bash(kb add *)`.
+
+## Commands
+
+- `/kb:save` saves what the session learned. `/kb:clear` saves, then clears the session only if the save worked.
+- `/kb:recover` saves a session that ended with no save, up to 7 days later.
+- `/kb:audit` reviews stale notes. You keep, rewrite, merge, promote or trash each one.
+- `kb serve` opens the store as a page in your browser on this machine.
+
+## Links
+
+- [Site](https://kb.jrnxf.co/): one session of Claude Code with kb, from the first index to the install
+- [Source and README](https://github.com/jrnxf/kb): the full reference
+- [License (MIT)](https://github.com/jrnxf/kb/blob/main/LICENSE)

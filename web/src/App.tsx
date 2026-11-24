@@ -2,7 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { NoteEdit, PageNote } from "../../cli/wire.ts";
-import { Combo } from "@/components/bits";
+import { Banner, Combo } from "@/components/bits";
 import { type Confirm, ConfirmDialog } from "@/components/confirm-dialog";
 import { KeysDialog } from "@/components/keys-dialog";
 import { NoteForm } from "@/components/note-form";
@@ -41,7 +41,11 @@ export function App() {
   const phone = useMedia(PHONE);
   const { theme, resolved, next: nextTheme } = useTheme();
 
-  useStoreWatch(!!data);
+  const watch = useStoreWatch();
+  // The poll fails while the server is down, and the first load says the same.
+  // Only a failed fetch means the server is down: a refusal or a 500 shows its own message.
+  const offline = watch.error?.message === api.OFFLINE || (!data && failed === api.OFFLINE);
+  const readOnly = !offline && watch.data?.write === false;
   const toastError = (error: Error) => void toast(error.message, { id: "kb" });
 
   // The repo whose audit agent this page started. When the agent ends, the page opens its cards, or says why there are none.
@@ -476,14 +480,39 @@ export function App() {
     return () => document.removeEventListener("keydown", listener);
   }, []);
 
-  if (!data) return failed ? <p className="p-8 text-sm text-muted-foreground">kb: {failed}</p> : null;
+  const banner = offline ? (
+    <Banner>
+      <strong>kb serve is not running.</strong> Start it with <code>kb serve</code>, and the page reconnects.
+    </Banner>
+  ) : readOnly ? (
+    <Banner>
+      <strong>Read only.</strong> To change notes, open the link that <code>kb serve</code> printed.
+    </Banner>
+  ) : watch.isError ? (
+    <Banner>
+      <strong>kb:</strong> {watch.error.message}
+    </Banner>
+  ) : null;
+
+  if (!data) return failed && !offline ? <p className="p-8 text-sm text-muted-foreground">kb: {failed}</p> : banner;
 
   // An empty list says so once, and offers the shortest way to notes: the other scopes when the
   // same search finds notes there, otherwise the list without the search and the kinds.
   const elsewhere = view.scope ? (shown.byScope.get("*") ?? 0) : 0;
+  const live = notes.some((n) => !n.trashed);
   const empty =
     notes.length === 0
-      ? { text: "the store has no notes yet" }
+      ? {
+          text: "No notes yet.",
+          hint: (
+            <>
+              Run <code className="whitespace-nowrap">/kb:save</code> in a Claude Code session, or <code className="whitespace-nowrap">kb add</code> in a
+              terminal. Notes show here as they come.
+            </>
+          ),
+        }
+      : !live && !shown.trash && !view.q && !view.kinds.length
+        ? { text: "Every note is in the trash.", action: { label: "show the trash", run: () => setView((v) => ({ ...v, trash: true })) } }
       : elsewhere
         ? {
             text: "no notes match in this scope",
@@ -531,13 +560,14 @@ export function App() {
     <DrawerProvider>
       <div
         data-pane={view.pane}
-        className="group/page wide:grid wide:h-screen wide:grid-cols-[248px_380px_minmax(0,1fr)]"
+        className={cn("group/page wide:grid wide:h-screen wide:grid-cols-[248px_380px_minmax(0,1fr)]", banner && "wide:grid-rows-[auto_minmax(0,1fr)]")}
         onClickCapture={(event) => {
           if ((event.target as HTMLElement).closest("[data-rail], [data-id], [data-slot=button]")) blur();
         }}
       >
         {/* Behind an open drawer the list shrinks back from the edges and is black around it, as in Vaul. */}
         <DrawerIndentBackground className="fixed inset-0 bg-black wide:hidden" />
+        {banner}
         <DrawerIndent
           ref={indent}
           className={cn(

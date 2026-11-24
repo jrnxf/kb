@@ -14,7 +14,7 @@ import { ACCEPT_KEY, ACCEPT_REST_KEY, type Choice, KEYS, type Pick, agentPick, c
 import { diffLines, wordDiff } from "@/lib/diff";
 import { cn } from "@/lib/utils";
 import { scopeName } from "@/lib/view";
-import { Dot } from "./bits";
+import { Banner, Dot } from "./bits";
 
 /** What the card shows instead of its keys: a box for the user's text, or for what is wrong. */
 type Mode = null | "edit" | "ask";
@@ -47,9 +47,16 @@ export function AuditPage({ scope }: { scope: string }) {
   const { data, error } = useQuery(auditQuery(scope));
   const failed = error?.message ?? "";
   const { resolved } = useTheme();
+  // Tell up front when the link has no key: the picks are made, and Apply is refused at the end.
+  const { data: state } = useQuery({ queryKey: ["store-state", "audit"], queryFn: api.storeState });
 
   return (
     <div className="flex h-dvh flex-col">
+      {state?.write === false && (
+        <Banner>
+          <strong>Read only.</strong> Apply will fail. Open the link that <code>kb audit</code> printed, with its key.
+        </Banner>
+      )}
       {!(data && !data.result && data.cards.length > 0) && <Header scope={scope} data={data} />}
       {failed ? (
         <p className="min-h-0 flex-1 overflow-y-auto p-8 text-sm text-muted-foreground">kb: {failed}</p>

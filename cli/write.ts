@@ -1,9 +1,11 @@
 // Changes to stored notes, shared by the CLI commands and `kb serve`.
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, rmdirSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { type AnchorHashes, hashAnchors, hashAnchorsAt } from "./anchors.ts";
 import { type WriteOp, logEvent, rollUp } from "./log.ts";
-import { BODY_CHARS, KbError, type Note, serializeNote, validateNote } from "./note.ts";
+import { BODY_CHARS, KbError, type Note, isValidScope, serializeNote, validateNote } from "./note.ts";
+import { moveRepo } from "./repos.ts";
 import { type RepoInfo, commitAt } from "./scope.ts";
 import { rejectSecrets } from "./secrets.ts";
 import { pruneMemoryBackups } from "./session.ts";
@@ -36,11 +38,31 @@ export function logWrites(store: Store, op: WriteOp, ids: string[], neighbors: s
   logEvent(store, ids.map((note) => ({ ev: "write" as const, note, op, ...(from ? { from } : {}), ...(neighbors.length > 0 ? { neighbors } : {}) })));
 }
 
-/** Ids that contain the given text. For a caller who remembers a part of an id. */
-export function closeIds(store: Store, part: string): string[] {
+/** Every note of the store, or only the active (false) or trashed (true) ones. */
+const poolOf = (store: Store, trashed?: boolean): StoredNote[] => (trashed === undefined ? [...store.notes(), ...store.notes({ trashed: true })] : store.notes({ trashed }));
+
+/** Ids that contain the given text, in `trashed` notes only or in all. For a caller who remembers a part of an id. */
+export function closeIds(store: Store, part: string, trashed?: boolean): string[] {
   const text = part.toLowerCase();
   if (!text) return [];
-  return [...store.notes(), ...store.notes({ trashed: true })].filter((n) => n.id.includes(text)).map((n) => n.id).sort();
+  return poolOf(store, trashed).filter((n) => n.id.includes(text)).map((n) => n.id).sort();
+}
+
+/**
+ * The note of a whole id, or of a part of one that exactly one note has. `trashed` limits the part
+ * to the notes in the trash (true) or the active notes (false), so `kb trash` never picks a note
+ * that is in the trash already. Two notes with the part are an error that names both: a command
+ * never guesses which note it changes.
+ */
+export function requireIdOrPart(store: Store, given: string, trashed?: boolean): StoredNote {
+  const exact = store.find(given);
+  if (exact) return exact;
+  const ids = closeIds(store, given, trashed);
+  if (ids.length === 1) return poolOf(store, trashed).find((n) => n.id === ids[0])!;
+  if (ids.length > 1) {
+    throw new KbError(`${ids.length} notes have "${given}" in their id: ${ids.slice(0, 8).join(", ")}${ids.length > 8 ? `, and ${ids.length - 8} more` : ""}. Pass the whole id.`);
+  }
+  return requireNote(store, given);
 }
 
 export function requireNote(store: Store, id: string): StoredNote {
@@ -131,7 +153,7 @@ export function noteWarnings(note: Pick<Note, "kind" | "scope" | "body" | "ancho
     warnings.push(`open work belongs to a repo. With the scope global it is one index line in every repo session, and none shows its next step. Trash this note and save it in the repo of the work, with "scope": "repo".`);
   }
   const chars = note.body.trim().length;
-  if (chars > BODY_CHARS) warnings.push(`the body has ${chars} characters. A trigger loads at most ${BODY_CHARS}, and cuts the rest. Keep the fact, why it matters, and how to apply it.`);
+  if (chars > BODY_CHARS) warnings.push(`the body has ${chars} characters, not counting the spaces and newlines at its ends, which kb removes. A trigger loads at most ${BODY_CHARS}, and cuts the rest. Keep the fact, why it matters, and how to apply it.`);
   return warnings;
 }
 
@@ -140,12 +162,17 @@ export function noteWarnings(note: Pick<Note, "kind" | "scope" | "body" | "ancho
  * come back until the trash clears it, `trashDays` after it went there.
  */
 export function moveNotes(store: Store, ids: string[], toTrash: boolean): string[] {
-  const moved: string[] = [];
-  for (const id of ids) {
+  // Two words can name one note. Every note is checked before the first one moves.
+  const unique = [...new Set(ids)];
+  const notes = unique.map((id) => {
     const note = requireNote(store, id);
     if (note.trashed === toTrash) throw new KbError(`${id} is already ${toTrash ? "in the trash" : "active"}`);
+    return note;
+  });
+  const moved: string[] = [];
+  for (const note of notes) {
     store.move(note, toTrash, nowIso());
-    moved.push(id);
+    moved.push(note.id);
   }
   afterWrite(store, `kb: ${toTrash ? "trash" : "restore"} ${moved.join(" ")}`);
   logWrites(store, toTrash ? "trash" : "restore", moved);
@@ -221,6 +248,74 @@ export function restoreProject(store: Store, scope: string): string[] {
   afterWrite(store, `kb: restore the project ${scope} (${ids.length})`);
   logWrites(store, "restore", ids);
   return ids;
+}
+
+export interface ScopeMove {
+  from: string;
+  to: string;
+  /** The ids of the active notes that move. */
+  notes: string[];
+  /** The ids of the notes in the trash that move. */
+  trashed: string[];
+}
+
+/**
+ * Give every note of one scope, active and in the trash, another scope, in one commit. For a repo
+ * whose id changed: it got a remote, or the remote moved. Every target is checked before the first
+ * file is written, and a note that is there already stops the move. The new files are written
+ * first and the old ones removed after, so a failure leaves the old scope whole: what was written
+ * is removed again. The checkout that the old scope names is the new scope's now. With `dryRun`,
+ * nothing is written.
+ */
+export function moveScope(store: Store, from: string, to: string, dryRun = false): ScopeMove {
+  if (from === "global") throw new KbError("\"global\" has no repo id to move. Move a repo's notes with `kb scope move <old repo id> <new repo id>`.");
+  if (to === "global") throw new KbError("`kb scope move` needs a repo id as the new scope, and cannot make notes global. Save a global note with `kb add` and \"scope\": \"global\", then trash the old one.");
+  if (!isValidScope(to)) throw new KbError(`"${to}" is not a repo id. A repo id is host/owner/name, as \`kb scope\` prints it.`);
+  if (from === to) throw new KbError(`${from} is the scope already`);
+  const active = store.notes().filter((n) => n.scope === from);
+  const trashed = store.notes({ trashed: true }).filter((n) => n.scope === from);
+  if (active.length + trashed.length === 0) throw new KbError(`no notes have the scope "${from}". Pass the exact repo id, as \`kb list\` shows it.`);
+  for (const note of [...active, ...trashed]) {
+    for (const inTrash of [false, true]) {
+      if (existsSync(store.notePath({ scope: to, id: note.id }, inTrash))) throw new KbError(`cannot move ${note.id}: ${to} has a note with that id${inTrash ? " in the trash" : ""}. Nothing moved.`);
+    }
+  }
+  const result = { from, to, notes: active.map((n) => n.id).sort(), trashed: trashed.map((n) => n.id).sort() };
+  if (dryRun) return result;
+  const all = [...active, ...trashed];
+  const written: { path: string; trashed: boolean }[] = [];
+  try {
+    for (const note of all) {
+      const { path: _path, trashed: inTrash, ...rest } = note;
+      written.push({ path: store.writeNote({ ...rest, scope: to }, inTrash), trashed: inTrash });
+    }
+  } catch (error) {
+    for (const { path, trashed: inTrash } of written) {
+      rmSync(path, { force: true });
+      pruneEmpty(dirname(path), join(store.home, inTrash ? "trash" : "notes"));
+    }
+    throw error;
+  }
+  for (const { path, trashed: inTrash } of all) {
+    rmSync(path, { force: true });
+    pruneEmpty(dirname(path), join(store.home, inTrash ? "trash" : "notes"));
+  }
+  moveRepo(store, from, to);
+  afterWrite(store, `kb: move the scope ${from} to ${to} (${all.length})`);
+  logWrites(store, "update", [...result.notes, ...result.trashed]);
+  return result;
+}
+
+/** Remove the folders that a move left empty, up to the root. Git keeps no empty folder, so they would differ per machine. */
+function pruneEmpty(dir: string, root: string): void {
+  for (let at = dir; at.startsWith(`${root}/`); at = dirname(at)) {
+    try {
+      if (readdirSync(at).length > 0) return;
+      rmdirSync(at);
+    } catch {
+      return;
+    }
+  }
 }
 
 /** Remove every note of a project for good, active and in the trash. Only when the user wants the project gone now. */

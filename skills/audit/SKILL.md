@@ -130,7 +130,7 @@ A session with normal permissions refuses a command that sets a shell variable f
   - A promote card shows the lines it adds, under the lines above them in the file. It offers move, keep, edit, ask and trash.
 - Never propose delete. When the user asks for a note to be gone now, run `kb delete <id>` yourself, outside the audit.
 
-`kb audit propose` prints the page link. If it says kb serve is not running, start `kb serve` in the background. Give the user the link, and stop. Apply nothing yourself: the page applies the picks in one commit.
+`kb audit propose` prints the page link. If it says kb serve is not running, start `kb serve` in the background. Give the user the link as it is, with its `#token=` key: without the key the page is read only and Apply fails. If the link has no key, tell the user to stop `kb serve` and start it again. Then stop. Apply nothing yourself: the page applies the picks in one commit.
 
 ## 4. After the user applies
 

@@ -120,7 +120,7 @@ function runs(store: Store) {
   }));
 }
 
-export function pageData(store: Store, token: string): PageData {
+export function pageData(store: Store): PageData {
   const active = ranked(store, store.notes());
   const trashed = store.notes({ trashed: true });
   const days = store.config().trashDays;
@@ -143,5 +143,5 @@ export function pageData(store: Store, token: string): PageData {
     body: note.body,
     html: renderBody(note.body),
   }));
-  return { version: storeVersion(store, active), token, kinds: [...KINDS], trashDays: days, notes, audits: openAudits(store), auditable: auditableScopes(store), runs: runs(store) };
+  return { version: storeVersion(store, active), kinds: [...KINDS], trashDays: days, notes, audits: openAudits(store), auditable: auditableScopes(store), runs: runs(store) };
 }
