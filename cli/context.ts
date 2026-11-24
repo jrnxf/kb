@@ -5,7 +5,7 @@ import { lastActivity } from "./log.ts";
 import { KINDS, localDate, normalizeTitle } from "./note.ts";
 import { rememberRepo, repoRoot } from "./repos.ts";
 import { resolveRepo } from "./scope.ts";
-import { anchorReader, changedNotes, missingAnchors } from "./stale.ts";
+import { anchorReader, changedAtLoad, missingAnchors } from "./stale.ts";
 import { HARD_CONTEXT_CAP, type Config, type Store, type StoredNote } from "./store.ts";
 import { readTriggers } from "./trigger.ts";
 
@@ -222,9 +222,10 @@ export function buildContext(store: Store, repoPath: string, session?: string): 
 
 /**
  * The context of a scope: a repo id, or null for a session outside any repo. With the checkout at
- * `root`, each repo note in the session has its anchors checked, and a note whose file or symbol is
- * gone says so. The check reads files only, so a session start can afford it. `kb stale` runs the
- * git checks later.
+ * `root`, each repo note in the session has its anchors checked: a note whose file or symbol is
+ * gone says so, and a note whose file is not what its last check saw gets the word "changed". The
+ * check reads files only, so a session start can afford it. `kb stale` runs the git checks later,
+ * for the anchors that have no hash.
  */
 export function contextFor(store: Store, scope: string | null, root: string | null = null, session?: string): ContextResult {
   return startOf(store, scope, root, session).context;
@@ -260,7 +261,7 @@ interface Session {
   ranked: StoredNote[];
   /** What is gone from a note, by id. */
   goneOf: Map<string, string>;
-  /** The notes on a file that changed after their last check, as the last `kb stale` found them. */
+  /** The notes on a file that is not what their last check saw. */
   changed: Set<string>;
   syncError: string | null;
   /** When the repo has no notes, a line that names the scopes of the same repo name that have some. */
@@ -288,7 +289,7 @@ function startOf(store: Store, scope: string | null, root: string | null = null,
   const changed = new Set<string>();
   if (scope && root) {
     const read = anchorReader();
-    const changedOf = changedNotes(store, scope);
+    const changedOf = changedAtLoad(store, scope, root, read);
     for (const note of ranked) {
       if (note.scope !== scope || note.anchors.length === 0) continue;
       const missing = missingAnchors(note, root, read).map((m) => m.detail).join("; ");
