@@ -28,12 +28,15 @@ export interface Config {
 
 /**
  * The keys that differ per machine. They live in local.json, which is never synced. A machine
- * copies them out of kb.config.json once, and the shared file keeps them for an older kb.
+ * copies a valid value out of kb.config.json once per store (local.json then holds `pinned`), and
+ * the shared file keeps the value for a machine that runs an older kb.
  */
 export const MACHINE_KEYS = ["sync", "globalInstructions"] as const;
 type MachineKey = (typeof MACHINE_KEYS)[number];
 
 export interface Local extends Partial<Pick<Config, MachineKey>> {
+  /** True once this machine has copied the per-machine keys of kb.config.json. */
+  pinned?: boolean;
   machine: string;
   aliases: Record<string, string>;
 }
@@ -76,8 +79,14 @@ const DEFAULT_CONFIG: Config = {
 /** The keys of the first kb.config.json. An older kb wrote all of them into every new store. */
 const FIRST_KEYS = ["budgets", "decayDays", "autocommit", "sync"];
 
-/** Keys that an older kb wrote and that this version ignores. */
-const DEAD_BUDGETS = ["indexLines", "globalIndexLines"];
+/** Budgets that an older kb wrote and that this version ignores, with the default that it wrote. */
+const DEAD_BUDGETS: Record<string, number> = { indexLines: 60, globalIndexLines: 20 };
+
+/** A value that a per-machine key may hold. Anything else is a mistake, and the next source speaks. */
+const validMachine: { [K in MachineKey]: (value: unknown) => value is Config[K] } = {
+  sync: (value): value is boolean => typeof value === "boolean",
+  globalInstructions: (value): value is string => typeof value === "string" && value !== "",
+};
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -85,13 +94,14 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
  * A config that an older kb wrote whole, without the keys whose value is the default. Each default
  * that kb ever shipped is the default of today, so a value equal to it changes nothing now. The
  * cost: a user who typed a default on purpose no longer holds it when a later kb changes it.
+ * A dead budget that differs from its old default stays, because an older kb still reads it.
  */
 export function withoutDefaults(raw: Record<string, unknown>): Record<string, unknown> {
   const kept: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (key === "budgets" && value && typeof value === "object" && !Array.isArray(value)) {
       const budgets = Object.fromEntries(
-        Object.entries(value).filter(([name, v]) => !DEAD_BUDGETS.includes(name) && !same(v, DEFAULT_CONFIG.budgets[name as keyof Config["budgets"]])),
+        Object.entries(value).filter(([name, v]) => !same(v, name in DEAD_BUDGETS ? DEAD_BUDGETS[name] : DEFAULT_CONFIG.budgets[name as keyof Config["budgets"]])),
       );
       if (Object.keys(budgets).length > 0) kept.budgets = budgets;
     } else if (!(key in DEFAULT_CONFIG) || !same(value, DEFAULT_CONFIG[key as keyof Config])) {
@@ -100,6 +110,9 @@ export function withoutDefaults(raw: Record<string, unknown>): Record<string, un
   }
   return kept;
 }
+
+const LOCAL_LOCK_WAIT_MS = 2000;
+const LOCAL_LOCK_STALE_MS = 10_000;
 
 const GITIGNORE = ["INDEX.md", "index.html", "local.json", ".sync-*", "*.tmp-*", ".state/"];
 
@@ -168,7 +181,7 @@ export class Store {
 
   /** The synced config as the file has it. A file that is not a JSON object counts as empty. */
   private sharedConfig(): Record<string, unknown> {
-    const raw = this.readCached<unknown>(this.configPath());
+    const raw = readJson<unknown>(this.configPath());
     return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   }
 
@@ -176,7 +189,7 @@ export class Store {
    * Called by ensure(), so a read never writes. kb.config.json holds only the keys that the user
    * set: a file that an older kb wrote whole (every default key) loses the keys whose value is the
    * default. The per-machine keys stay in the shared file, because a machine that still runs an older
-   * kb reads them there. This machine copies them into local.json once.
+   * kb reads them there. This machine copies valid ones into local.json once.
    */
   private tidyConfig(): void {
     const raw = this.sharedConfig();
@@ -187,31 +200,44 @@ export class Store {
   }
 
   /**
-   * Copy each per-machine key of kb.config.json that differs from the default into local.json, so a
-   * later pull of that file cannot change it on this machine. A key that local.json has wins. It
-   * writes nothing when there is nothing to copy. This runs in ensure(), never in a read, and it
-   * merges into the file as it is now: a hook that starts at the same time may write the machine
-   * id or an alias.
+   * Once per store, copy each valid per-machine key of kb.config.json that differs from the default
+   * into local.json, so a later pull of that file cannot change it on this machine. A key that
+   * local.json has wins. A globalInstructions file that does not exist on this machine stays out,
+   * because it is the path of another machine. The copy sets `pinned`, and after that nothing is
+   * copied again: a key that the user deletes from local.json does not come back, and a later change
+   * of the shared file reaches this machine through the fallback in config(). Where there is nothing
+   * to copy, nothing is written. This runs in ensure(), never in a read, and it merges into the
+   * file as it is now.
    */
   private pinMachineKeys(shared: Record<string, unknown>): void {
-    const missing = MACHINE_KEYS.filter((key) => key in shared && !(key in this.local()) && !same(shared[key], DEFAULT_CONFIG[key]));
-    if (missing.length === 0) return;
-    this.updateLocal((local) => {
-      for (const key of missing) if (!(key in local)) Object.assign(local, { [key]: shared[key] });
+    const local = this.local();
+    if (local.pinned) return;
+    const copy = MACHINE_KEYS.filter((key) => {
+      const value = shared[key];
+      if (key in local || !validMachine[key](value) || same(value, DEFAULT_CONFIG[key])) return false;
+      return key !== "globalInstructions" || existsSync(tilde(value as string));
+    });
+    if (copy.length === 0) return;
+    this.updateLocal((fresh) => {
+      if (fresh.pinned) return;
+      for (const key of copy) if (!(key in fresh)) Object.assign(fresh, { [key]: shared[key] });
+      fresh.pinned = true;
     });
   }
 
   config(): Config {
     const shared = this.sharedConfig() as Partial<Config>;
     const local = this.local();
-    // local.json wins. Where it has no value, the shared file speaks, as it does for a machine that runs an older kb.
-    const machine = { ...shared, ...local };
+    // Per key, the first valid value wins: local.json, then the shared file (as a machine that runs
+    // an older kb reads it), then the default. A wrong or empty value never hides a valid one.
+    const machine = <K extends MachineKey>(key: K): Config[K] =>
+      ([local[key], shared[key]] as unknown[]).find((value): value is Config[K] => validMachine[key](value)) ?? DEFAULT_CONFIG[key];
     const { sync: _sync, globalInstructions: _file, ...raw } = shared;
     return {
       ...DEFAULT_CONFIG,
       ...raw,
-      sync: typeof machine.sync === "boolean" ? machine.sync : DEFAULT_CONFIG.sync,
-      globalInstructions: typeof machine.globalInstructions === "string" && machine.globalInstructions ? machine.globalInstructions : DEFAULT_CONFIG.globalInstructions,
+      sync: machine("sync"),
+      globalInstructions: machine("globalInstructions"),
       // Only the budgets of this version are read. A config of an older kb can still name
       // `indexLines` and `globalIndexLines`: both limits are gone, and the keys are ignored.
       budgets: {
@@ -230,7 +256,7 @@ export class Store {
 
   /** Per-machine state. It is never committed, because paths and machine ids differ per machine. */
   local(): Local {
-    const raw = this.readCached<Partial<Local>>(join(this.home, "local.json")) ?? {};
+    const raw = readJson<Partial<Local>>(join(this.home, "local.json")) ?? {};
     return { ...raw, machine: raw.machine ?? "", aliases: { ...raw.aliases } };
   }
 
@@ -239,14 +265,37 @@ export class Store {
   }
 
   /**
-   * Change local.json: read it as it is now, apply `change`, write it atomically. Several hooks
-   * start at once, so a caller never saves a copy that it read earlier.
+   * Change local.json: take a lock, read the file as it is now, apply `change`, write it
+   * atomically. Hooks start at once, so two of them must not both read the old file and lose one
+   * write. The lock is a folder in .state/ that a waiter retries for up to two seconds. A lock that
+   * is older than ten seconds is stale and goes. If the lock stays taken, the change goes ahead
+   * without it, because a hook must never fail over a convenience.
    */
   updateLocal(change: (local: Local) => void): Local {
-    const local = this.local();
-    change(local);
-    this.saveLocal(local);
-    return local;
+    const lock = this.statePath("local-lock");
+    mkdirSync(dirname(lock), { recursive: true });
+    let held = false;
+    for (const start = Date.now(); !held && Date.now() - start < LOCAL_LOCK_WAIT_MS; ) {
+      try {
+        mkdirSync(lock);
+        held = true;
+      } catch {
+        try {
+          if (Date.now() - statSync(lock).mtimeMs > LOCAL_LOCK_STALE_MS) rmSync(lock, { recursive: true, force: true });
+          else Bun.sleepSync(10);
+        } catch {
+          // the holder released it between the two calls: try again at once
+        }
+      }
+    }
+    try {
+      const local = this.local();
+      change(local);
+      this.saveLocal(local);
+      return local;
+    } finally {
+      if (held) rmSync(lock, { recursive: true, force: true });
+    }
   }
 
   /** The id of this machine, made on first use. It names the file that only this machine writes: its roll-up in activity/. */
@@ -256,25 +305,6 @@ export class Store {
     return this.updateLocal((local) => {
       local.machine ||= randomBytes(4).toString("hex");
     }).machine;
-  }
-
-  private cache = new Map<string, { stamp: string; value: unknown }>();
-
-  /** A JSON file, parsed again only when the file changed. Every config() call reads two files. */
-  private readCached<T>(path: string): T | null {
-    let stamp: string;
-    try {
-      const stat = statSync(path, { bigint: true });
-      stamp = `${stat.mtimeNs}:${stat.size}:${stat.ino}`;
-    } catch {
-      this.cache.delete(path);
-      return null;
-    }
-    const hit = this.cache.get(path);
-    if (hit?.stamp === stamp) return hit.value as T | null;
-    const value = readJson<T>(path);
-    this.cache.set(path, { stamp, value });
-    return value;
   }
 
   // ---- notes ----

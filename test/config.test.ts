@@ -19,6 +19,13 @@ const OLD_CONFIG = {
   globalInstructions: "~/.claude/CLAUDE.md",
 };
 
+/** A global instructions file that exists on this machine: kb copies only such a path. */
+function rulesFile(): string {
+  const file = join(tempDir(), "RULES.md");
+  writeFileSync(file, "# Rules\n");
+  return file;
+}
+
 /** A store made by an older kb: the layout, and a config with the given keys. */
 function oldStore(config: object): Store {
   const store = new Store(join(tempDir(), "store"));
@@ -36,12 +43,13 @@ describe("kb.config.json", () => {
   });
 
   test("a config that an older kb wrote whole keeps what the user changed, per-machine keys too", () => {
-    const store = oldStore({ ...OLD_CONFIG, budgets: { ...OLD_CONFIG.budgets, contextChars: 5000 }, trashDays: 7, sync: false, globalInstructions: "~/dotfiles/CLAUDE.md" });
+    const rules = rulesFile();
+    const store = oldStore({ ...OLD_CONFIG, budgets: { ...OLD_CONFIG.budgets, contextChars: 5000 }, trashDays: 7, sync: false, globalInstructions: rules });
     store.ensure();
     // The shared file keeps the per-machine keys: a machine that runs an older kb reads them there.
-    expect(read(join(store.home, "kb.config.json"))).toEqual({ budgets: { contextChars: 5000 }, trashDays: 7, sync: false, globalInstructions: "~/dotfiles/CLAUDE.md" });
-    expect(store.local()).toMatchObject({ sync: false, globalInstructions: "~/dotfiles/CLAUDE.md" });
-    expect(store.config()).toMatchObject({ budgets: { contextChars: 5000, briefChars: 1500 }, holdback: 0.1, trashDays: 7, sync: false, globalInstructions: "~/dotfiles/CLAUDE.md" });
+    expect(read(join(store.home, "kb.config.json"))).toEqual({ budgets: { contextChars: 5000 }, trashDays: 7, sync: false, globalInstructions: rules });
+    expect(store.local()).toMatchObject({ sync: false, globalInstructions: rules });
+    expect(store.config()).toMatchObject({ budgets: { contextChars: 5000, briefChars: 1500 }, holdback: 0.1, trashDays: 7, sync: false, globalInstructions: rules });
   });
 
   test("an untouched config of an older kb ends empty, and local.json takes no default", () => {
@@ -54,12 +62,12 @@ describe("kb.config.json", () => {
   });
 
   test("a config the user wrote by hand stays as it is, and this machine copies its per-machine keys", () => {
-    const config = { holdback: 0.1, decayDays: 180, globalInstructions: "~/notes/RULES.md" };
+    const config = { holdback: 0.1, decayDays: 180, globalInstructions: rulesFile() };
     const store = oldStore(config);
     store.ensure();
     expect(read(join(store.home, "kb.config.json"))).toEqual(config);
-    expect(store.local().globalInstructions).toBe("~/notes/RULES.md");
-    expect(store.config().globalInstructions).toBe("~/notes/RULES.md");
+    expect(store.local().globalInstructions).toBe(config.globalInstructions);
+    expect(store.config().globalInstructions).toBe(config.globalInstructions);
   });
 
   test("a read writes nothing, and it works in a folder that kb cannot write", () => {
@@ -112,6 +120,62 @@ describe("kb.config.json", () => {
     writeFileSync(join(home, "kb.config.json"), JSON.stringify({ sync: false }));
     a.ensure();
     expect(new Store(home).local()).toMatchObject({ machine: id, aliases: { "/x": "x" }, sync: false });
+  });
+
+  test("a wrong or empty value in local.json does not hide a valid shared value", () => {
+    const store = tempStore();
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ sync: false, globalInstructions: "~/shared.md" }));
+    for (const [sync, path] of [["true", ""], [null, 0], [0, null]]) {
+      writeFileSync(join(store.home, "local.json"), JSON.stringify({ machine: "m", aliases: {}, sync, globalInstructions: path }));
+      expect(store.config()).toMatchObject({ sync: false, globalInstructions: "~/shared.md" });
+    }
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ sync: "no", globalInstructions: "" }));
+    expect(store.config()).toMatchObject({ sync: true, globalInstructions: "~/.claude/CLAUDE.md" });
+  });
+
+  test("the per-machine keys are copied once per store, and only when valid", () => {
+    const real = rulesFile();
+    const store = oldStore({ sync: false, globalInstructions: real });
+    store.ensure();
+    expect(store.local()).toMatchObject({ sync: false, globalInstructions: real, pinned: true });
+    // A key that the user deletes does not come back, and a later shared change does not overwrite a copy.
+    store.saveLocal({ machine: "m", aliases: {}, pinned: true });
+    writeFileSync(join(store.home, "kb.config.json"), JSON.stringify({ sync: false, globalInstructions: real }));
+    store.ensure();
+    expect(store.local()).not.toHaveProperty("sync");
+    expect(store.local()).not.toHaveProperty("globalInstructions");
+  });
+
+  test("a path of another machine and a wrong value are not copied", () => {
+    const missing = oldStore({ sync: "false", globalInstructions: "/home/other/nowhere/CLAUDE.md" });
+    missing.ensure();
+    expect(missing.local()).not.toHaveProperty("sync");
+    expect(missing.local()).not.toHaveProperty("globalInstructions");
+    expect(existsSync(join(missing.home, "local.json"))).toBe(false);
+  });
+
+  test("a dead budget that differs from its old default stays in the shared file", () => {
+    const store = oldStore({ ...OLD_CONFIG, budgets: { ...OLD_CONFIG.budgets, globalIndexLines: 0, indexLines: 40 } });
+    store.ensure();
+    expect(read(join(store.home, "kb.config.json"))).toEqual({ budgets: { indexLines: 40, globalIndexLines: 0 } });
+  });
+
+  test("two processes that change local.json at once lose no write and make one machine id", async () => {
+    const home = join(tempDir(), "store");
+    mkdirSync(join(home, "notes"), { recursive: true });
+    const script = join(tempDir(), "worker.ts");
+    writeFileSync(
+      script,
+      `import { Store } from ${JSON.stringify(join(import.meta.dir, "..", "cli", "store.ts"))};
+const store = new Store(process.argv[2]!);
+store.machine();
+for (let i = 0; i < 20; i++) store.updateLocal((l) => { l.aliases[process.argv[3] + i] = "x"; });`,
+    );
+    const procs = ["a", "b", "c", "d"].map((id) => Bun.spawn(["bun", script, home, id], { stdout: "ignore", stderr: "pipe" }));
+    for (const proc of procs) expect(await proc.exited).toBe(0);
+    const local = new Store(home).local();
+    expect(Object.keys(local.aliases)).toHaveLength(80);
+    expect(local.machine).toMatch(/^[0-9a-f]{8}$/);
   });
 
   test("a change to a config file shows at once in a store that read it before", () => {

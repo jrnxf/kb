@@ -314,10 +314,13 @@ Two files hold settings. kb writes no default into either one, so a new default 
   its `local.json`.
 
 An older kb wrote every default into `kb.config.json`, with `sync` and `globalInstructions`. The
-first command that writes copies a `sync` or `globalInstructions` value that is not the default
-into `local.json`. It leaves the value in `kb.config.json`, because a machine that runs an older kb
-reads it there. If kb wrote the file whole, it also drops each key whose value is the default. A
-value you typed equal to the default then follows the default from now on.
+first command that writes copies a valid `sync` or `globalInstructions` value that is not the
+default into `local.json`, once per store (`local.json` then holds `"pinned": true`). A
+`globalInstructions` path that does not exist on this machine stays out. The value stays in
+`kb.config.json`, because a machine that runs an older kb reads it there. For each key, kb takes the
+first valid value from `local.json`, then `kb.config.json`, then the default. If kb wrote the file
+whole, it also drops each key whose value is the default. A value you typed equal to the default
+then follows the default from now on.
 
 ## A note
 
