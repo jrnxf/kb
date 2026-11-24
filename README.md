@@ -501,12 +501,21 @@ With auto-update on for the marketplace, each machine follows the default branch
 sets no `version`, so every commit is a release.
 
 The plugin puts `kb` on the PATH of Claude Code's shell only. For `kb serve` and the other commands
-in your own terminal, add this function to `~/.bashrc` or `~/.zshrc`. It runs the installed version:
+in your own terminal, add this function to `~/.bashrc` or `~/.zshrc`. It reads Claude Code's list of
+installed plugins and runs the `kb@` install of your user scope:
 
 ```bash
 kb() {
   local dir
-  dir=$(grep -o '"installPath": *"[^"]*/kb/[^"]*"' ~/.claude/plugins/installed_plugins.json | head -1 | cut -d'"' -f4)
+  dir=$(bun -e '
+    const file = `${process.env.CLAUDE_CONFIG_DIR || `${process.env.HOME}/.claude`}/plugins/installed_plugins.json`;
+    let plugins = {};
+    try { plugins = JSON.parse(await Bun.file(file).text()).plugins ?? {}; } catch {}
+    const [, installs] = Object.entries(plugins).find(([key]) => key.startsWith("kb@")) ?? [];
+    const install = installs?.find((i) => i.scope === "user") ?? installs?.[0];
+    if (!install) { console.error(`kb: the kb plugin is not in ${file}. Run: claude plugin install kb@jrnxf`); process.exit(1); }
+    console.log(install.installPath);
+  ') || return
   bun "$dir/cli/main.ts" "$@"
 }
 ```
